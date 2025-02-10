@@ -15,7 +15,7 @@ const userSchema = new mongoose.Schema(
     email: {
       type: String,
       unique: true,
-      sparse: true, // Allows multiple nulls (users without email)
+      sparse: true,
       lowercase: true,
       validate: {
         validator: (v) =>
@@ -35,20 +35,11 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       minlength: 8,
-      select: false, // Don't return password by default
+      select: true,
     },
+    visibleName: { type: String, trim: true },
     hiddenName: { type: String, trim: true },
-    visibleName: {
-      type: String,
-      trim: true,
-      default: function () {
-        return this.username;
-      },
-    },
-    gender: {
-      type: String,
-      enum: ["Male", "Female", "Non-Binary"],
-    },
+    gender: { type: String, enum: ["Male", "Female", "Non-Binary"] },
     dob: {
       type: Date,
       validate: {
@@ -60,67 +51,15 @@ const userSchema = new mongoose.Schema(
         message: "Must be at least 18 years old",
       },
     },
-    sexualOrientation: {
-      type: String,
-      enum: [
-        "Straight",
-        "Gay",
-        "Lesbian",
-        "Bisexual",
-        "Pansexual",
-        "Asexual",
-        "Other",
-      ],
-    },
-    goal: {
-      primary: {
-        type: String,
-        enum: [
-          "Serious Relationship",
-          "Casual Dating",
-          "Marriage",
-          "Friendship",
-          "Undecided",
-        ],
-      },
-      secondary: {
-        type: String,
-        enum: [
-          "Serious Relationship",
-          "Casual Dating",
-          "Marriage",
-          "Friendship",
-          "Undecided",
-        ],
-      },
-      tertiary: {
-        type: String,
-        enum: [
-          "Serious Relationship",
-          "Casual Dating",
-          "Marriage",
-          "Friendship",
-          "Undecided",
-        ],
-      },
-    },
     bio: { type: String, maxlength: 500 },
     interests: {
       professional: [String],
       hobbies: [String],
     },
-    photos: [
-      {
-        type: String,
-        validate: {
-          validator: (v) => /^(http|https):\/\/[^ "]+$/.test(v),
-          message: "Invalid photo URL",
-        },
-      },
-    ],
     isVerified: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
     lastActive: { type: Date, default: Date.now },
+    maxSlots: { type: Number, default: 1 },
     location: {
       type: { type: String, default: "Point", enum: ["Point"] },
       coordinates: { type: [Number], index: "2dsphere" },
@@ -128,27 +67,6 @@ const userSchema = new mongoose.Schema(
     },
     googleId: { type: String, unique: true, sparse: true },
     googleEmail: String,
-    preferences: {
-      gender: {
-        type: String,
-        enum: ["Male", "Female", "Non-Binary", "Any"],
-        default: "Any",
-      },
-      ageRange: {
-        min: { type: Number, default: 18 },
-        max: { type: Number, default: 27 },
-      },
-      distance: { type: Number, default: 10 }, // in kilometers
-    },
-    slots: [
-      {
-        userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-        savedAt: { type: Date, default: Date.now },
-      },
-    ],
-    maxSlots: { type: Number, default: 1 },
-    unlockedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-    rejectedProfiles: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   },
   {
     timestamps: true,

@@ -1,6 +1,8 @@
 // /controllers/authController.js
 import bcrypt from "bcryptjs";
+import { log } from "console";
 import jwt from "jsonwebtoken";
+import Slot from "../models/Slot.js";
 import User from "../models/User.js";
 
 // Generate JWT Token
@@ -12,39 +14,30 @@ const generateToken = (id) => {
 
 // Signup user
 export const signup = async (req, res) => {
-  const { username, email, phoneNumber, password } = req.body;
+  const { username, password } = req.body;
 
   try {
-    if (!email && !phoneNumber) {
-      return res
-        .status(400)
-        .json({ message: "Email or phone number is required" });
-    }
-
     // Check for existing user
     const existingUser = await User.findOne({
-      $or: [{ email }, { phoneNumber }, { username }],
+      username,
     });
 
     if (existingUser) {
-      return res
-        .status(400)
-        .json({ message: "Username, email, or phone number already in use" });
+      return res.status(400).json({ message: "Username already in use" });
     }
 
     // Create user
     const user = await User.create({
       username,
-      email: email || undefined,
-      phoneNumber: phoneNumber || undefined,
       password,
     });
+
+    // Create a free slot for the new user
+    await Slot.create({ user: user._id, profile: null });
 
     res.status(201).json({
       _id: user._id,
       username: user.username,
-      email: user.email,
-      phoneNumber: user.phoneNumber,
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -84,8 +77,10 @@ export const login = async (req, res) => {
 export const googleLogin = async (req, res) => {
   try {
     // Extract user from Passport's req.user
-    const { googleId, email, username } = req.user;
-
+    let { googleId, email, username } = req.user;
+    // const uniqueUsername = await generateUniqueUsername(username);
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    let setPassword = false;
     let user = await User.findOne({ googleId });
 
     if (!user) {
@@ -99,17 +94,20 @@ export const googleLogin = async (req, res) => {
           googleId,
           email,
           username,
-          isVerified: true,
         });
       }
     }
-
-    res.json({
-      _id: user._id,
-      username: user.username,
-      email: user.email,
-      token: generateToken(user._id),
-    });
+    // Ensure user is defined before checking password
+    if (!user?.password) {
+      setPassword = true;
+    }
+    res.redirect(
+      `${frontendUrl}/auth/callback?_id=${user._id}&token=${generateToken(
+        user._id
+      )}&email=${req.user.email}&username=${
+        req.user.username
+      }&setPassword=${setPassword}`
+    );
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -117,7 +115,8 @@ export const googleLogin = async (req, res) => {
 
 // Set Password for Google Users
 export const setPassword = async (req, res) => {
-  const { userId, newPassword } = req.body;
+  const { newPassword } = req.body;
+  const userId = req.user.id;
 
   try {
     const user = await User.findById(userId);
@@ -139,3 +138,52 @@ export const setPassword = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// velidate username is unique
+export const isUniqueUsername = async (req, res) => {
+  try {
+    const { username } = req.params;
+
+    const exists = await User.exists({ username });
+
+    return res.json({ isUnique: !exists }); // ✅ Return JSON response
+  } catch (error) {
+    console.error("Error checking username uniqueness:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export async function generateUniqueUsername(name) {
+  let baseUsername = generateCleanUsername(name);
+
+  // If base username is empty, default to 'user'
+  if (!baseUsername) baseUsername = "user";
+
+  let exists = await User.findOne({ username: baseUsername });
+
+  if (!exists) return baseUsername; // If username is unique, return it
+
+  // Generate new usernames in bulk (up to 10 variations per query)
+  let counter = 1;
+  let newUsername = `${baseUsername}_${counter}`;
+
+  while (await User.findOne({ username: newUsername })) {
+    counter++;
+    newUsername = `${baseUsername}_${counter}`;
+
+    // Avoid infinite loops by limiting iterations
+    if (counter > 100) throw new Error("Failed to generate a unique username.");
+  }
+
+  return newUsername;
+}
+export function generateCleanUsername(name) {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/['’]/g, "") // Remove apostrophes and similar characters
+    .replace(/\s+/g, "_") // Replace spaces with underscores
+    .replace(/[^a-z0-9._]/g, "") // Remove special characters except dots and underscores
+    .replace(/\.{2,}/g, ".") // Replace multiple dots with a single dot
+    .replace(/^\.|\.$/g, ""); // Remove leading/trailing dots
+}

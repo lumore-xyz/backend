@@ -1,18 +1,73 @@
 // /controllers/profileController.js
+import RejectedProfiles from "../models/RejectedProfiles.js";
+import Slot from "../models/Slot.js";
+import UnlockHistory from "../models/UnlockHistory.js";
 import User from "../models/User.js";
+import UserPhotos from "../models/UserPhotos.js";
+import UserPreference from "../models/UserPreference.js";
 
 // Create or Update Profile
 export const createProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-    if (!user) {
+    const userId = req.user.id;
+    const allowedFields = [
+      "visibleName",
+      "hiddenName",
+      "gender",
+      "dob",
+      "bio",
+      "interests",
+      "location",
+    ];
+
+    // Extract only allowed fields
+    const updateData = Object.keys(req.body)
+      .filter((key) => allowedFields.includes(key))
+      .reduce((obj, key) => {
+        obj[key] = req.body[key];
+        return obj;
+      }, {});
+
+    // Update the user profile and return updated data
+    const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
+      new: true, // Return updated user
+      runValidators: true, // Ensure validation runs
+      upsert: false, // Prevent creating new user if not found
+    }).select("-password -__v"); // Exclude sensitive fields
+
+    if (!updatedUser)
       return res.status(404).json({ message: "User not found" });
+
+    res.status(200).json(updatedUser);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Update User Preferences
+export const updateUserPreference = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { gender, ageRange, distance, goal } = req.body;
+
+    let preferences = await UserPreference.findOne({ user: userId });
+
+    if (!preferences) {
+      // Create new preferences if not found
+      preferences = new UserPreference({ user: userId });
     }
 
-    Object.assign(user, req.body);
-    await user.save();
+    // Update preference fields
+    if (gender) preferences.gender = gender;
+    if (ageRange) preferences.ageRange = ageRange;
+    if (distance) preferences.distance = distance;
+    if (goal) preferences.goal = goal;
 
-    res.status(201).json(user);
+    await preferences.save();
+
+    res
+      .status(200)
+      .json({ message: "Preferences updated successfully", preferences });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -24,19 +79,40 @@ export const getProfile = async (req, res) => {
     const { userId } = req.params;
     const viewerId = req.user.id;
 
+    // Fetch user profile and their photos separately
     const user = await User.findById(userId).select("-password");
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Fetch photos from UserPhotos model
+    const photos = await UserPhotos.find({ user: userId }).select("photoUrl");
+
+    // Check if the profile is unlocked
+    const isUnlocked = await UnlockHistory.exists({
+      user: viewerId,
+      unlockedUser: userId,
+    });
+
+    if (userId === viewerId) {
+      res.status(200).json({
+        ...User,
+        photos: isUnlocked ? photos : blurPhotos(photos),
+      });
     }
 
-    const isUnlocked = user.unlockedBy.includes(viewerId);
+    if (isUnlocked) {
+      res.status(200).json({
+        ...User,
+        photos: photos,
+      });
+    }
+
     res.status(200).json({
       _id: user._id,
       visibleName: user.visibleName,
       age: user.age,
       gender: user.gender,
-      photo: isUnlocked ? user.photos[0] : blurPhoto(user.photos[0]),
-      bio: isUnlocked ? user.bio : null,
+      bio: user.bio,
+      photos: blurPhotos(photos),
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -47,41 +123,49 @@ export const getProfile = async (req, res) => {
 export const getNextProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    if (!user) return res.status(404).json({ message: "User not found" });
 
+    // Get user preferences
+    const preferences = await UserPreference.findOne({ user: user._id });
+    if (!preferences)
+      return res.status(400).json({ message: "Preferences not set" });
+
+    // Fetch rejected profiles
+    const rejectedProfiles = await RejectedProfiles.find({
+      user: user._id,
+    }).select("rejectedUser");
+    const rejectedUserIds = rejectedProfiles.map((r) => r.rejectedUser);
+
+    // Profile filtering
     const filter = {
-      _id: { $ne: user._id, $nin: user.rejectedProfiles },
+      _id: { $ne: user._id, $nin: rejectedUserIds },
       dob: {
         $gte: new Date(
           new Date().setFullYear(
-            new Date().getFullYear() - user.preferences.ageRange.max
+            new Date().getFullYear() - preferences.ageRange.max
           )
         ),
         $lte: new Date(
           new Date().setFullYear(
-            new Date().getFullYear() - user.preferences.ageRange.min
+            new Date().getFullYear() - preferences.ageRange.min
           )
         ),
       },
       location: {
         $near: {
           $geometry: { type: "Point", coordinates: user.location.coordinates },
-          $maxDistance: user.preferences.distance * 1000, // Convert km to meters
+          $maxDistance: preferences.distance * 1000, // Convert km to meters
         },
       },
     };
 
-    if (user.preferences.gender !== "Any") {
-      filter.gender = user.preferences.gender;
+    if (preferences.gender !== "Any") {
+      filter.gender = preferences.gender;
     }
 
     const profiles = await User.find(filter).limit(1);
-
-    if (profiles.length === 0) {
+    if (profiles.length === 0)
       return res.status(404).json({ message: "No profiles found" });
-    }
 
     const profile = profiles[0];
 
@@ -94,7 +178,9 @@ export const getNextProfile = async (req, res) => {
         user.location.coordinates,
         profile.location.coordinates
       ),
-      photo: blurPhoto(profile.photos[0]),
+      photo: blurPhotos(
+        await UserPhotos.find({ user: profile._id }).select("photoUrl")
+      ),
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -104,25 +190,33 @@ export const getNextProfile = async (req, res) => {
 // Like Profile (Save to Slot)
 export const likeProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-    const profile = await User.findById(req.body.profileId);
+    const userId = req.user.id;
+    const { profileId } = req.body;
 
-    if (!user || !profile) {
+    const user = await User.findById(userId);
+    const profile = await User.findById(profileId);
+    if (!user || !profile)
       return res.status(404).json({ message: "User or profile not found" });
-    }
 
-    if (user.slots.length >= user.maxSlots) {
-      return res.status(400).json({ message: "No slots available" });
-    }
+    // Check if profile is already saved in a slot
+    const existingSlot = await Slot.findOne({
+      user: userId,
+      profile: profileId,
+    });
+    if (existingSlot)
+      return res.status(400).json({ message: "Profile already saved" });
 
-    if (user.slots.some((slot) => slot.userId.equals(profile._id))) {
-      return res.status(400).json({ message: "Profile already in slots" });
-    }
+    // Get user's slots and find a free one
+    const slots = await Slot.find({ user: userId });
+    const freeSlot = slots.find((slot) => !slot.profile);
+    if (!freeSlot)
+      return res.status(400).json({ message: "No available slots" });
 
-    user.slots.push({ userId: profile._id });
-    await user.save();
+    // Assign profile to the free slot
+    freeSlot.profile = profileId;
+    await freeSlot.save();
 
-    res.status(200).json({ message: "Profile added to slots" });
+    res.status(200).json({ message: "Profile added to slot", slot: freeSlot });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -131,24 +225,15 @@ export const likeProfile = async (req, res) => {
 // Reject Profile
 export const rejectProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-    const profile = await User.findById(req.body.profileId);
+    const userId = req.user.id;
+    const { profileId } = req.body;
 
-    if (!user || !profile) {
+    const user = await User.findById(userId);
+    const profile = await User.findById(profileId);
+    if (!user || !profile)
       return res.status(404).json({ message: "User or profile not found" });
-    }
 
-    if (!user.rejectedProfiles.includes(profile._id)) {
-      user.rejectedProfiles.push(profile._id);
-    }
-
-    user.slots = user.slots.filter((slot) => !slot.userId.equals(profile._id));
-    profile.slots = profile.slots.filter(
-      (slot) => !slot.userId.equals(user._id)
-    );
-
-    await user.save();
-    await profile.save();
+    await RejectedProfiles.create({ user: userId, rejectedUser: profileId });
 
     res.status(200).json({ message: "Profile rejected" });
   } catch (error) {
@@ -159,15 +244,13 @@ export const rejectProfile = async (req, res) => {
 // Unlock Profile
 export const unlockProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    const userId = req.user.id;
+    const { profileId } = req.body;
 
-    if (!user.unlockedBy.includes(req.body.profileId)) {
-      user.unlockedBy.push(req.body.profileId);
-      await user.save();
-    }
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    await UnlockHistory.create({ user: userId, unlockedUser: profileId });
 
     res.status(200).json({ message: "Profile unlocked" });
   } catch (error) {
@@ -175,90 +258,172 @@ export const unlockProfile = async (req, res) => {
   }
 };
 
-// Buy Slot (Mock Payment)
+// Helper function to blur photos
+export const blurPhotos = (photos) => {
+  return photos.map((p) => ({ photoUrl: `${p.photoUrl}?blur=10` }));
+};
+
+// 1️⃣ Buy Slot (Mock Payment)
 export const buySlot = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-    if (user.maxSlots >= 10) {
-      // Set a reasonable max limit
-      return res.status(400).json({ message: "Slot limit reached" });
+    const userId = req.user.id;
+
+    // Fetch user
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Limit to 10 slots max
+    const userSlots = await Slot.countDocuments({ user: userId });
+    if (userSlots >= 10) {
+      return res.status(400).json({ message: "Max slot limit reached (10)" });
     }
 
-    // TODO: Add actual payment verification (Stripe, Razorpay)
+    // TODO: Integrate real payment system (Stripe, Razorpay)
+    const paymentSuccessful = true; // Simulate payment success
+
+    if (!paymentSuccessful) {
+      return res.status(402).json({ message: "Payment failed" });
+    }
+
+    // Create a new slot
+    const newSlot = new Slot({ user: userId, profile: null });
+    await newSlot.save();
+
+    // Increase maxSlots count in user model (optional)
     user.maxSlots += 1;
     await user.save();
 
-    res.status(200).json({ message: "Slot purchased successfully" });
+    res
+      .status(200)
+      .json({ message: "Slot purchased successfully", slot: newSlot });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-const blurPhoto = (photoUrl) => `${photoUrl}?blur=10`;
+// 2️⃣ Get User Slots
+export const getUserSlots = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const slots = await Slot.find({ user: userId }).populate("profile");
 
-export const findMatch = (socketId, userProfile) => {
-  let bestMatch = null;
-  let bestScore = -1;
+    res.status(200).json({ slots });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
-  waitingPool.forEach((profile, otherSocketId) => {
-    if (socketId !== otherSocketId) {
+export const findMatch = async (socketId, userId) => {
+  try {
+    // 1️⃣ **Fetch User & Preferences**
+    const user = await User.findById(userId);
+    if (!user) return null;
+
+    const preferences = await UserPreference.findOne({ user: userId });
+    if (!preferences) return null;
+
+    // 2️⃣ **Fetch Rejected Users**
+    const rejectedProfiles = await RejectedProfiles.find({
+      user: userId,
+    }).select("rejectedUser");
+    const rejectedUserIds = rejectedProfiles.map((r) =>
+      r.rejectedUser.toString()
+    );
+
+    let bestMatch = { socketId: null, profile: null, score: -1 };
+
+    for (const [otherSocketId, profile] of waitingPool.entries()) {
+      if (
+        socketId === otherSocketId ||
+        rejectedUserIds.includes(profile._id.toString())
+      ) {
+        continue; // Skip if same user or rejected
+      }
+
       let score = 0;
 
-      // **1. Match on Interests**
-      const sharedInterests = profile.interests.hobbies.filter((i) =>
-        userProfile.interests.hobbies.includes(i)
-      ).length;
-      score += sharedInterests * 3; // Interests have high weight
+      // Scoring Weights (Adjustable)
+      const weights = {
+        interests: 3,
+        sexualOrientation: 2,
+        primaryGoal: 2,
+        genderMatch: 2,
+        ageMatch: 2,
+        distanceMatch: 2,
+      };
 
-      // **2. Match on Sexual Orientation & Goals**
-      if (profile.sexualOrientation === userProfile.sexualOrientation)
-        score += 2;
-      if (profile.goal.primary === userProfile.goal.primary) score += 2;
+      // 3️⃣ **Interest Matching**
+      if (profile.interests?.hobbies && user.interests?.hobbies) {
+        const sharedInterests = profile.interests.hobbies.filter((i) =>
+          user.interests.hobbies.includes(i)
+        ).length;
+        score += sharedInterests * weights.interests;
+      }
 
-      // **3. Gender & Preference Matching**
-      if (profile.gender === userProfile.preferences.gender) score += 2;
-      if (userProfile.gender === profile.preferences.gender) score += 2;
+      // 4️⃣ **Sexual Orientation & Goal Matching**
+      if (profile.sexualOrientation === user.sexualOrientation)
+        score += weights.sexualOrientation;
+      if (profile.goal?.primary === preferences.goal?.primary)
+        score += weights.primaryGoal;
 
-      // **4. Age Range Matching**
+      // 5️⃣ **Gender & Preference Matching**
+      if (profile.gender === preferences.gender) score += weights.genderMatch;
+      if (user.gender === profile.preferences?.gender)
+        score += weights.genderMatch;
+
+      // 6️⃣ **Age Matching**
       const age = calculateAge(profile.dob);
-      if (
-        age >= userProfile.preferences.ageRange.min &&
-        age <= userProfile.preferences.ageRange.max
-      ) {
-        score += 2;
+      if (age >= preferences.ageRange.min && age <= preferences.ageRange.max) {
+        score += weights.ageMatch;
       }
 
-      // **5. Distance Matching**
-      const distance = calculateDistance(
-        profile.location.coordinates,
-        userProfile.location.coordinates
-      );
-      if (distance <= userProfile.preferences.distance) {
-        score += 2;
+      // 7️⃣ **Distance Matching**
+      if (profile.location?.coordinates && user.location?.coordinates) {
+        const distance = calculateDistance(
+          profile.location.coordinates,
+          user.location.coordinates
+        );
+        if (distance <= preferences.distance) {
+          score += weights.distanceMatch;
+        }
       }
 
-      // **Select the best match**
-      if (score > bestScore) {
-        bestScore = score;
-        bestMatch = { socketId: otherSocketId, profile };
+      // 8️⃣ **Update Best Match**
+      if (score > bestMatch.score) {
+        bestMatch = { socketId: otherSocketId, profile, score };
       }
     }
-  });
 
-  return bestMatch;
+    // Fetch photos for the matched profile
+    if (bestMatch.profile) {
+      bestMatch.profile.photos = await UserPhotos.find({
+        user: bestMatch.profile._id,
+      }).select("photoUrl");
+    }
+
+    return bestMatch.profile ? bestMatch : null;
+  } catch (error) {
+    console.error("Error in findMatch:", error);
+    return null;
+  }
 };
 
 // Helper function to calculate age
 export const calculateAge = (dob) => {
   const birthDate = new Date(dob);
   const today = new Date();
-  return today.getFullYear() - birthDate.getFullYear();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  if (
+    today.getMonth() < birthDate.getMonth() ||
+    (today.getMonth() === birthDate.getMonth() &&
+      today.getDate() < birthDate.getDate())
+  ) {
+    age--;
+  }
+  return age;
 };
 
-// Helper function to calculate distance between two coordinates
+// Helper function to calculate distance
 export const calculateDistance = (coords1, coords2) => {
   const [lat1, lon1] = coords1;
   const [lat2, lon2] = coords2;

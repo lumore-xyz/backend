@@ -2,6 +2,7 @@
 import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { Strategy as LocalStrategy } from "passport-local";
+import { generateUniqueUsername } from "../controllers/authController.js";
 import User from "../models/User.js";
 
 // Local Strategy (Email, Username, Phone Authentication)
@@ -59,13 +60,13 @@ passport.use(
             await existingUser.save();
             return done(null, existingUser);
           }
-
+          const uniqueUsername = await generateUniqueUsername(displayName);
           // Create a new user
           user = await User.create({
             googleId: id,
             email,
-            username: displayName,
-            isVerified: true,
+            username: uniqueUsername,
+            isVerified: false,
           });
         }
 

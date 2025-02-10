@@ -4,10 +4,12 @@ import rateLimit from "express-rate-limit";
 import passport from "passport";
 import {
   googleLogin,
+  isUniqueUsername,
   login,
   setPassword,
   signup,
 } from "../controllers/authController.js";
+import { protect } from "../middleware/authMiddleware.js";
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5 });
 
 const router = express.Router();
@@ -35,6 +37,7 @@ router.get(
 );
 
 // Set Password for Google Accounts
-router.post("/set-password", setPassword);
+router.post("/set-password", protect, setPassword);
+router.get("/check-username/:username", isUniqueUsername);
 
 export default router;
