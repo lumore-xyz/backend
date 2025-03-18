@@ -24,7 +24,7 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
     origin: "http://localhost:3000", // Replace with frontend URL
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
   },
 });
 
@@ -49,14 +49,6 @@ app.use(
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Rate limiting (100 requests per 15 minutes) - Apply only to REST APIs
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: "Too many requests, please try again later.",
-});
-app.use("/api/", limiter);
 
 // Basic route
 app.get("/", (req, res) => {

@@ -57,7 +57,7 @@ const userSchema = new mongoose.Schema(
       hobbies: [String],
     },
     isVerified: { type: Boolean, default: false },
-    isActive: { type: Boolean, default: true },
+    isActive: { type: Boolean, default: false },
     lastActive: { type: Date, default: Date.now },
     maxSlots: { type: Number, default: 1 },
     location: {

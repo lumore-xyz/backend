@@ -11,14 +11,15 @@ import {
   unlockProfile,
 } from "../controllers/profileController.js";
 import { protect } from "../middleware/authMiddleware.js";
+import { userControl } from "../middleware/userActionMiddleware.js";
 
 const router = express.Router();
 
 // Create or update profile
 router
-  .route("/")
-  .post(protect, createProfile) // Create profile
-  .patch(protect, createProfile); // Update profile (PATCH for partial updates)
+  .route("/:userId")
+  .post(protect, userControl, createProfile) // Create profile
+  .patch(protect, userControl, createProfile); // Update profile (PATCH for partial updates)
 
 // Get user profile securely
 router.get("/:userId", protect, getProfile);

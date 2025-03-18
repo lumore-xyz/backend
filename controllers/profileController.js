@@ -79,43 +79,54 @@ export const getProfile = async (req, res) => {
     const { userId } = req.params;
     const viewerId = req.user.id;
 
-    // Fetch user profile and their photos separately
-    const user = await User.findById(userId).select("-password");
-    if (!user) return res.status(404).json({ message: "User not found" });
+    // Fetch user profile without the password
+    const user = await User.findById(userId).lean().select("-password");
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
 
-    // Fetch photos from UserPhotos model
+    // Fetch viewer's profile to access location
+    const viewer = await User.findById(viewerId).lean().select("location");
+    if (!viewer || !user.location) {
+      return res.status(400).json({ message: "Location data missing" });
+    }
+
+    // Calculate distance between the viewer and the profile owner
+    const distance = calculateDistance(viewer.location, user.location);
+
+    // Fetch user's photos
     const photos = await UserPhotos.find({ user: userId }).select("photoUrl");
 
-    // Check if the profile is unlocked
+    // Check if the profile is unlocked by the viewer
     const isUnlocked = await UnlockHistory.exists({
       user: viewerId,
       unlockedUser: userId,
     });
 
-    if (userId === viewerId) {
-      res.status(200).json({
-        ...User,
-        photos: isUnlocked ? photos : blurPhotos(photos),
-      });
-    }
-
-    if (isUnlocked) {
-      res.status(200).json({
-        ...User,
-        photos: photos,
-      });
-    }
-
-    res.status(200).json({
+    // Prepare profile data
+    let profileData = {
       _id: user._id,
       visibleName: user.visibleName,
       age: user.age,
       gender: user.gender,
       bio: user.bio,
-      photos: blurPhotos(photos),
-    });
+      photos: isUnlocked ? photos : blurPhotos(photos), // Blur photos if not unlocked
+      distance, // Distance in km
+    };
+
+    // If the user is viewing their own profile, show full data
+    if (userId === viewerId) {
+      profileData = {
+        ...user, // Full user data
+        photos, // Full photos
+        distance,
+      };
+    }
+
+    return res.status(200).json(profileData);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error("Error fetching profile:", error);
+    return res.status(500).json({ message: "Server error" });
   }
 };
 
