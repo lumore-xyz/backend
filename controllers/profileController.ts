@@ -1,15 +1,21 @@
 // /controllers/profileController.js
+import { RequestUser } from "../types/request.js";
 import RejectedProfiles from "../models/RejectedProfiles.js";
 import Slot from "../models/Slot.js";
 import UnlockHistory from "../models/UnlockHistory.js";
 import User from "../models/User.js";
 import UserPhotos from "../models/UserPhotos.js";
 import UserPreference from "../models/UserPreference.js";
+import { Request, Response } from "express";
+
+type UpdateData = {
+  [key: string]: any;
+};
 
 // Create or Update Profile
-export const createProfile = async (req, res) => {
+export const createProfile = async (req: Request, res: Response) => {
   try {
-    const userId = req.user.id;
+    const { id: userId } = req.user as RequestUser;
     const allowedFields = [
       "visibleName",
       "hiddenName",
@@ -23,7 +29,7 @@ export const createProfile = async (req, res) => {
     // Extract only allowed fields
     const updateData = Object.keys(req.body)
       .filter((key) => allowedFields.includes(key))
-      .reduce((obj, key) => {
+      .reduce((obj: UpdateData, key) => {
         obj[key] = req.body[key];
         return obj;
       }, {});
@@ -40,14 +46,14 @@ export const createProfile = async (req, res) => {
 
     res.status(200).json(updatedUser);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: (error as Error).message });
   }
 };
 
 // Update User Preferences
-export const updateUserPreference = async (req, res) => {
+export const updateUserPreference = async (req: Request, res: Response) => {
   try {
-    const userId = req.user.id;
+    const { id: userId } = req.user as RequestUser;
     const { gender, ageRange, distance, goal } = req.body;
 
     let preferences = await UserPreference.findOne({ user: userId });
@@ -69,15 +75,15 @@ export const updateUserPreference = async (req, res) => {
       .status(200)
       .json({ message: "Preferences updated successfully", preferences });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: (error as Error).message });
   }
 };
 
 // Get Profile
-export const getProfile = async (req, res) => {
+export const getProfile = async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
-    const viewerId = req.user.id;
+    const { id: viewerId } = req.user as RequestUser;
 
     // Fetch user profile without the password
     const user = await User.findById(userId).lean().select("-password");
@@ -131,9 +137,10 @@ export const getProfile = async (req, res) => {
 };
 
 // Get Next Profile (Matchmaking)
-export const getNextProfile = async (req, res) => {
+export const getNextProfile = async (req: Request, res: Response) => {
   try {
-    const user = await User.findById(req.user.id);
+    const { id } = req.user as RequestUser;
+    const user = await User.findById(id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
     // Get user preferences
@@ -164,7 +171,10 @@ export const getNextProfile = async (req, res) => {
       },
       location: {
         $near: {
-          $geometry: { type: "Point", coordinates: user.location.coordinates },
+          $geometry: {
+            type: "Point",
+            coordinates: user?.location?.coordinates,
+          },
           $maxDistance: preferences.distance * 1000, // Convert km to meters
         },
       },
@@ -186,22 +196,22 @@ export const getNextProfile = async (req, res) => {
       age: profile.age,
       gender: profile.gender,
       distance: calculateDistance(
-        user.location.coordinates,
-        profile.location.coordinates
+        user?.location?.coordinates,
+        profile?.location?.coordinates
       ),
       photo: blurPhotos(
         await UserPhotos.find({ user: profile._id }).select("photoUrl")
       ),
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: (error as Error).message });
   }
 };
 
 // Like Profile (Save to Slot)
-export const likeProfile = async (req, res) => {
+export const likeProfile = async (req: Request, res: Response) => {
   try {
-    const userId = req.user.id;
+    const { id: userId } = req.user as RequestUser;
     const { profileId } = req.body;
 
     const user = await User.findById(userId);
@@ -229,14 +239,14 @@ export const likeProfile = async (req, res) => {
 
     res.status(200).json({ message: "Profile added to slot", slot: freeSlot });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: (error as Error).message });
   }
 };
 
 // Reject Profile
-export const rejectProfile = async (req, res) => {
+export const rejectProfile = async (req: Request, res: Response) => {
   try {
-    const userId = req.user.id;
+    const { id: userId } = req.user as RequestUser;
     const { profileId } = req.body;
 
     const user = await User.findById(userId);
@@ -248,14 +258,14 @@ export const rejectProfile = async (req, res) => {
 
     res.status(200).json({ message: "Profile rejected" });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: (error as Error).message });
   }
 };
 
 // Unlock Profile
-export const unlockProfile = async (req, res) => {
+export const unlockProfile = async (req: Request, res: Response) => {
   try {
-    const userId = req.user.id;
+    const { id: userId } = req.user as RequestUser;
     const { profileId } = req.body;
 
     const user = await User.findById(userId);
@@ -265,7 +275,7 @@ export const unlockProfile = async (req, res) => {
 
     res.status(200).json({ message: "Profile unlocked" });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: (error as Error).message });
   }
 };
 
@@ -275,10 +285,9 @@ export const blurPhotos = (photos) => {
 };
 
 // 1️⃣ Buy Slot (Mock Payment)
-export const buySlot = async (req, res) => {
+export const buySlot = async (req: Request, res: Response) => {
   try {
-    const userId = req.user.id;
-
+    const { id: userId } = req.user as RequestUser;
     // Fetch user
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -308,23 +317,23 @@ export const buySlot = async (req, res) => {
       .status(200)
       .json({ message: "Slot purchased successfully", slot: newSlot });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: (error as Error).message });
   }
 };
 
 // 2️⃣ Get User Slots
-export const getUserSlots = async (req, res) => {
+export const getUserSlots = async (req: Request, res: Response) => {
   try {
-    const userId = req.user.id;
+    const { id: userId } = req.user as RequestUser;
     const slots = await Slot.find({ user: userId }).populate("profile");
 
     res.status(200).json({ slots });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: (error as Error).message });
   }
 };
 
-export const findMatch = async (socketId, userId) => {
+export const findMatch = async (socketId: string, userId: string) => {
   try {
     // 1️⃣ **Fetch User & Preferences**
     const user = await User.findById(userId);
@@ -338,7 +347,7 @@ export const findMatch = async (socketId, userId) => {
       user: userId,
     }).select("rejectedUser");
     const rejectedUserIds = rejectedProfiles.map((r) =>
-      r.rejectedUser.toString()
+      r?.rejectedUser?.toString()
     );
 
     let bestMatch = { socketId: null, profile: null, score: -1 };
@@ -366,7 +375,7 @@ export const findMatch = async (socketId, userId) => {
       // 3️⃣ **Interest Matching**
       if (profile.interests?.hobbies && user.interests?.hobbies) {
         const sharedInterests = profile.interests.hobbies.filter((i) =>
-          user.interests.hobbies.includes(i)
+          user?.interests?.hobbies.includes(i)
         ).length;
         score += sharedInterests * weights.interests;
       }
@@ -420,7 +429,7 @@ export const findMatch = async (socketId, userId) => {
 };
 
 // Helper function to calculate age
-export const calculateAge = (dob) => {
+export const calculateAge = (dob: string) => {
   const birthDate = new Date(dob);
   const today = new Date();
   let age = today.getFullYear() - birthDate.getFullYear();
@@ -435,7 +444,10 @@ export const calculateAge = (dob) => {
 };
 
 // Helper function to calculate distance
-export const calculateDistance = (coords1, coords2) => {
+export const calculateDistance = (
+  coords1: [number, number],
+  coords2: [number, number]
+) => {
   const [lat1, lon1] = coords1;
   const [lat2, lon2] = coords2;
   const R = 6371; // Earth radius in km
