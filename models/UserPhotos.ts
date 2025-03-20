@@ -5,7 +5,7 @@ const userPhotosSchema = new mongoose.Schema({
   photoUrl: {
     type: String,
     validate: {
-      validator: (v) => /^(http|https):\/\/[^ "]+$/.test(v),
+      validator: (v: string) => /^(http|https):\/\/[^ "]+$/.test(v),
       message: "Invalid photo URL",
     },
   },
