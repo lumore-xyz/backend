@@ -58,6 +58,8 @@ passport.use(
     ) => {
       try {
         const { id, emails, displayName } = profile;
+        if (!displayName) throw new Error("display Name not found");
+
         const email = emails?.[0]?.value;
 
         let user = await User.findOne({ googleId: id });
@@ -91,7 +93,7 @@ passport.use(
 
 // Serialize User (Convert User Object to ID)
 passport.serializeUser((user: any, done) => {
-  done(null, user._id); 
+  done(null, user._id);
 });
 
 // Deserialize User (Convert ID Back to User Object)
