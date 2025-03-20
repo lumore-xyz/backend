@@ -1,5 +1,12 @@
+import { Request, Response, NextFunction } from "express";
+
 // /middleware/errorMiddleware.js
-const errorHandler = (err, req, res, next) => {
+const errorHandler = (
+  err: Error,
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   const statusCode = err.statusCode || res.statusCode || 500;
 
   res.status(statusCode).json({
@@ -10,7 +17,7 @@ const errorHandler = (err, req, res, next) => {
 };
 
 // 404 Not Found Middleware
-const notFound = (req, res, next) => {
+const notFound = (req: Request, res: Response, next: NextFunction) => {
   const error = new Error(`Not Found - ${req.originalUrl}`);
   error.statusCode = 404;
   next(error);

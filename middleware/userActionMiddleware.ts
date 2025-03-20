@@ -1,7 +1,13 @@
 /// /middleware/userActionMiddleware.js
+import { Request, Response, NextFunction } from "express";
+import { RequestUser } from "../types/request.js";
 
-export const userControl = (req, res, next) => {
-  const _userId = req.user?.id; // Handle potential nullish req.user
+export const userControl = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const { id: _userId } = req.user as RequestUser;
   const { userId } = req.params;
 
   if (!_userId) {
