@@ -4,8 +4,10 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "cross-env NODE_ENV=development nodemon server.js",
+    "start": "node dist/server.js",
+    "dev": "cross-env NODE_ENV=development nodemon",
+    "build": "tsc",
+    "watch": "tsc -w",
     "rundb": "sudo mongod --dbpath=/Users/rebel/data/db"
   },
   "keywords": [],
