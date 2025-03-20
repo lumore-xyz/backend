@@ -1,9 +1,14 @@
 // config/passport.js
 import passport from "passport";
-import { Strategy as GoogleStrategy } from "passport-google-oauth20";
-import { Strategy as LocalStrategy } from "passport-local";
+import LocalStrategy from "passport-local";
 import { generateUniqueUsername } from "../controllers/authController.js";
 import User from "../models/User.js";
+import {
+  Strategy as GoogleStrategy,
+  Profile,
+  VerifyCallback,
+} from "passport-google-oauth20";
+import { IUser } from "../types/index.js";
 
 // Local Strategy (Email, Username, Phone Authentication)
 passport.use(
@@ -41,11 +46,16 @@ passport.use(
 passport.use(
   new GoogleStrategy(
     {
-      clientID: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      clientID: process.env.GOOGLE_CLIENT_ID || "",
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
       callbackURL: "/api/auth/google/callback",
     },
-    async (accessToken, refreshToken, profile, done) => {
+    async (
+      accessToken: string,
+      refreshToken: string,
+      profile: Profile,
+      done: VerifyCallback
+    ) => {
       try {
         const { id, emails, displayName } = profile;
         const email = emails?.[0]?.value;
@@ -80,12 +90,12 @@ passport.use(
 );
 
 // Serialize User (Convert User Object to ID)
-passport.serializeUser((user, done) => {
-  done(null, user.id);
+passport.serializeUser((user: any, done) => {
+  done(null, user._id); 
 });
 
 // Deserialize User (Convert ID Back to User Object)
-passport.deserializeUser(async (id, done) => {
+passport.deserializeUser(async (id: string, done) => {
   try {
     const user = await User.findById(id);
     done(null, user);

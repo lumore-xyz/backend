@@ -2,6 +2,7 @@ import { Request } from "express";
 import { Document } from "mongoose";
 
 export interface IUser extends Document {
+  id: string;
   username: string;
   email?: string;
   phoneNumber?: string;

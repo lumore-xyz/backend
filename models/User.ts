@@ -131,5 +131,6 @@ userSchema.pre(/^find/, async function (next) {
   }
   next();
 });
+const User = mongoose.model<IUser>("User", userSchema);
 
-export default mongoose.model<IUser>("User", userSchema);
+export default User;
