@@ -1,19 +1,21 @@
 // /controllers/authController.js
 import bcrypt from "bcryptjs";
-import { log } from "console";
 import jwt from "jsonwebtoken";
 import Slot from "../models/Slot.js";
 import User from "../models/User.js";
+import { Request, Response } from "express";
 
 // Generate JWT Token
-const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, {
+const generateToken = (id: any) => {
+  const JWT_SECRET = process.env.JWT_SECRET;
+  if (!JWT_SECRET) throw new Error("JWT_SECRET not found");
+  return jwt.sign({ id }, JWT_SECRET, {
     expiresIn: "30d",
   });
 };
 
 // Signup user
-export const signup = async (req, res) => {
+export const signup = async (req: Request, res: Response) => {
   const { username, password } = req.body;
 
   try {
@@ -40,13 +42,15 @@ export const signup = async (req, res) => {
       username: user.username,
       token: generateToken(user._id),
     });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+  } catch (error: unknown) {
+    res.status(500).json({
+      message: error instanceof Error ? error.message : "An error occurred",
+    });
   }
 };
 
 // Local Login
-export const login = async (req, res) => {
+export const login = async (req: Request, res: Response) => {
   const { identifier, password } = req.body;
 
   try {
@@ -68,55 +72,69 @@ export const login = async (req, res) => {
     } else {
       res.status(401).json({ message: "Invalid credentials" });
     }
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+  } catch (error: unknown) {
+    res.status(500).json({
+      message: error instanceof Error ? error.message : "An error occurred",
+    });
   }
 };
 
 // Google Login / Create User
-export const googleLogin = async (req, res) => {
+export const googleLogin = async (req: Request, res: Response) => {
   try {
-    // Extract user from Passport's req.user
-    let { googleId, email, username } = req.user;
-    // const uniqueUsername = await generateUniqueUsername(username);
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-    let setPassword = false;
-    let user = await User.findOne({ googleId });
+    if (req.user) {
+      // Extract user from Passport's req.user
+      let { googleId, email, username } = req.user as {
+        googleId: string;
+        email: string;
+        username: string;
+      };
+      // const uniqueUsername = await generateUniqueUsername(username);
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+      let setPassword = false;
+      let user = await User.findOne({ googleId });
 
-    if (!user) {
-      const existingUser = await User.findOne({ email });
-      if (existingUser) {
-        existingUser.googleId = googleId;
-        await existingUser.save();
-        user = existingUser;
-      } else {
-        user = await User.create({
-          googleId,
-          email,
-          username,
-        });
+      if (!user) {
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+          existingUser.googleId = googleId;
+          await existingUser.save();
+          user = existingUser;
+        } else {
+          user = await User.create({
+            googleId,
+            email,
+            username,
+          });
+        }
       }
+      // Ensure user is defined before checking password
+      if (!user?.password) {
+        setPassword = true;
+      }
+      res.redirect(
+        `${frontendUrl}/auth/callback?_id=${user._id}&token=${generateToken(
+          user._id
+        )}&email=${email}&username=${username}&setPassword=${setPassword}`
+      );
+    } else {
+      // req.user is undefined
+      return res.status(401).json({ message: "User not authenticated" });
     }
-    // Ensure user is defined before checking password
-    if (!user?.password) {
-      setPassword = true;
-    }
-    res.redirect(
-      `${frontendUrl}/auth/callback?_id=${user._id}&token=${generateToken(
-        user._id
-      )}&email=${req.user.email}&username=${
-        req.user.username
-      }&setPassword=${setPassword}`
-    );
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+  } catch (error: unknown) {
+    res.status(500).json({
+      message: error instanceof Error ? error.message : "An error occurred",
+    });
   }
 };
 
 // Set Password for Google Users
-export const setPassword = async (req, res) => {
+export const setPassword = async (req: Request, res: Response) => {
   const { newPassword } = req.body;
-  const userId = req.user.id;
+  if (!req.user) throw new Error("user not authenticated");
+  const { id: userId } = req.user as {
+    id: string;
+  };
 
   try {
     const user = await User.findById(userId);
@@ -134,26 +152,30 @@ export const setPassword = async (req, res) => {
     await user.save();
 
     res.json({ message: "Password set successfully" });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+  } catch (error: unknown) {
+    res.status(500).json({
+      message: error instanceof Error ? error.message : "An error occurred",
+    });
   }
 };
 
 // velidate username is unique
-export const isUniqueUsername = async (req, res) => {
+export const isUniqueUsername = async (req: Request, res: Response) => {
   try {
     const { username } = req.params;
 
     const exists = await User.exists({ username });
 
     return res.json({ isUnique: !exists }); // ✅ Return JSON response
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error checking username uniqueness:", error);
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({
+      message: error instanceof Error ? error.message : "An error occurred",
+    });
   }
 };
 
-export async function generateUniqueUsername(name) {
+export async function generateUniqueUsername(name: string) {
   let baseUsername = generateCleanUsername(name);
 
   // If base username is empty, default to 'user'
@@ -177,7 +199,7 @@ export async function generateUniqueUsername(name) {
 
   return newUsername;
 }
-export function generateCleanUsername(name) {
+export function generateCleanUsername(name: string) {
   return name
     .toLowerCase()
     .trim()
