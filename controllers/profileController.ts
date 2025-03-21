@@ -31,18 +31,17 @@ export const createProfile = async (req: Request, res: Response) => {
       .filter((key) => allowedFields.includes(key))
       .reduce((obj: UpdateData, key) => {
         obj[key] = req.body[key];
-        return obj;
+        obj;
       }, {});
 
-    // Update the user profile and return updated data
+    // Update the user profile and  updated data
     const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
-      new: true, // Return updated user
+      new: true, //  updated user
       runValidators: true, // Ensure validation runs
       upsert: false, // Prevent creating new user if not found
     }).select("-password -__v"); // Exclude sensitive fields
 
-    if (!updatedUser)
-      return res.status(404).json({ message: "User not found" });
+    if (!updatedUser) res.status(404).json({ message: "User not found" });
 
     res.status(200).json(updatedUser);
   } catch (error) {
@@ -88,17 +87,17 @@ export const getProfile = async (req: Request, res: Response) => {
     // Fetch user profile without the password
     const user = await User.findById(userId).lean().select("-password");
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      res.status(404).json({ message: "User not found" });
     }
 
     // Fetch viewer's profile to access location
     const viewer = await User.findById(viewerId).lean().select("location");
-    if (!viewer || !user.location) {
-      return res.status(400).json({ message: "Location data missing" });
+    if (!viewer || !user?.location) {
+      res.status(400).json({ message: "Location data missing" });
     }
 
     // Calculate distance between the viewer and the profile owner
-    const distance = calculateDistance(viewer.location, user.location);
+    const distance = calculateDistance(viewer.location, user?.location);
 
     // Fetch user's photos
     const photos = await UserPhotos.find({ user: userId }).select("photoUrl");
@@ -129,10 +128,10 @@ export const getProfile = async (req: Request, res: Response) => {
       };
     }
 
-    return res.status(200).json(profileData);
+    res.status(200).json(profileData);
   } catch (error) {
     console.error("Error fetching profile:", error);
-    return res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -141,12 +140,11 @@ export const getNextProfile = async (req: Request, res: Response) => {
   try {
     const { id } = req.user as RequestUser;
     const user = await User.findById(id);
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) res.status(404).json({ message: "User not found" });
 
     // Get user preferences
     const preferences = await UserPreference.findOne({ user: user._id });
-    if (!preferences)
-      return res.status(400).json({ message: "Preferences not set" });
+    if (!preferences) res.status(400).json({ message: "Preferences not set" });
 
     // Fetch rejected profiles
     const rejectedProfiles = await RejectedProfiles.find({
@@ -186,7 +184,7 @@ export const getNextProfile = async (req: Request, res: Response) => {
 
     const profiles = await User.find(filter).limit(1);
     if (profiles.length === 0)
-      return res.status(404).json({ message: "No profiles found" });
+      res.status(404).json({ message: "No profiles found" });
 
     const profile = profiles[0];
 
@@ -217,7 +215,7 @@ export const likeProfile = async (req: Request, res: Response) => {
     const user = await User.findById(userId);
     const profile = await User.findById(profileId);
     if (!user || !profile)
-      return res.status(404).json({ message: "User or profile not found" });
+      res.status(404).json({ message: "User or profile not found" });
 
     // Check if profile is already saved in a slot
     const existingSlot = await Slot.findOne({
@@ -225,13 +223,12 @@ export const likeProfile = async (req: Request, res: Response) => {
       profile: profileId,
     });
     if (existingSlot)
-      return res.status(400).json({ message: "Profile already saved" });
+      res.status(400).json({ message: "Profile already saved" });
 
     // Get user's slots and find a free one
     const slots = await Slot.find({ user: userId });
     const freeSlot = slots.find((slot) => !slot.profile);
-    if (!freeSlot)
-      return res.status(400).json({ message: "No available slots" });
+    if (!freeSlot) res.status(400).json({ message: "No available slots" });
 
     // Assign profile to the free slot
     freeSlot.profile = profileId;
@@ -252,7 +249,7 @@ export const rejectProfile = async (req: Request, res: Response) => {
     const user = await User.findById(userId);
     const profile = await User.findById(profileId);
     if (!user || !profile)
-      return res.status(404).json({ message: "User or profile not found" });
+      res.status(404).json({ message: "User or profile not found" });
 
     await RejectedProfiles.create({ user: userId, rejectedUser: profileId });
 
@@ -269,7 +266,7 @@ export const unlockProfile = async (req: Request, res: Response) => {
     const { profileId } = req.body;
 
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) res.status(404).json({ message: "User not found" });
 
     await UnlockHistory.create({ user: userId, unlockedUser: profileId });
 
@@ -281,7 +278,7 @@ export const unlockProfile = async (req: Request, res: Response) => {
 
 // Helper function to blur photos
 export const blurPhotos = (photos) => {
-  return photos.map((p) => ({ photoUrl: `${p.photoUrl}?blur=10` }));
+  photos.map((p) => ({ photoUrl: `${p.photoUrl}?blur=10` }));
 };
 
 // 1️⃣ Buy Slot (Mock Payment)
@@ -290,19 +287,19 @@ export const buySlot = async (req: Request, res: Response) => {
     const { id: userId } = req.user as RequestUser;
     // Fetch user
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) res.status(404).json({ message: "User not found" });
 
     // Limit to 10 slots max
     const userSlots = await Slot.countDocuments({ user: userId });
     if (userSlots >= 10) {
-      return res.status(400).json({ message: "Max slot limit reached (10)" });
+      res.status(400).json({ message: "Max slot limit reached (10)" });
     }
 
     // TODO: Integrate real payment system (Stripe, Razorpay)
     const paymentSuccessful = true; // Simulate payment success
 
     if (!paymentSuccessful) {
-      return res.status(402).json({ message: "Payment failed" });
+      res.status(402).json({ message: "Payment failed" });
     }
 
     // Create a new slot
@@ -337,10 +334,10 @@ export const findMatch = async (socketId: string, userId: string) => {
   try {
     // 1️⃣ **Fetch User & Preferences**
     const user = await User.findById(userId);
-    if (!user) return null;
+    if (!user) null;
 
     const preferences = await UserPreference.findOne({ user: userId });
-    if (!preferences) return null;
+    if (!preferences) null;
 
     // 2️⃣ **Fetch Rejected Users**
     const rejectedProfiles = await RejectedProfiles.find({
@@ -421,10 +418,10 @@ export const findMatch = async (socketId: string, userId: string) => {
       }).select("photoUrl");
     }
 
-    return bestMatch.profile ? bestMatch : null;
+    bestMatch.profile ? bestMatch : null;
   } catch (error) {
     console.error("Error in findMatch:", error);
-    return null;
+    null;
   }
 };
 
@@ -440,7 +437,7 @@ export const calculateAge = (dob: string) => {
   ) {
     age--;
   }
-  return age;
+  age;
 };
 
 // Helper function to calculate distance
@@ -458,5 +455,5 @@ export const calculateDistance = (
     Math.cos(lat1 * (Math.PI / 180)) *
       Math.cos(lat2 * (Math.PI / 180)) *
       Math.sin(dLon / 2) ** 2;
-  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+  R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 };

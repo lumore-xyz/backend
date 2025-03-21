@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import Slot from "../models/Slot.js";
 import User from "../models/User.js";
-import { Request, Response } from "express";
+import { NextFunction, Request, Response } from "express";
 
 // Generate JWT Token
 const generateToken = (id: any) => {
@@ -15,7 +15,11 @@ const generateToken = (id: any) => {
 };
 
 // Signup user
-export const signup = async (req: Request, res: Response) => {
+export const signup = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   const { username, password } = req.body;
 
   try {
@@ -43,6 +47,7 @@ export const signup = async (req: Request, res: Response) => {
       token: generateToken(user._id),
     });
   } catch (error: unknown) {
+    next(error);
     res.status(500).json({
       message: error instanceof Error ? error.message : "An error occurred",
     });

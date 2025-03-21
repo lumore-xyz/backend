@@ -11,11 +11,11 @@ export const userControl = (
   const { userId } = req.params;
 
   if (!_userId) {
-    return res.status(401).json({ message: "Unauthorized: No user data" });
+    res.status(401).json({ message: "Unauthorized: No user data" });
   }
 
   if (userId.toString() !== _userId.toString()) {
-    return res
+    res
       .status(403)
       .json({ message: "Forbidden: Not allowed to perform this action" });
   }
