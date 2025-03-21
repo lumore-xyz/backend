@@ -2,10 +2,10 @@ import mongoose from "mongoose";
 
 const userPreferenceSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-  gender: {
-    type: String,
-    enum: ["Male", "Female", "Non-Binary", "Any"],
-    default: "Any",
+  interestedIn: {
+    type: [String],
+    enum: ["Male", "Female", "Non-Binary"],
+    default: ["Any"],
   },
   ageRange: {
     min: { type: Number, default: 18 },
@@ -72,6 +72,115 @@ const userPreferenceSchema = new mongoose.Schema({
         "Sugar Dating",
         "Spiritual Connection",
       ],
+    },
+  },
+  interests: {
+    professional: {
+      type: [String],
+      default: [],
+    },
+    hobbies: {
+      type: [String],
+      default: [],
+    },
+  },
+  relationshipType: {
+    type: String,
+    enum: [
+      "Monogamy",
+      "Ethical Non-Monogamy",
+      "Polyamory",
+      "Open to Exploring",
+      "Not Specified",
+    ],
+    default: "Not Specified",
+  },
+  preferredLanguages: {
+    type: [String],
+    default: [],
+  },
+  zodiacPreference: {
+    type: [String],
+    enum: [
+      "Aries",
+      "Taurus",
+      "Gemini",
+      "Cancer",
+      "Leo",
+      "Virgo",
+      "Libra",
+      "Scorpio",
+      "Sagittarius",
+      "Capricorn",
+      "Aquarius",
+      "Pisces",
+      "Any",
+    ],
+    default: ["Any"],
+  },
+  education: {
+    institutions: {
+      type: [String],
+      default: [],
+    },
+    minimumDegreeLevel: {
+      type: String,
+      enum: [
+        "High School",
+        "Bachelor's",
+        "Master's",
+        "Doctorate",
+        "No Preference",
+      ],
+      default: "No Preference",
+    },
+  },
+  personalityTypePreference: {
+    type: [String],
+    enum: [
+      "INTJ",
+      "INTP",
+      "ENTJ",
+      "ENTP",
+      "INFJ",
+      "INFP",
+      "ENFJ",
+      "ENFP",
+      "ISTJ",
+      "ISFJ",
+      "ESTJ",
+      "ESFJ",
+      "ISTP",
+      "ISFP",
+      "ESTP",
+      "ESFP",
+      "Any",
+    ],
+    default: ["Any"],
+  },
+  dietPreference: {
+    type: [String],
+    enum: [
+      "Vegetarian",
+      "Vegan",
+      "Jain",
+      "Pescatarian",
+      "Non-Vegetarian",
+      "Gluten-Free",
+      "Kosher",
+      "Halal",
+      "Any",
+    ],
+    default: ["Any"],
+  },
+  locationPreferences: {
+    homeTown: {
+      type: [String],
+      default: [],
+    },
+    currentLocation: {
+      type: [String],
+      default: [],
     },
   },
 });

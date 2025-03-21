@@ -35,6 +35,8 @@ export const signup = async (req, res) => {
     // Create a free slot for the new user
     await Slot.create({ user: user._id, profile: null });
 
+    await user.updateLastActive();
+
     res.status(201).json({
       _id: user._id,
       username: user.username,
@@ -59,6 +61,7 @@ export const login = async (req, res) => {
     }).select("+password"); // Ensure password is retrieved
 
     if (user && (await user.comparePassword(password))) {
+      await user.updateLastActive();
       res.json({
         _id: user._id,
         username: user.username,
@@ -101,6 +104,7 @@ export const googleLogin = async (req, res) => {
     if (!user?.password) {
       setPassword = true;
     }
+    await user.updateLastActive();
     res.redirect(
       `${frontendUrl}/auth/callback?_id=${user._id}&token=${generateToken(
         user._id
@@ -132,6 +136,8 @@ export const setPassword = async (req, res) => {
     // Hash new password before saving
     user.password = await bcrypt.hash(newPassword, 12);
     await user.save();
+
+    await user.updateLastActive();
 
     res.json({ message: "Password set successfully" });
   } catch (error) {

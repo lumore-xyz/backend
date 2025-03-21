@@ -9,6 +9,7 @@ import {
   likeProfile,
   rejectProfile,
   unlockProfile,
+  updateFieldVisibility,
 } from "../controllers/profileController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { userControl } from "../middleware/userActionMiddleware.js";
@@ -21,6 +22,7 @@ router
   .post(protect, userControl, createProfile) // Create profile
   .patch(protect, userControl, createProfile); // Update profile (PATCH for partial updates)
 
+router.patch("/:userId/visibility", protect, updateFieldVisibility);
 // Get user profile securely
 router.get("/:userId", protect, getProfile);
 const nextProfileLimiter = rateLimit({ windowMs: 3000, max: 1 }); // 1 request per 3 seconds

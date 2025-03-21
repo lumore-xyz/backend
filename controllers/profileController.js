@@ -38,6 +38,7 @@ export const createProfile = async (req, res) => {
     if (!updatedUser)
       return res.status(404).json({ message: "User not found" });
 
+    await updatedUser.updateLastActive();
     res.status(200).json(updatedUser);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -64,6 +65,7 @@ export const updateUserPreference = async (req, res) => {
     if (goal) preferences.goal = goal;
 
     await preferences.save();
+    await User.findById(userId).updateLastActive();
 
     res
       .status(200)
@@ -103,24 +105,47 @@ export const getProfile = async (req, res) => {
       unlockedUser: userId,
     });
 
-    // Prepare profile data
+    // Prepare profile data based on visibility settings
     let profileData = {
       _id: user._id,
       visibleName: user.visibleName,
-      age: user.age,
-      gender: user.gender,
-      bio: user.bio,
-      photos: isUnlocked ? photos : blurPhotos(photos), // Blur photos if not unlocked
-      distance, // Distance in km
+      distance,
     };
 
-    // If the user is viewing their own profile, show full data
+    // If viewing own profile, show all fields
     if (userId === viewerId) {
       profileData = {
-        ...user, // Full user data
-        photos, // Full photos
+        ...user,
+        photos,
         distance,
       };
+    } else {
+      // Check visibility settings for each field
+      const fieldVisibility = user.fieldVisibility || new Map();
+
+      // Add fields based on visibility settings
+      Object.entries(user).forEach(([field, value]) => {
+        if (
+          field === "fieldVisibility" ||
+          field === "password" ||
+          field === "__v"
+        ) {
+          return; // Skip internal fields
+        }
+
+        const visibility = fieldVisibility.get(field) || "public";
+
+        if (
+          visibility === "public" ||
+          (visibility === "unlocked" && isUnlocked) ||
+          userId === viewerId
+        ) {
+          profileData[field] = value;
+        }
+      });
+
+      // Handle photos based on unlock status
+      profileData.photos = isUnlocked ? photos : blurPhotos(photos);
     }
 
     return res.status(200).json(profileData);
@@ -226,6 +251,7 @@ export const likeProfile = async (req, res) => {
     // Assign profile to the free slot
     freeSlot.profile = profileId;
     await freeSlot.save();
+    await user.updateLastActive();
 
     res.status(200).json({ message: "Profile added to slot", slot: freeSlot });
   } catch (error) {
@@ -245,6 +271,7 @@ export const rejectProfile = async (req, res) => {
       return res.status(404).json({ message: "User or profile not found" });
 
     await RejectedProfiles.create({ user: userId, rejectedUser: profileId });
+    await user.updateLastActive();
 
     res.status(200).json({ message: "Profile rejected" });
   } catch (error) {
@@ -262,6 +289,7 @@ export const unlockProfile = async (req, res) => {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     await UnlockHistory.create({ user: userId, unlockedUser: profileId });
+    await user.updateLastActive();
 
     res.status(200).json({ message: "Profile unlocked" });
   } catch (error) {
@@ -303,6 +331,7 @@ export const buySlot = async (req, res) => {
     // Increase maxSlots count in user model (optional)
     user.maxSlots += 1;
     await user.save();
+    await user.updateLastActive();
 
     res
       .status(200)
@@ -447,4 +476,54 @@ export const calculateDistance = (coords1, coords2) => {
       Math.cos(lat2 * (Math.PI / 180)) *
       Math.sin(dLon / 2) ** 2;
   return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+};
+
+// Update Field Visibility Settings
+export const updateFieldVisibility = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { fields } = req.body;
+
+    // Validate input
+    if (!fields || typeof fields !== "object") {
+      return res.status(400).json({
+        message:
+          "Invalid input. Expected fields object with visibility settings",
+      });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Validate visibility values
+    const validVisibilities = ["public", "unlocked", "private"];
+    const invalidFields = Object.entries(fields).filter(
+      ([_, visibility]) => !validVisibilities.includes(visibility)
+    );
+
+    if (invalidFields.length > 0) {
+      return res.status(400).json({
+        message:
+          "Invalid visibility value. Must be 'public', 'unlocked', or 'private'",
+        invalidFields: invalidFields.map(([field]) => field),
+      });
+    }
+
+    // Batch update visibility settings
+    for (const [field, visibility] of Object.entries(fields)) {
+      await user.updateFieldVisibility(field, visibility);
+    }
+
+    await user.save();
+    await user.updateLastActive();
+
+    res.status(200).json({
+      message: "Field visibility updated successfully",
+      fieldVisibility: Object.fromEntries(user.fieldVisibility),
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 };
