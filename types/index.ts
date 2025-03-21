@@ -17,13 +17,14 @@ export interface IUser extends Document {
     professional: string[];
     hobbies: string[];
   };
+  sexualOrientation?: string;
   isVerified: boolean;
   isActive: boolean;
   lastActive: Date;
   maxSlots: number;
   location?: {
     type: string;
-    coordinates: number[];
+    coordinates: [number, number];
     formattedAddress?: string;
   };
   googleId?: string;
@@ -47,6 +48,18 @@ export type GoalType =
   | "Activity Partner"
   | "Sugar Dating"
   | "Spiritual Connection";
+
+export interface IFilter {
+  _id: { $ne: unknown; $nin: (null | undefined)[] };
+  dob: { $gte: Date; $lte: Date };
+  location: {
+    $near: {
+      $geometry: { type: string; coordinates: [number, number] | undefined };
+      $maxDistance: number;
+    };
+  };
+  gender?: string;
+}
 
 export interface IPreferences extends Document {
   user: IUser["_id"];

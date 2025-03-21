@@ -8,7 +8,12 @@ import {
   Profile,
   VerifyCallback,
 } from "passport-google-oauth20";
-import { IUser } from "../types/index.js";
+
+if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+  console.warn(
+    "Google OAuth credentials missing - Google auth will be disabled"
+  );
+}
 
 // Local Strategy (Email, Username, Phone Authentication)
 passport.use(
@@ -43,53 +48,55 @@ passport.use(
 );
 
 // Google OAuth Strategy
-passport.use(
-  new GoogleStrategy(
-    {
-      clientID: process.env.GOOGLE_CLIENT_ID || "",
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
-      callbackURL: "/api/auth/google/callback",
-    },
-    async (
-      accessToken: string,
-      refreshToken: string,
-      profile: Profile,
-      done: VerifyCallback
-    ) => {
-      try {
-        const { id, emails, displayName } = profile;
-        if (!displayName) throw new Error("display Name not found");
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+  passport.use(
+    new GoogleStrategy(
+      {
+        clientID: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        callbackURL: "/api/auth/google/callback",
+      },
+      async (
+        accessToken: string,
+        refreshToken: string,
+        profile: Profile,
+        done: VerifyCallback
+      ) => {
+        try {
+          const { id, emails, displayName } = profile;
+          if (!displayName) throw new Error("display Name not found");
 
-        const email = emails?.[0]?.value;
+          const email = emails?.[0]?.value;
 
-        let user = await User.findOne({ googleId: id });
+          let user = await User.findOne({ googleId: id });
 
-        if (!user) {
-          // Check if user exists with the same email but without Google ID
-          const existingUser = await User.findOne({ email });
-          if (existingUser) {
-            existingUser.googleId = id;
-            await existingUser.save();
-            return done(null, existingUser);
+          if (!user) {
+            // Check if user exists with the same email but without Google ID
+            const existingUser = await User.findOne({ email });
+            if (existingUser) {
+              existingUser.googleId = id;
+              await existingUser.save();
+              return done(null, existingUser);
+            }
+            const uniqueUsername = await generateUniqueUsername(displayName);
+            // Create a new user
+            user = await User.create({
+              googleId: id,
+              email,
+              username: uniqueUsername,
+              isVerified: false,
+            });
           }
-          const uniqueUsername = await generateUniqueUsername(displayName);
-          // Create a new user
-          user = await User.create({
-            googleId: id,
-            email,
-            username: uniqueUsername,
-            isVerified: false,
-          });
-        }
 
-        return done(null, user);
-      } catch (error) {
-        console.error("❌ Google OAuth Error:", error);
-        return done(error);
+          return done(null, user);
+        } catch (error) {
+          console.error("❌ Google OAuth Error:", error);
+          return done(error);
+        }
       }
-    }
-  )
-);
+    )
+  );
+}
 
 // Serialize User (Convert User Object to ID)
 passport.serializeUser((user: any, done) => {

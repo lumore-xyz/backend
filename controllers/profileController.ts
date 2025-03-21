@@ -7,9 +7,17 @@ import User from "../models/User.js";
 import UserPhotos from "../models/UserPhotos.js";
 import UserPreference from "../models/UserPreference.js";
 import { Request, Response } from "express";
+import { waitingPool } from "../server.js";
+import { IFilter } from "../types/index.js";
 
 type UpdateData = {
   [key: string]: any;
+};
+
+type MatchProfile = {
+  socketId: string | null;
+  profile: (IUser & { photos?: any[] }) | null;
+  score: number;
 };
 
 // Create or Update Profile
@@ -95,13 +103,16 @@ export const getProfile = async (req: Request, res: Response) => {
 
     // Fetch viewer's profile to access location
     const viewer = await User.findById(viewerId).lean().select("location");
-    if (!viewer || !user?.location) {
+    if (!viewer || !user?.location || !viewer.location) {
       throw new Error("Location data missing");
       // res.status(400).json({ message: "Location data missing" });
     }
 
     // Calculate distance between the viewer and the profile owner
-    const distance = calculateDistance(viewer.location, user?.location);
+    const distance = calculateDistance(
+      viewer.location.coordinates,
+      user?.location.coordinates
+    );
 
     // Fetch user's photos
     const photos = await UserPhotos.find({ user: userId }).select("photoUrl");
@@ -183,7 +194,7 @@ export const getNextProfile = async (req: Request, res: Response) => {
           $maxDistance: preferences.distance * 1000, // Convert km to meters
         },
       },
-    };
+    } as IFilter;
 
     if (preferences?.gender !== "Any") {
       filter.gender = preferences?.gender;
@@ -201,7 +212,7 @@ export const getNextProfile = async (req: Request, res: Response) => {
       age: profile?.age,
       gender: profile.gender,
       distance: calculateDistance(
-        user?.location?.coordinates,
+        user?.location.coordinates,
         profile?.location?.coordinates
       ),
       photo: blurPhotos(
@@ -235,7 +246,10 @@ export const likeProfile = async (req: Request, res: Response) => {
     // Get user's slots and find a free one
     const slots = await Slot.find({ user: userId });
     const freeSlot = slots.find((slot) => !slot.profile);
-    if (!freeSlot) res.status(400).json({ message: "No available slots" });
+    if (!freeSlot) {
+      throw new Error("No available slots");
+      // res.status(400).json({ message: "No available slots" });
+    }
 
     // Assign profile to the free slot
     freeSlot.profile = profileId;
@@ -357,7 +371,7 @@ export const findMatch = async (socketId: string, userId: string) => {
       r?.rejectedUser?.toString()
     );
 
-    let bestMatch = { socketId: null, profile: null, score: -1 };
+    let bestMatch: MatchProfile = { socketId: null, profile: null, score: -1 };
 
     for (const [otherSocketId, profile] of waitingPool.entries()) {
       if (
@@ -381,7 +395,7 @@ export const findMatch = async (socketId: string, userId: string) => {
 
       // 3️⃣ **Interest Matching**
       if (profile.interests?.hobbies && user?.interests?.hobbies) {
-        const sharedInterests = profile.interests.hobbies.filter((i) =>
+        const sharedInterests = profile.interests.hobbies.filter((i: any) =>
           user?.interests?.hobbies.includes(i)
         ).length;
         score += sharedInterests * weights.interests;

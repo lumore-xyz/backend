@@ -30,7 +30,7 @@ const io = new Server(httpServer, {
 });
 
 // Store users waiting for a random chat
-const waitingPool = new Map(); // Key: socket.id, Value: { userProfileData }
+export const waitingPool = new Map(); // Key: socket.id, Value: { userProfileData }
 
 // Passport initialization
 app.use(passport.initialize());
@@ -75,7 +75,7 @@ io.on("connection", (socket) => {
     console.log(`User ${socket.id} is looking for a match...`);
     const match = await findMatch(socket.id, userProfile);
 
-    if (match) {
+    if (match && match.socketId) {
       const roomId = `room_${socket.id}_${match.socketId}`;
       socket.join(roomId);
       io.to(match.socketId).emit("matchFound", { roomId });
