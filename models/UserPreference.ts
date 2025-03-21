@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { IPreferences } from "types/index.js";
+import { IPreferences } from "../types/index.js";
 
 const userPreferenceSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
