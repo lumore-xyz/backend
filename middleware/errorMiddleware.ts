@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from "express";
+import { ErrorWithStatusCode } from "../types/index.js";
 
 // /middleware/errorMiddleware.js
 const errorHandler = (
-  err: Error,
+  err: ErrorWithStatusCode,
   req: Request,
   res: Response,
   next: NextFunction
@@ -18,7 +19,9 @@ const errorHandler = (
 
 // 404 Not Found Middleware
 const notFound = (req: Request, res: Response, next: NextFunction) => {
-  const error = new Error(`Not Found - ${req.originalUrl}`);
+  const error = new Error(
+    `Not Found - ${req.originalUrl}`
+  ) as ErrorWithStatusCode;
   error.statusCode = 404;
   next(error);
 };

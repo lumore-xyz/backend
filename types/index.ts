@@ -33,3 +33,7 @@ export interface IUser extends Document {
 export interface AuthRequest extends Request {
   user?: IUser;
 }
+
+export interface ErrorWithStatusCode extends Error {
+  statusCode?: number;
+}
