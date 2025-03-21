@@ -8,7 +8,7 @@ import UserPhotos from "../models/UserPhotos.js";
 import UserPreference from "../models/UserPreference.js";
 import { Request, Response } from "express";
 import { waitingPool } from "../server.js";
-import { IFilter } from "../types/index.js";
+import { IFilter, IUser, ProfileData } from "../types/index.js";
 
 type UpdateData = {
   [key: string]: any;
@@ -124,14 +124,14 @@ export const getProfile = async (req: Request, res: Response) => {
     });
 
     // Prepare profile data
-    let profileData = {
+    let profileData: ProfileData = {
       _id: user._id,
       visibleName: user.visibleName,
       age: user.age,
       gender: user.gender,
       bio: user.bio,
-      photos: isUnlocked ? photos : blurPhotos(photos), // Blur photos if not unlocked
-      distance, // Distance in km
+      photos: isUnlocked ? photos : blurPhotos(photos),
+      distance,
     };
 
     // If the user is viewing their own profile, show full data
@@ -211,10 +211,13 @@ export const getNextProfile = async (req: Request, res: Response) => {
       visibleName: profile.visibleName,
       age: profile?.age,
       gender: profile.gender,
-      distance: calculateDistance(
-        user?.location.coordinates,
-        profile?.location?.coordinates
-      ),
+      distance:
+        user?.location?.coordinates && profile?.location?.coordinates
+          ? calculateDistance(
+              user.location.coordinates,
+              profile.location.coordinates
+            )
+          : 0,
       photo: blurPhotos(
         await UserPhotos.find({ user: profile._id }).select("photoUrl")
       ),

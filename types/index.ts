@@ -83,3 +83,13 @@ export interface AuthRequest extends Request {
 export interface ErrorWithStatusCode extends Error {
   statusCode?: number;
 }
+
+export interface ProfileData {
+  _id: any;
+  visibleName?: string;
+  age?: string;
+  gender?: "Male" | "Female" | "Non-Binary";
+  bio?: string;
+  photos: any;
+  distance: number;
+}
