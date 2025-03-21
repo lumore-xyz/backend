@@ -10,6 +10,7 @@ export interface IUser extends Document {
   visibleName?: string;
   hiddenName?: string;
   gender?: "Male" | "Female" | "Non-Binary";
+  age?: string;
   dob?: Date;
   bio?: string;
   interests?: {
@@ -28,6 +29,38 @@ export interface IUser extends Document {
   googleId?: string;
   googleEmail?: string;
   comparePassword(password: string): Promise<boolean>;
+}
+
+export type GoalType =
+  | "Serious Relationship"
+  | "Casual Dating"
+  | "Marriage"
+  | "Friendship"
+  | "Quick Sex"
+  | "Undecided"
+  | "Long-Term Dating"
+  | "Open Relationship"
+  | "Networking"
+  | "Exploring Sexuality"
+  | "Travel Companion"
+  | "Polyamorous Relationship"
+  | "Activity Partner"
+  | "Sugar Dating"
+  | "Spiritual Connection";
+
+export interface IPreferences extends Document {
+  user: IUser["_id"];
+  gender: "Male" | "Female" | "Non-Binary" | "Any";
+  ageRange: {
+    min: number;
+    max: number;
+  };
+  distance: number;
+  goal: {
+    primary?: GoalType;
+    secondary?: GoalType;
+    tertiary?: GoalType;
+  };
 }
 
 export interface AuthRequest extends Request {

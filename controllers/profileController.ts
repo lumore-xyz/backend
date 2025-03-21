@@ -31,7 +31,7 @@ export const createProfile = async (req: Request, res: Response) => {
       .filter((key) => allowedFields.includes(key))
       .reduce((obj: UpdateData, key) => {
         obj[key] = req.body[key];
-        obj;
+        return obj;
       }, {});
 
     // Update the user profile and  updated data
@@ -41,7 +41,10 @@ export const createProfile = async (req: Request, res: Response) => {
       upsert: false, // Prevent creating new user if not found
     }).select("-password -__v"); // Exclude sensitive fields
 
-    if (!updatedUser) res.status(404).json({ message: "User not found" });
+    if (!updatedUser) {
+      throw new Error("User not found");
+      // return res.status(404).json({ message: "User not found" });
+    }
 
     res.status(200).json(updatedUser);
   } catch (error) {
@@ -93,7 +96,8 @@ export const getProfile = async (req: Request, res: Response) => {
     // Fetch viewer's profile to access location
     const viewer = await User.findById(viewerId).lean().select("location");
     if (!viewer || !user?.location) {
-      res.status(400).json({ message: "Location data missing" });
+      throw new Error("Location data missing");
+      // res.status(400).json({ message: "Location data missing" });
     }
 
     // Calculate distance between the viewer and the profile owner
@@ -143,18 +147,21 @@ export const getNextProfile = async (req: Request, res: Response) => {
     if (!user) res.status(404).json({ message: "User not found" });
 
     // Get user preferences
-    const preferences = await UserPreference.findOne({ user: user._id });
-    if (!preferences) res.status(400).json({ message: "Preferences not set" });
+    const preferences = await UserPreference.findOne({ user: user?._id });
+    if (!preferences) {
+      throw new Error("Preferences not set");
+      // res.status(400).json({ message: "Preferences not set" });
+    }
 
     // Fetch rejected profiles
     const rejectedProfiles = await RejectedProfiles.find({
-      user: user._id,
+      user: user?._id,
     }).select("rejectedUser");
     const rejectedUserIds = rejectedProfiles.map((r) => r.rejectedUser);
 
     // Profile filtering
     const filter = {
-      _id: { $ne: user._id, $nin: rejectedUserIds },
+      _id: { $ne: user?._id, $nin: rejectedUserIds },
       dob: {
         $gte: new Date(
           new Date().setFullYear(
@@ -178,8 +185,8 @@ export const getNextProfile = async (req: Request, res: Response) => {
       },
     };
 
-    if (preferences.gender !== "Any") {
-      filter.gender = preferences.gender;
+    if (preferences?.gender !== "Any") {
+      filter.gender = preferences?.gender;
     }
 
     const profiles = await User.find(filter).limit(1);
@@ -191,7 +198,7 @@ export const getNextProfile = async (req: Request, res: Response) => {
     res.status(200).json({
       _id: profile._id,
       visibleName: profile.visibleName,
-      age: profile.age,
+      age: profile?.age,
       gender: profile.gender,
       distance: calculateDistance(
         user?.location?.coordinates,
@@ -277,8 +284,8 @@ export const unlockProfile = async (req: Request, res: Response) => {
 };
 
 // Helper function to blur photos
-export const blurPhotos = (photos) => {
-  photos.map((p) => ({ photoUrl: `${p.photoUrl}?blur=10` }));
+export const blurPhotos = (photos: any) => {
+  return photos.map((p: any) => ({ photoUrl: `${p.photoUrl}?blur=10` }));
 };
 
 // 1️⃣ Buy Slot (Mock Payment)
@@ -287,7 +294,10 @@ export const buySlot = async (req: Request, res: Response) => {
     const { id: userId } = req.user as RequestUser;
     // Fetch user
     const user = await User.findById(userId);
-    if (!user) res.status(404).json({ message: "User not found" });
+    if (!user) {
+      throw new Error("User not found");
+      // res.status(404).json({ message: "User not found" });
+    }
 
     // Limit to 10 slots max
     const userSlots = await Slot.countDocuments({ user: userId });
@@ -334,10 +344,10 @@ export const findMatch = async (socketId: string, userId: string) => {
   try {
     // 1️⃣ **Fetch User & Preferences**
     const user = await User.findById(userId);
-    if (!user) null;
+    if (!user) return null;
 
     const preferences = await UserPreference.findOne({ user: userId });
-    if (!preferences) null;
+    if (!preferences) return null;
 
     // 2️⃣ **Fetch Rejected Users**
     const rejectedProfiles = await RejectedProfiles.find({
@@ -370,7 +380,7 @@ export const findMatch = async (socketId: string, userId: string) => {
       };
 
       // 3️⃣ **Interest Matching**
-      if (profile.interests?.hobbies && user.interests?.hobbies) {
+      if (profile.interests?.hobbies && user?.interests?.hobbies) {
         const sharedInterests = profile.interests.hobbies.filter((i) =>
           user?.interests?.hobbies.includes(i)
         ).length;
@@ -378,19 +388,22 @@ export const findMatch = async (socketId: string, userId: string) => {
       }
 
       // 4️⃣ **Sexual Orientation & Goal Matching**
-      if (profile.sexualOrientation === user.sexualOrientation)
+      if (profile.sexualOrientation === user?.sexualOrientation)
         score += weights.sexualOrientation;
-      if (profile.goal?.primary === preferences.goal?.primary)
+      if (profile.goal?.primary === preferences?.goal?.primary)
         score += weights.primaryGoal;
 
       // 5️⃣ **Gender & Preference Matching**
-      if (profile.gender === preferences.gender) score += weights.genderMatch;
+      if (profile.gender === preferences?.gender) score += weights.genderMatch;
       if (user.gender === profile.preferences?.gender)
         score += weights.genderMatch;
 
       // 6️⃣ **Age Matching**
       const age = calculateAge(profile.dob);
-      if (age >= preferences.ageRange.min && age <= preferences.ageRange.max) {
+      if (
+        age >= preferences?.ageRange?.min &&
+        age <= preferences?.ageRange?.max
+      ) {
         score += weights.ageMatch;
       }
 
@@ -414,14 +427,14 @@ export const findMatch = async (socketId: string, userId: string) => {
     // Fetch photos for the matched profile
     if (bestMatch.profile) {
       bestMatch.profile.photos = await UserPhotos.find({
-        user: bestMatch.profile._id,
+        user: bestMatch.profile?._id,
       }).select("photoUrl");
     }
 
-    bestMatch.profile ? bestMatch : null;
+    return bestMatch.profile ? bestMatch : null;
   } catch (error) {
     console.error("Error in findMatch:", error);
-    null;
+    return null;
   }
 };
 
@@ -437,7 +450,7 @@ export const calculateAge = (dob: string) => {
   ) {
     age--;
   }
-  age;
+  return age;
 };
 
 // Helper function to calculate distance
@@ -455,5 +468,5 @@ export const calculateDistance = (
     Math.cos(lat1 * (Math.PI / 180)) *
       Math.cos(lat2 * (Math.PI / 180)) *
       Math.sin(dLon / 2) ** 2;
-  R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 };

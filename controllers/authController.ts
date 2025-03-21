@@ -9,7 +9,7 @@ import { NextFunction, Request, Response } from "express";
 const generateToken = (id: any) => {
   const JWT_SECRET = process.env.JWT_SECRET;
   if (!JWT_SECRET) throw new Error("JWT_SECRET not found");
-  return jwt.sign({ id }, JWT_SECRET, {
+  jwt.sign({ id }, JWT_SECRET, {
     expiresIn: "30d",
   });
 };
@@ -29,7 +29,7 @@ export const signup = async (
     });
 
     if (existingUser) {
-      return res.status(400).json({ message: "Username already in use" });
+      res.status(400).json({ message: "Username already in use" });
     }
 
     // Create user
@@ -124,7 +124,7 @@ export const googleLogin = async (req: Request, res: Response) => {
       );
     } else {
       // req.user is undefined
-      return res.status(401).json({ message: "User not authenticated" });
+      res.status(401).json({ message: "User not authenticated" });
     }
   } catch (error: unknown) {
     res.status(500).json({
@@ -145,11 +145,12 @@ export const setPassword = async (req: Request, res: Response) => {
     const user = await User.findById(userId);
 
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      throw new Error("User not found");
+      // res.status(404).json({ message: "User not found" });
     }
 
-    if (!user.googleId) {
-      return res.status(400).json({ message: "Password already set" });
+    if (!user?.googleId) {
+      res.status(400).json({ message: "Password already set" });
     }
 
     // Hash new password before saving
@@ -171,7 +172,7 @@ export const isUniqueUsername = async (req: Request, res: Response) => {
 
     const exists = await User.exists({ username });
 
-    return res.json({ isUnique: !exists }); // ✅ Return JSON response
+    res.json({ isUnique: !exists }); // ✅  JSON response
   } catch (error: unknown) {
     console.error("Error checking username uniqueness:", error);
     res.status(500).json({
@@ -188,7 +189,7 @@ export async function generateUniqueUsername(name: string) {
 
   let exists = await User.findOne({ username: baseUsername });
 
-  if (!exists) return baseUsername; // If username is unique, return it
+  if (!exists) baseUsername; // If username is unique,  it
 
   // Generate new usernames in bulk (up to 10 variations per query)
   let counter = 1;
@@ -202,7 +203,7 @@ export async function generateUniqueUsername(name: string) {
     if (counter > 100) throw new Error("Failed to generate a unique username.");
   }
 
-  return newUsername;
+  newUsername;
 }
 export function generateCleanUsername(name: string) {
   return name

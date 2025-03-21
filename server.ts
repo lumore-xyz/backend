@@ -13,6 +13,7 @@ import { errorHandler, notFound } from "./middleware/errorMiddleware.js";
 import Message from "./models/Message.js";
 import authRoutes from "./routes/authRoutes.js";
 import profileRoutes from "./routes/profileRoutes.js";
+import { findMatch } from "./controllers/profileController.js";
 
 // Connect to MongoDB
 connectDB();
@@ -67,12 +68,12 @@ app.use(errorHandler);
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  const { preferences, publicKey } = socket.handshake.auth;
+  // const { preferences, publicKey } = socket.handshake.auth;
 
   // When a user requests a random chat
   socket.on("findRandomChat", async (userProfile) => {
     console.log(`User ${socket.id} is looking for a match...`);
-    const match = findMatch(socket.id, userProfile);
+    const match = await findMatch(socket.id, userProfile);
 
     if (match) {
       const roomId = `room_${socket.id}_${match.socketId}`;
