@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { ErrorWithStatusCode } from "../types/index.js";
+import { ValidationError } from "../errors/customErrors.js";
 
 // /middleware/errorMiddleware.js
 const errorHandler = (
@@ -8,6 +9,11 @@ const errorHandler = (
   res: Response,
   next: NextFunction
 ) => {
+  if (err instanceof ValidationError) {
+    res.status(400).json({ message: err.message });
+    return;
+  }
+
   const statusCode = err.statusCode || res.statusCode || 500;
 
   res.status(statusCode).json({
@@ -15,6 +21,7 @@ const errorHandler = (
     message: err.message || "Server Error",
     stack: process.env.NODE_ENV === "production" ? null : err.stack,
   });
+  return;
 };
 
 // 404 Not Found Middleware

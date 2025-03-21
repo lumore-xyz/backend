@@ -9,6 +9,7 @@ import { NextFunction, Request, Response } from "express";
 const generateToken = (id: any) => {
   const JWT_SECRET = process.env.JWT_SECRET;
   if (!JWT_SECRET) throw new Error("JWT_SECRET not found");
+
   jwt.sign({ id }, JWT_SECRET, {
     expiresIn: "30d",
   });
@@ -24,20 +25,14 @@ export const signup = async (
 
   try {
     // Check for existing user
-    const existingUser = await User.findOne({
-      username,
-    });
-
+    const existingUser = await User.findOne({ username });
     if (existingUser) {
       res.status(400).json({ message: "Username already in use" });
+      return;
     }
 
     // Create user
-    const user = await User.create({
-      username,
-      password,
-    });
-
+    const user = await User.create({ username, password });
     // Create a free slot for the new user
     await Slot.create({ user: user._id, profile: null });
 
@@ -46,16 +41,17 @@ export const signup = async (
       username: user.username,
       token: generateToken(user._id),
     });
-  } catch (error: unknown) {
-    next(error);
-    res.status(500).json({
-      message: error instanceof Error ? error.message : "An error occurred",
-    });
+  } catch (error) {
+    next(error); // Pass the error to the error handling middleware
   }
 };
 
 // Local Login
-export const login = async (req: Request, res: Response) => {
+export const login = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   const { identifier, password } = req.body;
 
   try {
@@ -74,18 +70,22 @@ export const login = async (req: Request, res: Response) => {
         email: user.email,
         token: generateToken(user._id),
       });
+      return;
     } else {
       res.status(401).json({ message: "Invalid credentials" });
+      return;
     }
-  } catch (error: unknown) {
-    res.status(500).json({
-      message: error instanceof Error ? error.message : "An error occurred",
-    });
+  } catch (error) {
+    next(error);
   }
 };
 
 // Google Login / Create User
-export const googleLogin = async (req: Request, res: Response) => {
+export const googleLogin = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   try {
     if (req.user) {
       // Extract user from Passport's req.user
@@ -125,18 +125,24 @@ export const googleLogin = async (req: Request, res: Response) => {
     } else {
       // req.user is undefined
       res.status(401).json({ message: "User not authenticated" });
+      return;
     }
-  } catch (error: unknown) {
-    res.status(500).json({
-      message: error instanceof Error ? error.message : "An error occurred",
-    });
+  } catch (error) {
+    next(error);
   }
 };
 
 // Set Password for Google Users
-export const setPassword = async (req: Request, res: Response) => {
+export const setPassword = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   const { newPassword } = req.body;
-  if (!req.user) throw new Error("user not authenticated");
+  if (!req.user) {
+    res.status(401).json({ message: "user not authenticated" });
+    return;
+  }
   const { id: userId } = req.user as {
     id: string;
   };
@@ -145,12 +151,13 @@ export const setPassword = async (req: Request, res: Response) => {
     const user = await User.findById(userId);
 
     if (!user) {
-      throw new Error("User not found");
-      // res.status(404).json({ message: "User not found" });
+      res.status(404).json({ message: "User not found" });
+      return;
     }
 
     if (!user?.googleId) {
       res.status(400).json({ message: "Password already set" });
+      return;
     }
 
     // Hash new password before saving
@@ -158,26 +165,27 @@ export const setPassword = async (req: Request, res: Response) => {
     await user.save();
 
     res.json({ message: "Password set successfully" });
-  } catch (error: unknown) {
-    res.status(500).json({
-      message: error instanceof Error ? error.message : "An error occurred",
-    });
+  } catch (error) {
+    next(error);
   }
 };
 
 // velidate username is unique
-export const isUniqueUsername = async (req: Request, res: Response) => {
+export const isUniqueUsername = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   try {
     const { username } = req.params;
 
     const exists = await User.exists({ username });
 
     res.json({ isUnique: !exists }); // ✅  JSON response
-  } catch (error: unknown) {
+    return;
+  } catch (error) {
     console.error("Error checking username uniqueness:", error);
-    res.status(500).json({
-      message: error instanceof Error ? error.message : "An error occurred",
-    });
+    next(error);
   }
 };
 

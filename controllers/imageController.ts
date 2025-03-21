@@ -29,6 +29,7 @@ const upload = multer({
     },
     key: (req, file, cb) => {
       if (!req.user) throw new Error("User not found");
+
       const { id } = req.user as { id: string };
       const fileName = `user-${id}/${Date.now()}-${file.originalname}`;
       cb(null, fileName);

@@ -2,6 +2,7 @@
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import { IUser } from "../types/index.js";
+import { ValidationError } from "../errors/customErrors.js";
 
 const userSchema = new mongoose.Schema(
   {
@@ -95,7 +96,9 @@ userSchema.virtual("age").get(function () {
 
 // Password Hashing (Only if Modified)
 userSchema.pre("save", async function (next) {
-  if (!this.isModified("password") || !this.password) return next();
+  if (!this.isModified("password") || !this.password) {
+    return next(new ValidationError("Password is required"));
+  }
 
   try {
     const saltRounds = 12;

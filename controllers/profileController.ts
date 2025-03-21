@@ -50,8 +50,8 @@ export const createProfile = async (req: Request, res: Response) => {
     }).select("-password -__v"); // Exclude sensitive fields
 
     if (!updatedUser) {
-      throw new Error("User not found");
-      // return res.status(404).json({ message: "User not found" });
+      res.status(404).json({ message: "User not found" });
+      return;
     }
 
     res.status(200).json(updatedUser);
@@ -104,8 +104,8 @@ export const getProfile = async (req: Request, res: Response) => {
     // Fetch viewer's profile to access location
     const viewer = await User.findById(viewerId).lean().select("location");
     if (!viewer || !user?.location || !viewer.location) {
-      throw new Error("Location data missing");
-      // res.status(400).json({ message: "Location data missing" });
+      res.status(400).json({ message: "Location data missing" });
+      return;
     }
 
     // Calculate distance between the viewer and the profile owner
@@ -160,8 +160,8 @@ export const getNextProfile = async (req: Request, res: Response) => {
     // Get user preferences
     const preferences = await UserPreference.findOne({ user: user?._id });
     if (!preferences) {
-      throw new Error("Preferences not set");
-      // res.status(400).json({ message: "Preferences not set" });
+      res.status(400).json({ message: "Preferences not set" });
+      return;
     }
 
     // Fetch rejected profiles
@@ -250,8 +250,8 @@ export const likeProfile = async (req: Request, res: Response) => {
     const slots = await Slot.find({ user: userId });
     const freeSlot = slots.find((slot) => !slot.profile);
     if (!freeSlot) {
-      throw new Error("No available slots");
-      // res.status(400).json({ message: "No available slots" });
+      res.status(400).json({ message: "No available slots" });
+      return;
     }
 
     // Assign profile to the free slot
@@ -312,8 +312,8 @@ export const buySlot = async (req: Request, res: Response) => {
     // Fetch user
     const user = await User.findById(userId);
     if (!user) {
-      throw new Error("User not found");
-      // res.status(404).json({ message: "User not found" });
+      res.status(404).json({ message: "User not found" });
+      return;
     }
 
     // Limit to 10 slots max
