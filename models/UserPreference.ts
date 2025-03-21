@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { IPreferences } from "../types/index.js";
 
 const userPreferenceSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
@@ -92,4 +93,7 @@ const userPreferenceSchema = new mongoose.Schema({
 // 1️⃣4️⃣ Sugar Dating – Seeking a mutually beneficial arrangement (sugar daddy/mommy/baby).
 // 1️⃣5️⃣ Spiritual Connection – Looking for deep emotional or spiritual bonding.
 
-export default mongoose.model("UserPreference", userPreferenceSchema);
+export default mongoose.model<IPreferences>(
+  "UserPreference",
+  userPreferenceSchema
+);

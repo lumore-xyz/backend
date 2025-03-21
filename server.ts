@@ -13,6 +13,7 @@ import { errorHandler, notFound } from "./middleware/errorMiddleware.js";
 import Message from "./models/Message.js";
 import authRoutes from "./routes/authRoutes.js";
 import profileRoutes from "./routes/profileRoutes.js";
+import { findMatch } from "./controllers/profileController.js";
 
 // Connect to MongoDB
 connectDB();
@@ -29,7 +30,7 @@ const io = new Server(httpServer, {
 });
 
 // Store users waiting for a random chat
-const waitingPool = new Map(); // Key: socket.id, Value: { userProfileData }
+export const waitingPool = new Map(); // Key: socket.id, Value: { userProfileData }
 
 // Passport initialization
 app.use(passport.initialize());
@@ -67,14 +68,14 @@ app.use(errorHandler);
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  const { preferences, publicKey } = socket.handshake.auth;
+  // const { preferences, publicKey } = socket.handshake.auth;
 
   // When a user requests a random chat
   socket.on("findRandomChat", async (userProfile) => {
     console.log(`User ${socket.id} is looking for a match...`);
-    const match = findMatch(socket.id, userProfile);
+    const match = await findMatch(socket.id, userProfile);
 
-    if (match) {
+    if (match && match.socketId) {
       const roomId = `room_${socket.id}_${match.socketId}`;
       socket.join(roomId);
       io.to(match.socketId).emit("matchFound", { roomId });
