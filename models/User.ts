@@ -1,6 +1,8 @@
 // /models/User.js
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
+import { IUser } from "../types/index.js";
+import { ValidationError } from "../errors/customErrors.js";
 
 const userSchema = new mongoose.Schema(
   {
@@ -18,7 +20,7 @@ const userSchema = new mongoose.Schema(
       sparse: true,
       lowercase: true,
       validate: {
-        validator: (v) =>
+        validator: (v: string) =>
           !v || /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/.test(v),
         message: "Invalid email format",
       },
@@ -28,7 +30,7 @@ const userSchema = new mongoose.Schema(
       unique: true,
       sparse: true,
       validate: {
-        validator: (v) => !v || /^\+?[1-9]\d{1,14}$/.test(v),
+        validator: (v: string) => !v || /^\+?[1-9]\d{1,14}$/.test(v),
         message: "Invalid phone number format",
       },
     },
@@ -43,7 +45,7 @@ const userSchema = new mongoose.Schema(
     dob: {
       type: Date,
       validate: {
-        validator: function (dob) {
+        validator: function (dob: Date) {
           const minAgeDate = new Date();
           minAgeDate.setFullYear(minAgeDate.getFullYear() - 18);
           return dob <= minAgeDate;
@@ -77,6 +79,7 @@ const userSchema = new mongoose.Schema(
 
 // Virtuals
 userSchema.virtual("age").get(function () {
+  if (!this.dob) return 0;
   const today = new Date();
   const birthDate = new Date(this.dob);
   let age = today.getFullYear() - birthDate.getFullYear();
@@ -93,14 +96,16 @@ userSchema.virtual("age").get(function () {
 
 // Password Hashing (Only if Modified)
 userSchema.pre("save", async function (next) {
-  if (!this.isModified("password") || !this.password) return next();
+  if (!this.isModified("password") || !this.password) {
+    return next(new ValidationError("Password is required"));
+  }
 
   try {
     const saltRounds = 12;
     this.password = await bcrypt.hash(this.password, saltRounds);
     next();
-  } catch (error) {
-    next(error);
+  } catch (error: any) {
+    next(error as Error);
   }
 });
 
@@ -112,19 +117,23 @@ userSchema.pre("save", function (next) {
 });
 
 // Password Comparison Method
-userSchema.methods.comparePassword = async function (enteredPassword) {
+userSchema.methods.comparePassword = async function (enteredPassword: string) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
 // Update Last Active When User is Queried
 userSchema.pre(/^find/, async function (next) {
-  if (this._conditions._id) {
-    await this.model.updateOne(
-      { _id: this._conditions._id },
-      { $set: { lastActive: Date.now() } }
-    );
+  const query = this as any;
+  if (query._conditions?._id) {
+    await mongoose
+      .model("User")
+      .updateOne(
+        { _id: query._conditions._id },
+        { $set: { lastActive: Date.now() } }
+      );
   }
   next();
 });
+const User = mongoose.model<IUser>("User", userSchema);
 
-export default mongoose.model("User", userSchema);
+export default User;
