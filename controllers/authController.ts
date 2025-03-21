@@ -197,7 +197,7 @@ export async function generateUniqueUsername(name: string) {
 
   let exists = await User.findOne({ username: baseUsername });
 
-  if (!exists) baseUsername; // If username is unique,  it
+  if (!exists) return baseUsername; // If username is unique,  it
 
   // Generate new usernames in bulk (up to 10 variations per query)
   let counter = 1;
