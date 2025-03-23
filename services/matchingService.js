@@ -41,8 +41,26 @@ class MatchingService {
       .select("-password -googleId -walletAddress")
       .limit(20);
 
-    // Filter matches based on additional preferences
+    // Filter matches based on additional preferences and rejected profiles
     const matches = potentialMatches.filter((match) => {
+      // Check if user has rejected this profile
+      if (
+        user.rejectedProfiles.some(
+          (rp) => rp.rejectedUser.toString() === match._id.toString()
+        )
+      ) {
+        return false;
+      }
+
+      // Check if match has rejected user's profile
+      if (
+        match.rejectedProfiles.some(
+          (rp) => rp.rejectedUser.toString() === userId.toString()
+        )
+      ) {
+        return false;
+      }
+
       // Check if both users are interested in each other's gender
       if (!match.preferences.interestedIn.includes(user.gender)) return false;
 
@@ -215,6 +233,26 @@ class MatchingService {
     }
 
     return age;
+  }
+
+  // Reject a profile
+  async rejectProfile(userId, rejectedUserId) {
+    const [user, rejectedUser] = await Promise.all([
+      User.findById(userId),
+      User.findById(rejectedUserId),
+    ]);
+
+    if (!user || !rejectedUser) throw new Error("One or both users not found");
+
+    // Add to rejected profiles
+    user.rejectedProfiles.push({
+      rejectedUser: rejectedUserId,
+      rejectedAt: new Date(),
+    });
+
+    await user.save();
+
+    return { user };
   }
 }
 

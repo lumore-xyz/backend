@@ -228,19 +228,25 @@ const userSchema = new mongoose.Schema(
     lastActive: { type: Date, default: Date.now },
     maxSlots: { type: Number, default: 1 },
     location: {
-      type: { type: String, default: "Point", enum: ["Point"] },
-      coordinates: { type: [Number], index: "2dsphere" },
-      formattedAddress: String,
+      type: {
+        type: String,
+        enum: ["Point"],
+        default: "Point",
+      },
+      coordinates: {
+        type: [Number],
+        index: "2dsphere",
+        default: [0, 0],
+      },
+      formattedAddress: {
+        type: String,
+        default: "",
+      },
     },
     googleId: { type: String, unique: true, sparse: true },
     googleEmail: String,
     fieldVisibility: {
-      type: Map,
-      of: {
-        type: String,
-        enum: ["public", "unlocked", "private"],
-        default: "public",
-      },
+      type: Object,
       default: {
         nickname: "public",
         realName: "public",
@@ -262,6 +268,14 @@ const userSchema = new mongoose.Schema(
         languages: "public",
         personalityType: "public",
         profilePicture: "public",
+      },
+      validate: {
+        validator: function (v) {
+          const validValues = ["public", "unlocked", "private"];
+          return Object.values(v).every((value) => validValues.includes(value));
+        },
+        message:
+          "Invalid visibility value. Must be one of: public, unlocked, private",
       },
     },
     dailyConversations: {
@@ -356,15 +370,15 @@ userSchema.methods.updateLastActive = async function () {
 // Add a method to update field visibility
 userSchema.methods.updateFieldVisibility = function (field, visibility) {
   if (!this.fieldVisibility) {
-    this.fieldVisibility = new Map();
+    this.fieldVisibility = {};
   }
-  this.fieldVisibility.set(field, visibility);
+  this.fieldVisibility[field] = visibility;
   return this.save();
 };
 
 // Add a method to check field visibility
 userSchema.methods.isFieldVisible = function (field, isUnlocked = false) {
-  const visibility = this.fieldVisibility.get(field) || "public";
+  const visibility = this.fieldVisibility[field] || "public";
 
   switch (visibility) {
     case "public":

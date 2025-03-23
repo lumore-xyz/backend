@@ -1,5 +1,6 @@
 // /controllers/profileController.js
-import RejectedProfiles from "../models/RejectedProfiles.js";
+import mongoose from "mongoose";
+import RejectedProfile from "../models/RejectedProfile.js";
 import Slot from "../models/Slot.js";
 import UnlockHistory from "../models/UnlockHistory.js";
 import User from "../models/User.js";
@@ -167,7 +168,7 @@ export const getNextProfile = async (req, res) => {
       return res.status(400).json({ message: "Preferences not set" });
 
     // Fetch rejected profiles
-    const rejectedProfiles = await RejectedProfiles.find({
+    const rejectedProfiles = await RejectedProfile.find({
       user: user._id,
     }).select("rejectedUser");
     const rejectedUserIds = rejectedProfiles.map((r) => r.rejectedUser);
@@ -263,14 +264,19 @@ export const likeProfile = async (req, res) => {
 export const rejectProfile = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { profileId } = req.body;
+    const { profileId, reason, feedback } = req.body;
 
     const user = await User.findById(userId);
     const profile = await User.findById(profileId);
     if (!user || !profile)
       return res.status(404).json({ message: "User or profile not found" });
 
-    await RejectedProfiles.create({ user: userId, rejectedUser: profileId });
+    await RejectedProfile.create({
+      user: userId,
+      rejectedUser: profileId,
+      reason,
+      feedback,
+    });
     await user.updateLastActive();
 
     res.status(200).json({ message: "Profile rejected" });
@@ -363,7 +369,7 @@ export const findMatch = async (socketId, userId) => {
     if (!preferences) return null;
 
     // 2️⃣ **Fetch Rejected Users**
-    const rejectedProfiles = await RejectedProfiles.find({
+    const rejectedProfiles = await RejectedProfile.find({
       user: userId,
     }).select("rejectedUser");
     const rejectedUserIds = rejectedProfiles.map((r) =>
@@ -464,9 +470,11 @@ export const calculateAge = (dob) => {
 };
 
 // Helper function to calculate distance
-export const calculateDistance = (coords1, coords2) => {
-  const [lat1, lon1] = coords1;
-  const [lat2, lon2] = coords2;
+export const calculateDistance = (location1, location2) => {
+  // Extract coordinates from GeoJSON Point structure
+  const [lon1, lat1] = location1.coordinates;
+  const [lon2, lat2] = location2.coordinates;
+
   const R = 6371; // Earth radius in km
   const dLat = (lat2 - lat1) * (Math.PI / 180);
   const dLon = (lon2 - lon1) * (Math.PI / 180);
@@ -523,6 +531,61 @@ export const updateFieldVisibility = async (req, res) => {
       message: "Field visibility updated successfully",
       fieldVisibility: Object.fromEntries(user.fieldVisibility),
     });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Toggle profile visibility for a match
+// @route   POST /api/profile/toggle-visibility/:matchId
+// @access  Private
+export const toggleProfileVisibility = async (req, res) => {
+  try {
+    const { isVisible } = req.body;
+    const user = await User.findById(req.user._id);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    user.fieldVisibility = isVisible;
+    await user.save();
+
+    res.json({ fieldVisibility: isVisible });
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+};
+
+// Get Rejection History
+export const getRejectionHistory = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const rejections = await RejectedProfile.find({ user: userId })
+      .populate("rejectedUser", "visibleName profilePicture")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json(rejections);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get Rejection Analytics
+export const getRejectionAnalytics = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const analytics = await RejectedProfile.aggregate([
+      { $match: { user: new mongoose.Types.ObjectId(userId) } },
+      {
+        $group: {
+          _id: "$reason",
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    res.status(200).json(analytics);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

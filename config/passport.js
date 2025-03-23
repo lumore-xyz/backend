@@ -61,7 +61,7 @@ passport.use(
             return done(null, existingUser);
           }
           const uniqueUsername = await generateUniqueUsername(displayName);
-          // Create a new user
+          // Create a new user with minimal required fields
           user = await User.create({
             googleId: id,
             email,

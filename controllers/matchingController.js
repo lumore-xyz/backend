@@ -45,42 +45,6 @@ export const endMatch = async (req, res) => {
   }
 };
 
-// @desc    Get saved chats for a user
-// @route   GET /api/matching/saved-chats
-// @access  Private
-export const getSavedChats = async (req, res) => {
-  try {
-    const user = await User.findById(req.user._id)
-      .populate("savedChats.match", "username profilePicture")
-      .select("savedChats");
-
-    res.json(user.savedChats);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
-};
-
-// @desc    Toggle profile visibility for a match
-// @route   POST /api/matching/toggle-profile-visibility/:matchId
-// @access  Private
-export const toggleProfileVisibility = async (req, res) => {
-  try {
-    const { isVisible } = req.body;
-    const user = await User.findById(req.user._id);
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    user.fieldVisibility = isVisible;
-    await user.save();
-
-    res.json({ fieldVisibility: isVisible });
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
-};
-
 // @desc    Get user's active match
 // @route   GET /api/matching/active-match
 // @access  Private
@@ -96,19 +60,16 @@ export const getActiveMatch = async (req, res) => {
   }
 };
 
-// @desc    Get user's daily conversation count
-// @route   GET /api/matching/conversation-count
+// @desc    Reject a profile
+// @route   POST /api/matching/reject-profile/:userId
 // @access  Private
-export const getConversationCount = async (req, res) => {
+export const rejectProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select(
-      "dailyConversations lastConversationReset"
+    const result = await matchingService.rejectProfile(
+      req.user._id,
+      req.params.userId
     );
-
-    res.json({
-      dailyConversations: user.dailyConversations, // do we even have this in user schema?
-      lastReset: user.lastConversationReset,
-    });
+    res.json(result);
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
