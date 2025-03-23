@@ -12,13 +12,51 @@ export const createProfile = async (req, res) => {
   try {
     const userId = req.user.id;
     const allowedFields = [
+      "username",
+      "nickname",
+      "realName",
       "visibleName",
       "hiddenName",
       "gender",
+      "sexualOrientation",
       "dob",
+      "height",
       "bio",
       "interests",
+      "diet",
+      "zodiacSign",
+      "lifestyle",
+      "lifestyle.drinking",
+      "lifestyle.smoking",
+      "lifestyle.pets",
+      "work",
+      "work.title",
+      "work.company",
+      "education",
+      "education.degree",
+      "education.institution",
+      "education.field",
+      "maritalStatus",
+      "religion",
+      "currentLocation",
+      "homeTown",
+      "languages",
+      "personalityType",
+      "profilePicture",
+      "isVerified",
+      "verificationMethod",
+      "verificationStatus",
+      "isActive",
+      "lastActive",
+      "maxSlots",
       "location",
+      "location.coordinates",
+      "location.formattedAddress",
+      "fieldVisibility",
+      "dailyConversations",
+      "lastConversationReset",
+      "activeMatch",
+      "savedChats",
     ];
 
     // Extract only allowed fields
@@ -529,7 +567,7 @@ export const updateFieldVisibility = async (req, res) => {
 
     res.status(200).json({
       message: "Field visibility updated successfully",
-      fieldVisibility: Object.fromEntries(user.fieldVisibility),
+      fieldVisibility: user.fieldVisibility,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

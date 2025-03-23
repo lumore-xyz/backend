@@ -43,7 +43,24 @@ const userSchema = new mongoose.Schema(
     hiddenName: { type: String, trim: true },
     gender: {
       type: String,
-      enum: ["Male", "Female", "Non-Binary", "Prefer Not to Say"],
+      enum: [
+        "Man",
+        "Woman",
+        "Non-Binary",
+        "Trans Man",
+        "Trans Woman",
+        "Genderqueer",
+        "Genderfluid",
+        "Agender",
+        "Bigender",
+        "Demiboy",
+        "Demigirl",
+        "Two-Spirit",
+        "Androgynous",
+        "Intersex",
+        "Third Gender",
+        "Prefer Not to Say",
+      ],
     },
     sexualOrientation: {
       type: String,
@@ -107,7 +124,7 @@ const userSchema = new mongoose.Schema(
       ],
     },
     lifestyle: {
-      alcohol: {
+      drinking: {
         type: String,
         enum: ["Never", "Rarely", "Socially", "Regular", "Prefer Not to Say"],
       },
@@ -210,8 +227,13 @@ const userSchema = new mongoose.Schema(
     },
     profilePicture: { type: String }, // URL to the profile picture
     web3Wallet: {
-      address: { type: String, unique: true, sparse: true },
-      connected: { type: Boolean, default: false },
+      addresses: [
+        {
+          type: String,
+          unique: true,
+          sparse: true, // Allows null values without breaking uniqueness constraint
+        },
+      ],
     },
     isVerified: { type: Boolean, default: false },
     verificationMethod: {
