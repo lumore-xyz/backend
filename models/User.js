@@ -43,24 +43,7 @@ const userSchema = new mongoose.Schema(
     hiddenName: { type: String, trim: true },
     gender: {
       type: String,
-      enum: [
-        "Man",
-        "Woman",
-        "Non-Binary",
-        "Trans Man",
-        "Trans Woman",
-        "Genderqueer",
-        "Genderfluid",
-        "Agender",
-        "Bigender",
-        "Demiboy",
-        "Demigirl",
-        "Two-Spirit",
-        "Androgynous",
-        "Intersex",
-        "Third Gender",
-        "Prefer Not to Say",
-      ],
+      enum: ["Man", "Woman", "Non-Binary", "Prefer Not to Say"],
     },
     sexualOrientation: {
       type: String,
@@ -230,7 +213,6 @@ const userSchema = new mongoose.Schema(
       addresses: [
         {
           type: String,
-          unique: true,
           sparse: true, // Allows null values without breaking uniqueness constraint
         },
       ],
@@ -390,12 +372,12 @@ userSchema.methods.updateLastActive = async function () {
 };
 
 // Add a method to update field visibility
-userSchema.methods.updateFieldVisibility = function (field, visibility) {
+userSchema.methods.updateFieldVisibility = async function (field, visibility) {
   if (!this.fieldVisibility) {
-    this.fieldVisibility = {};
+    this.fieldVisibility = {}; // Initialize if missing
   }
   this.fieldVisibility[field] = visibility;
-  return this.save();
+  return await this.save();
 };
 
 // Add a method to check field visibility

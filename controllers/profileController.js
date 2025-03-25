@@ -530,7 +530,6 @@ export const updateFieldVisibility = async (req, res) => {
     const userId = req.user.id;
     const { fields } = req.body;
 
-    // Validate input
     if (!fields || typeof fields !== "object") {
       return res.status(400).json({
         message:
@@ -538,12 +537,6 @@ export const updateFieldVisibility = async (req, res) => {
       });
     }
 
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    // Validate visibility values
     const validVisibilities = ["public", "unlocked", "private"];
     const invalidFields = Object.entries(fields).filter(
       ([_, visibility]) => !validVisibilities.includes(visibility)
@@ -557,17 +550,23 @@ export const updateFieldVisibility = async (req, res) => {
       });
     }
 
-    // Batch update visibility settings
-    for (const [field, visibility] of Object.entries(fields)) {
-      await user.updateFieldVisibility(field, visibility);
+    // Fetch user to get current fieldVisibility
+    const user = await User.findById(userId, "fieldVisibility");
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
     }
 
+    // Merge existing fieldVisibility with new values
+    const updatedVisibility = { ...user.fieldVisibility, ...fields };
+
+    // Update in DB
+    user.fieldVisibility = updatedVisibility;
     await user.save();
     await user.updateLastActive();
 
     res.status(200).json({
       message: "Field visibility updated successfully",
-      fieldVisibility: user.fieldVisibility,
+      fieldVisibility: updatedVisibility,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
