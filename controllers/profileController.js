@@ -120,7 +120,11 @@ export const getProfile = async (req, res) => {
     const { userId } = req.params;
     const viewerId = req.user.id;
 
-    // Fetch user profile without the password
+    if (!userId || !viewerId) {
+      return res.status(400).json({ message: "Invalid request" });
+    }
+
+    // Fetch user profile without password
     const user = await User.findById(userId).lean().select("-password");
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -128,56 +132,45 @@ export const getProfile = async (req, res) => {
 
     // Fetch viewer's profile to access location
     const viewer = await User.findById(viewerId).lean().select("location");
-    if (!viewer || !user.location) {
+    if (!viewer || !viewer.location || !user.location) {
       return res.status(400).json({ message: "Location data missing" });
     }
 
-    // Calculate distance between the viewer and the profile owner
+    // Calculate distance between viewer and user
     const distance = calculateDistance(viewer.location, user.location);
 
     // Fetch user's photos
     const photos = await UserPhotos.find({ user: userId }).select("photoUrl");
 
-    // Check if the profile is unlocked by the viewer
+    // Check if profile is unlocked by viewer
     const isUnlocked = await UnlockHistory.exists({
       user: viewerId,
       unlockedUser: userId,
     });
 
-    // Prepare profile data based on visibility settings
+    // Prepare profile data
     let profileData = {
       _id: user._id,
       visibleName: user.visibleName,
       distance,
     };
 
-    // If viewing own profile, show all fields
+    // If the viewer is the profile owner, return full profile
     if (userId === viewerId) {
-      profileData = {
-        ...user,
-        photos,
-        distance,
-      };
+      profileData = { ...user, photos, distance };
     } else {
-      // Check visibility settings for each field
-      const fieldVisibility = user.fieldVisibility || new Map();
+      // Ensure fieldVisibility is an object
+      const fieldVisibility = user.fieldVisibility || {};
 
       // Add fields based on visibility settings
       Object.entries(user).forEach(([field, value]) => {
-        if (
-          field === "fieldVisibility" ||
-          field === "password" ||
-          field === "__v"
-        ) {
-          return; // Skip internal fields
-        }
+        if (["fieldVisibility", "password", "__v"].includes(field)) return;
 
-        const visibility = fieldVisibility.get(field) || "public";
+        const visibility = fieldVisibility[field] || "public";
 
         if (
           visibility === "public" ||
-          (visibility === "unlocked" && isUnlocked) ||
-          userId === viewerId
+          (visibility === "unlocked" && isUnlocked)
         ) {
           profileData[field] = value;
         }
