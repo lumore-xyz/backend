@@ -14,6 +14,20 @@ const userSchema = new mongoose.Schema(
     },
     nickname: { type: String, trim: true },
     realName: { type: String, trim: true },
+    bloodGroup: {
+      type: String,
+      enum: [
+        "A+",
+        "A-",
+        "B+",
+        "B-",
+        "AB+",
+        "AB-",
+        "O+",
+        "O-",
+        "Prefer Not to Say",
+      ],
+    },
     email: {
       type: String,
       unique: true,
@@ -30,7 +44,8 @@ const userSchema = new mongoose.Schema(
       unique: true,
       sparse: true,
       validate: {
-        validator: (v) => !v || /^\+?[1-9]\d{1,14}$/.test(v),
+        validator: (v) =>
+          !v || /^\+?[1-9]\d{1,14}$/.test(v.replace(/\s+/g, "")),
         message: "Invalid phone number format",
       },
     },
@@ -39,8 +54,6 @@ const userSchema = new mongoose.Schema(
       minlength: 8,
       select: true,
     },
-    visibleName: { type: String, trim: true },
-    hiddenName: { type: String, trim: true },
     gender: {
       type: String,
       enum: ["Man", "Woman", "Non-Binary", "Prefer Not to Say"],
@@ -284,8 +297,7 @@ const userSchema = new mongoose.Schema(
     },
     dailyConversations: {
       type: Number,
-      default: 0,
-      max: 10,
+      default: 10,
     },
     lastConversationReset: {
       type: Date,
@@ -294,6 +306,7 @@ const userSchema = new mongoose.Schema(
     activeMatch: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
+      sparse: true,
     },
     savedChats: [
       {
@@ -380,6 +393,23 @@ userSchema.methods.updateFieldVisibility = async function (field, visibility) {
   return await this.save();
 };
 
+// Add method to reset daily conversations
+userSchema.methods.resetDailyConversations = async function () {
+  const today = new Date();
+  const lastReset = new Date(this.lastConversationReset);
+
+  // Reset if it's a new day
+  if (
+    today.getDate() !== lastReset.getDate() ||
+    today.getMonth() !== lastReset.getMonth() ||
+    today.getFullYear() !== lastReset.getFullYear()
+  ) {
+    this.dailyConversations = 0;
+    this.lastConversationReset = today;
+    await this.save();
+  }
+};
+
 // Add a method to check field visibility
 userSchema.methods.isFieldVisible = function (field, isUnlocked = false) {
   const visibility = this.fieldVisibility[field] || "public";
@@ -415,5 +445,8 @@ userSchema.methods.toJSON = function (isUnlocked = false) {
 
   return visibleObj;
 };
+
+// Add this after the schema definition but before the model creation
+userSchema.index({ location: "2dsphere" });
 
 export default mongoose.model("User", userSchema);

@@ -15,14 +15,15 @@ export const createProfile = async (req, res) => {
       "username",
       "nickname",
       "realName",
-      "visibleName",
-      "hiddenName",
+      "phoneNumber",
       "gender",
       "sexualOrientation",
       "dob",
       "height",
       "bio",
       "interests",
+      "interests.professional",
+      "interests.hobbies",
       "diet",
       "zodiacSign",
       "lifestyle",
@@ -57,6 +58,7 @@ export const createProfile = async (req, res) => {
       "lastConversationReset",
       "activeMatch",
       "savedChats",
+      "bloodGroup",
     ];
 
     // Extract only allowed fields
@@ -88,7 +90,20 @@ export const createProfile = async (req, res) => {
 export const updateUserPreference = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { gender, ageRange, distance, goal } = req.body;
+    const {
+      interestedIn,
+      ageRange,
+      distance,
+      goal,
+      interests,
+      relationshipType,
+      preferredLanguages,
+      zodiacPreference,
+      education,
+      personalityTypePreference,
+      dietPreference,
+      locationPreferences,
+    } = req.body;
 
     let preferences = await UserPreference.findOne({ user: userId });
 
@@ -98,13 +113,23 @@ export const updateUserPreference = async (req, res) => {
     }
 
     // Update preference fields
-    if (gender) preferences.gender = gender;
+    if (interestedIn) preferences.interestedIn = interestedIn;
     if (ageRange) preferences.ageRange = ageRange;
     if (distance) preferences.distance = distance;
     if (goal) preferences.goal = goal;
+    if (interests) preferences.interests = interests;
+    if (relationshipType) preferences.relationshipType = relationshipType;
+    if (preferredLanguages) preferences.preferredLanguages = preferredLanguages;
+    if (zodiacPreference) preferences.zodiacPreference = zodiacPreference;
+    if (education) preferences.education = education;
+    if (personalityTypePreference)
+      preferences.personalityTypePreference = personalityTypePreference;
+    if (dietPreference) preferences.dietPreference = dietPreference;
+    if (locationPreferences)
+      preferences.locationPreferences = locationPreferences;
 
     await preferences.save();
-    await User.findById(userId).updateLastActive();
+    // await User.findById(userId).updateLastActive();
 
     res
       .status(200)
@@ -148,6 +173,12 @@ export const getProfile = async (req, res) => {
       unlockedUser: userId,
     });
 
+    // Fetch user preferences if the viewer is the profile owner
+    let preferences = null;
+    if (userId === viewerId) {
+      preferences = await UserPreference.findOne({ user: userId }).lean();
+    }
+
     // Prepare profile data
     let profileData = {
       _id: user._id,
@@ -157,7 +188,7 @@ export const getProfile = async (req, res) => {
 
     // If the viewer is the profile owner, return full profile
     if (userId === viewerId) {
-      profileData = { ...user, photos, distance };
+      profileData = { ...user, photos, distance, preferences };
     } else {
       // Ensure fieldVisibility is an object
       const fieldVisibility = user.fieldVisibility || {};

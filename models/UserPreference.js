@@ -3,9 +3,9 @@ import mongoose from "mongoose";
 const userPreferenceSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   interestedIn: {
-    type: [String],
-    enum: ["Male", "Female", "Non-Binary"],
-    default: ["Any"],
+    type: String,
+    enum: ["Men", "Women", "Non-Binary"],
+    default: "Men",
   },
   ageRange: {
     min: { type: Number, default: 18 },

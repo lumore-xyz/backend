@@ -13,6 +13,7 @@ import {
   toggleProfileVisibility,
   unlockProfile,
   updateFieldVisibility,
+  updateUserPreference,
 } from "../controllers/profileController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { userControl } from "../middleware/userActionMiddleware.js";
@@ -393,5 +394,103 @@ router.post("/toggle-visibility/:matchId", toggleProfileVisibility);
 
 router.get("/rejection-history", protect, getRejectionHistory);
 router.get("/rejection-analytics", protect, getRejectionAnalytics);
+
+/**
+ * @swagger
+ * /api/profile/{userId}/preferences:
+ *   patch:
+ *     summary: Update user preferences
+ *     tags: [Profile]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               interestedIn:
+ *                 type: string
+ *                 enum: [Men, Women, Non-Binary, Any]
+ *               ageRange:
+ *                 type: object
+ *                 properties:
+ *                   min:
+ *                     type: number
+ *                   max:
+ *                     type: number
+ *               distance:
+ *                 type: number
+ *               goal:
+ *                 type: object
+ *                 properties:
+ *                   primary:
+ *                     type: string
+ *                   secondary:
+ *                     type: string
+ *                   tertiary:
+ *                     type: string
+ *               interests:
+ *                 type: object
+ *                 properties:
+ *                   professional:
+ *                     type: array
+ *                     items:
+ *                       type: string
+ *                   hobbies:
+ *                     type: array
+ *                     items:
+ *                       type: string
+ *               relationshipType:
+ *                 type: string
+ *               preferredLanguages:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *               zodiacPreference:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *               education:
+ *                 type: object
+ *                 properties:
+ *                   institutions:
+ *                     type: array
+ *                     items:
+ *                       type: string
+ *                   minimumDegreeLevel:
+ *                     type: string
+ *               personalityTypePreference:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *               dietPreference:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *     responses:
+ *       200:
+ *         description: Preferences updated successfully
+ *       400:
+ *         description: Invalid input
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: User not found
+ */
+router.patch(
+  "/:userId/preferences",
+  protect,
+  userControl,
+  updateUserPreference
+);
 
 export default router;

@@ -1,259 +1,158 @@
 import User from "../models/User.js";
 
-class MatchingService {
-  // Find potential matches for a user based on preferences and profile
-  async findPotentialMatches(userId) {
-    const user = await User.findById(userId);
-    if (!user) throw new Error("User not found");
+const findPotentialMatches = async (userId) => {
+  const user = await User.findById(userId);
+  if (!user) throw new Error("User not found");
 
-    // Reset daily conversations if needed
-    user.resetDailyConversations();
-    await user.save();
+  // Reset daily conversations if needed
+  await user.resetDailyConversations();
 
-    // Check if user has reached daily conversation limit
-    if (user.dailyConversations >= 10) {
-      throw new Error("Daily conversation limit reached");
+  // Check if user has reached daily limit
+  if (user.dailyConversations <= 0) {
+    throw new Error("Daily conversation limit reached");
+  }
+
+  // Simple query to find any active user
+  const query = {
+    _id: { $ne: userId },
+    isActive: true,
+    activeMatch: null,
+  };
+
+  // Get one random active user
+  const match = await User.findOne(query).select(
+    "-password -googleId -walletAddress"
+  );
+
+  if (!match) {
+    // If no active user found, wait 30 seconds and try again
+    await new Promise((resolve) => setTimeout(resolve, 30000));
+    return await findActivePoolMatch(user);
+  }
+
+  return [match];
+};
+
+const createMatch = async (userId1, userId2) => {
+  try {
+    console.log(
+      "[createMatch] Creating match between users:",
+      userId1,
+      userId2
+    );
+
+    // First verify both users exist and are available
+    const [existingUser1, existingUser2] = await Promise.all([
+      User.findById(userId1),
+      User.findById(userId2),
+    ]);
+
+    console.log("[createMatch] Existing user1:", {
+      id: existingUser1?._id,
+      activeMatch: existingUser1?.activeMatch,
+      isActive: existingUser1?.isActive,
+    });
+    console.log("[createMatch] Existing user2:", {
+      id: existingUser2?._id,
+      activeMatch: existingUser2?.activeMatch,
+      isActive: existingUser2?.isActive,
+    });
+
+    if (!existingUser1 || !existingUser2) {
+      throw new Error("One or both users not found");
     }
 
-    // Build query based on preferences
-    const query = {
-      _id: { $ne: userId },
-      isActive: true,
-      isVerified: true,
-      "preferences.interestedIn": user.gender,
-      "preferences.ageRange.min": { $lte: this.calculateAge(user.dateOfBirth) },
-      "preferences.ageRange.max": { $gte: this.calculateAge(user.dateOfBirth) },
-      activeMatch: null,
-    };
+    // if (existingUser1.activeMatch || existingUser2.activeMatch) {
+    //   throw new Error("One or both users already have an active match");
+    // }
 
-    // Add location-based query if maxDistance is specified
-    if (user.preferences.maxDistance) {
-      query.currentLocation = {
-        $near: {
-          $geometry: user.currentLocation,
-          $maxDistance: user.preferences.maxDistance * 1000, // Convert km to meters
+    // Update both users with their match
+    const [user1, user2] = await Promise.all([
+      User.findByIdAndUpdate(
+        userId1,
+        {
+          activeMatch: userId2,
+          $inc: { dailyConversations: -1 },
+          isActive: true,
+          lastActive: new Date(),
         },
-      };
-    }
-
-    // Find potential matches
-    const potentialMatches = await User.find(query)
-      .select("-password -googleId -walletAddress")
-      .limit(20);
-
-    // Filter matches based on additional preferences and rejected profiles
-    const matches = potentialMatches.filter((match) => {
-      // Check if user has rejected this profile
-      if (
-        user.rejectedProfiles.some(
-          (rp) => rp.rejectedUser.toString() === match._id.toString()
-        )
-      ) {
-        return false;
-      }
-
-      // Check if match has rejected user's profile
-      if (
-        match.rejectedProfiles.some(
-          (rp) => rp.rejectedUser.toString() === userId.toString()
-        )
-      ) {
-        return false;
-      }
-
-      // Check if both users are interested in each other's gender
-      if (!match.preferences.interestedIn.includes(user.gender)) return false;
-
-      // Check age compatibility
-      const matchAge = this.calculateAge(match.dateOfBirth);
-      if (
-        matchAge < user.preferences.ageRange.min ||
-        matchAge > user.preferences.ageRange.max
+        { new: true }
       )
-        return false;
-
-      // Check relationship type compatibility
-      if (
-        user.preferences.relationshipType.length > 0 &&
-        match.preferences.relationshipType.length > 0
-      ) {
-        const hasCommonRelationshipType =
-          user.preferences.relationshipType.some((type) =>
-            match.preferences.relationshipType.includes(type)
-          );
-        if (!hasCommonRelationshipType) return false;
-      }
-
-      // Check language compatibility
-      if (user.preferences.languages.length > 0 && match.languages.length > 0) {
-        const hasCommonLanguage = user.preferences.languages.some((lang) =>
-          match.languages.includes(lang)
-        );
-        if (!hasCommonLanguage) return false;
-      }
-
-      // Check diet compatibility
-      if (
-        user.preferences.diet.length > 0 &&
-        match.diet &&
-        !user.preferences.diet.includes(match.diet)
+        .select("-password -googleId -walletAddress")
+        .lean(),
+      User.findByIdAndUpdate(
+        userId2,
+        {
+          activeMatch: userId1,
+          $inc: { dailyConversations: -1 },
+          isActive: true,
+          lastActive: new Date(),
+        },
+        { new: true }
       )
-        return false;
+        .select("-password -googleId -walletAddress")
+        .lean(),
+    ]);
 
-      // Check education compatibility
-      if (
-        user.preferences.education.length > 0 &&
-        match.education?.institution &&
-        !user.preferences.education.includes(match.education.institution)
-      )
-        return false;
-
-      // Check personality type compatibility
-      if (
-        user.preferences.personalityType.length > 0 &&
-        match.personalityType &&
-        !user.preferences.personalityType.includes(match.personalityType)
-      )
-        return false;
-
-      // Check hometown compatibility
-      if (
-        user.preferences.hometown.length > 0 &&
-        match.hometown &&
-        !user.preferences.hometown.includes(match.hometown)
-      )
-        return false;
-
-      return true;
+    console.log("[createMatch] Updated user1:", {
+      id: user1?._id,
+      activeMatch: user1?.activeMatch,
+      isActive: user1?.isActive,
+      dailyConversations: user1?.dailyConversations,
+    });
+    console.log("[createMatch] Updated user2:", {
+      id: user2?._id,
+      activeMatch: user2?.activeMatch,
+      isActive: user2?.isActive,
+      dailyConversations: user2?.dailyConversations,
     });
 
-    return matches;
-  }
+    if (!user1 || !user2) {
+      throw new Error("Failed to create match - update failed");
+    }
 
-  // Create a match between two users
-  async createMatch(userId1, userId2) {
-    const [user1, user2] = await Promise.all([
-      User.findById(userId1),
-      User.findById(userId2),
-    ]);
-
-    if (!user1 || !user2) throw new Error("One or both users not found");
-    if (user1.activeMatch || user2.activeMatch)
-      throw new Error("One or both users already in a match");
-
-    // Update both users with active match
-    user1.activeMatch = userId2;
-    user2.activeMatch = userId1;
-
-    // Increment daily conversations
-    user1.dailyConversations += 1;
-    user2.dailyConversations += 1;
-
-    await Promise.all([user1.save(), user2.save()]);
-
-    return { user1, user2 };
-  }
-
-  // End a match between two users
-  async endMatch(userId1, userId2, reason = null) {
-    const [user1, user2] = await Promise.all([
-      User.findById(userId1),
-      User.findById(userId2),
-    ]);
-
-    if (!user1 || !user2) throw new Error("One or both users not found");
+    // Verify the match was created correctly
     if (
-      user1.activeMatch?.toString() !== userId2 ||
-      user2.activeMatch?.toString() !== userId1
+      user1.activeMatch?.toString() !== userId2.toString() ||
+      user2.activeMatch?.toString() !== userId1.toString()
     ) {
-      throw new Error("Users are not currently matched");
+      throw new Error(
+        "Match verification failed - activeMatch IDs don't match"
+      );
     }
-
-    // Clear active matches
-    user1.activeMatch = null;
-    user2.activeMatch = null;
-
-    // If reason is provided, it's a report
-    if (reason) {
-      const report = {
-        user: userId1,
-        reason,
-        timestamp: new Date(),
-      };
-      user2.reportedBy.push(report);
-    }
-
-    await Promise.all([user1.save(), user2.save()]);
 
     return { user1, user2 };
+  } catch (error) {
+    console.error("[createMatch] Error creating match:", error);
+    throw error;
   }
+};
 
-  // Save a chat to a slot
-  async saveChat(userId1, userId2, messages) {
-    const [user1, user2] = await Promise.all([
-      User.findById(userId1),
-      User.findById(userId2),
-    ]);
+const findActivePoolMatch = async (user) => {
+  return await User.findOne({
+    _id: { $ne: user._id },
+    isActive: true,
+    activeMatch: null,
+  }).select("-password -googleId -walletAddress");
+};
 
-    if (!user1 || !user2) throw new Error("One or both users not found");
-
-    // Add chat to saved chats for both users
-    const savedChat = {
-      match: userId2,
-      messages: messages.map((msg) => ({
-        sender: msg.sender,
-        content: msg.content,
-        timestamp: msg.timestamp || new Date(),
-      })),
-    };
-
-    user1.savedChats.push(savedChat);
-    user2.savedChats.push({
-      ...savedChat,
-      match: userId1,
-    });
-
-    await Promise.all([user1.save(), user2.save()]);
-
-    return { user1, user2 };
+const calculateAge = (dateOfBirth) => {
+  const today = new Date();
+  const birthDate = new Date(dateOfBirth);
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const monthDiff = today.getMonth() - birthDate.getMonth();
+  if (
+    monthDiff < 0 ||
+    (monthDiff === 0 && today.getDate() < birthDate.getDate())
+  ) {
+    age--;
   }
+  return age;
+};
 
-  // Helper method to calculate age
-  calculateAge(dateOfBirth) {
-    const today = new Date();
-    const birthDate = new Date(dateOfBirth);
-    let age = today.getFullYear() - birthDate.getFullYear();
-    const monthDiff = today.getMonth() - birthDate.getMonth();
-
-    if (
-      monthDiff < 0 ||
-      (monthDiff === 0 && today.getDate() < birthDate.getDate())
-    ) {
-      age--;
-    }
-
-    return age;
-  }
-
-  // Reject a profile
-  async rejectProfile(userId, rejectedUserId) {
-    const [user, rejectedUser] = await Promise.all([
-      User.findById(userId),
-      User.findById(rejectedUserId),
-    ]);
-
-    if (!user || !rejectedUser) throw new Error("One or both users not found");
-
-    // Add to rejected profiles
-    user.rejectedProfiles.push({
-      rejectedUser: rejectedUserId,
-      rejectedAt: new Date(),
-    });
-
-    await user.save();
-
-    return { user };
-  }
-}
-
-export default new MatchingService();
+export default {
+  findPotentialMatches,
+  createMatch,
+  findActivePoolMatch,
+  calculateAge,
+};

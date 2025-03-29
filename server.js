@@ -14,7 +14,7 @@ import authRoutes from "./routes/authRoutes.js";
 import matchingRoutes from "./routes/matchingRoutes.js";
 import profileRoutes from "./routes/profileRoutes.js";
 import slotRoutes from "./routes/slotRoutes.js";
-import chatService from "./services/chatService.js";
+import socketService from "./services/socketService.js";
 
 // Connect to MongoDB
 connectDB();
@@ -22,8 +22,8 @@ connectDB();
 const app = express();
 const httpServer = createServer(app);
 
-// Initialize Socket.io with chatService
-chatService.initialize(httpServer);
+// Initialize Socket.io services
+socketService.initialize(httpServer);
 
 // Passport initialization
 app.use(passport.initialize());

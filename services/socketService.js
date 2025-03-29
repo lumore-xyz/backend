@@ -1,28 +1,413 @@
+import crypto from "crypto";
+import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
-import { initializeSocket } from "../controllers/socketController.js";
 
-class SocketService {
-  constructor() {
-    this.io = null;
-  }
+import Message from "../models/Message.js";
+import User from "../models/User.js";
+import { encryptionService } from "./encryptionService.js";
+import { keyExchangeService } from "./keyExchangeService.js";
+import matchingService from "./matchingService.js";
 
-  initialize(server) {
-    this.io = new Server(server, {
-      cors: {
-        origin: process.env.FRONTEND_URL || "http://localhost:3000",
-        methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-      },
-    });
+// Shared state
+let io = null;
+const userSockets = new Map(); // userId -> socket
+const socketUsers = new Map(); // socketId -> userId
+const matchmakingUsers = new Map(); // userId -> { socket, timestamp }
 
-    initializeSocket(this.io);
-  }
+const authenticateSocket = async (socket, next) => {
+  try {
+    const token = socket.handshake.auth.token;
 
-  getIO() {
-    if (!this.io) {
-      throw new Error("Socket.io not initialized!");
+    if (!token) {
+      return next(new Error("Authentication error: No token provided"));
     }
-    return this.io;
-  }
-}
 
-export default new SocketService();
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.id).select("-password").lean(); // Use lean() to get a plain JavaScript object
+
+    if (!user) {
+      return next(new Error("Authentication error: User not found"));
+    }
+
+    // Attach user to socket with all necessary fields
+    socket.user = {
+      _id: user._id,
+      activeMatch: user.activeMatch,
+      isActive: user.isActive,
+      lastActive: user.lastActive,
+    };
+
+    console.log("[authenticateSocket] Authenticated user:", socket.user);
+    next();
+  } catch (error) {
+    console.error("Socket Authentication Error:", error);
+    next(new Error("Authentication error: Invalid token"));
+  }
+};
+
+const initialize = (server) => {
+  io = new Server(server, {
+    cors: {
+      origin: process.env.CLIENT_URL || "http://localhost:3000",
+      methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
+      credentials: true,
+      allowedHeaders: ["*"],
+    },
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    transports: ["websocket", "polling"],
+  });
+
+  const chatNamespace = io.of("/api/chat");
+
+  // Apply authentication middleware
+  chatNamespace.use(authenticateSocket);
+
+  chatNamespace.on("connection", (socket) => {
+    console.log("New client connected:", socket.id);
+    handleConnection(socket);
+  });
+};
+
+const createAndNotifyMatch = async (userId1, userId2, socket1) => {
+  try {
+    // Remove both users from pool
+    matchmakingUsers.delete(userId1.toString());
+    matchmakingUsers.delete(userId2.toString());
+
+    // Create match in database
+    const { user1, user2 } = await matchingService.createMatch(
+      userId1.toString(),
+      userId2.toString()
+    );
+    const matchId = `match_${userId1.toString()}_${userId2.toString()}`;
+
+    // Join both users to the match room
+    socket1.join(matchId);
+    const socket2 = userSockets.get(userId2.toString());
+    if (socket2) {
+      socket2.join(matchId);
+    }
+
+    // Notify both users
+    socket1.emit("matchFound", { matchId, matchedUser: user2?._id });
+    if (socket2) {
+      socket2.emit("matchFound", { matchId, matchedUser: user1?._id });
+    }
+  } catch (error) {
+    // If error, put first user back in pool
+    matchmakingUsers.set(userId1.toString(), {
+      socket: socket1,
+      timestamp: Date.now(),
+    });
+    throw error;
+  }
+};
+
+const handleConnection = (socket) => {
+  // Store user connection
+  const userId = socket.user._id.toString();
+  console.log("[handleConnection] New socket connection for user:", userId);
+  console.log(
+    "[handleConnection] Current userSockets Map size:",
+    userSockets.size
+  );
+
+  // Store the new socket without removing existing ones
+  userSockets.set(userId, socket);
+  socketUsers.set(socket.id, userId);
+
+  console.log(
+    "[handleConnection] Updated userSockets Map size:",
+    userSockets.size
+  );
+  console.log(
+    "[handleConnection] Current socketUsers Map size:",
+    socketUsers.size
+  );
+
+  // Update user's active status and refresh socket.user object
+  User.findByIdAndUpdate(
+    userId,
+    { isActive: true, lastActive: new Date() },
+    { new: true }
+  )
+    .select("-password")
+    .lean()
+    .then((updatedUser) => {
+      if (updatedUser) {
+        // Update socket.user with fresh data
+        socket.user = {
+          _id: updatedUser._id,
+          activeMatch: updatedUser.activeMatch,
+          isActive: updatedUser.isActive,
+          lastActive: updatedUser.lastActive,
+        };
+        console.log("[handleConnection] Updated socket.user:", socket.user);
+      }
+    })
+    .catch((error) => console.error("Error updating user status:", error));
+
+  // Handle matchmaking
+  socket.on("startMatchmaking", async () => {
+    try {
+      if (matchmakingUsers.has(userId)) return;
+
+      // Add user to matchmaking pool
+      matchmakingUsers.set(userId, { socket, timestamp: Date.now() });
+
+      // Find another user in the pool
+      const otherUser = Array.from(matchmakingUsers.entries()).find(
+        ([uid]) => uid !== userId
+      );
+
+      if (otherUser) {
+        const [matchedUserId] = otherUser;
+        await createAndNotifyMatch(userId, matchedUserId, socket);
+      }
+    } catch (error) {
+      socket.emit("matchmakingError", { message: error.message });
+    }
+  });
+
+  socket.on("stopMatchmaking", () => {
+    matchmakingUsers.delete(userId);
+  });
+
+  // Handle joining chat room
+  socket.on("joinChat", ({ matchId }) => {
+    console.log(`[joinChat] User ${userId} joined room ${matchId}`);
+    socket.join(matchId);
+  });
+
+  // Handle key exchange
+  socket.on("init_key_exchange", async (data) => {
+    try {
+      const { matchId } = data;
+      console.log(
+        `[init_key_exchange] User ${userId} initiated key exchange in room ${matchId}`
+      );
+
+      // if (!socket.user?.activeMatch) {
+      //   console.log(
+      //     `[init_key_exchange] User ${userId} has no active match, ignoring`
+      //   );
+      //   return;
+      // }
+
+      // Generate a random key for this session
+      const sessionKey = crypto.randomBytes(32).toString("hex");
+      console.log(
+        `[init_key_exchange] Generated session key for user ${userId}`
+      );
+
+      // Store the key temporarily
+      keyExchangeService.storeTempKeys(userId, { sessionKey });
+      console.log(`[init_key_exchange] Stored session key for user ${userId}`);
+
+      // Send the key to the room
+      console.log(
+        `[init_key_exchange] Broadcasting key exchange request to room ${matchId}`
+      );
+      socket.to(matchId).emit("key_exchange_request", {
+        fromUserId: userId,
+        sessionKey,
+        timestamp: Date.now(),
+      });
+
+      // Also send to the sender to ensure they have the key
+      socket.emit("key_exchange_request", {
+        fromUserId: userId,
+        sessionKey,
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      console.error("[init_key_exchange] Error:", error);
+      socket.emit("error", { message: error.message });
+    }
+  });
+
+  socket.on("key_exchange_response", async (data) => {
+    try {
+      const { fromUserId, sessionKey, timestamp } = data;
+      console.log(
+        `[key_exchange_response] User ${userId} received key from ${fromUserId}`
+      );
+
+      // Store the received key
+      keyExchangeService.storeTempKeys(userId, {
+        sessionKey,
+        timestamp,
+        fromUserId,
+      });
+      console.log(`[key_exchange_response] Stored key from user ${fromUserId}`);
+    } catch (error) {
+      console.error("[key_exchange_response] Error:", error);
+      socket.emit("error", { message: error.message });
+    }
+  });
+
+  // Handle new message
+  socket.on("send_message", async (data) => {
+    try {
+      const { matchId, encryptedContent, iv, receiverId } = data;
+
+      // Verify the user is in the correct room
+      if (!socket.rooms.has(matchId)) {
+        socket.emit("error", { message: "Not in the correct chat room" });
+        return;
+      }
+
+      // Get the session key
+      const keys = keyExchangeService.getTempKeys(userId);
+      if (!keys?.sessionKey) {
+        socket.emit("error", { message: "No encryption key available" });
+        return;
+      }
+
+      // Verify receiver exists
+      if (!receiverId) {
+        socket.emit("error", { message: "Receiver ID is required" });
+        return;
+      }
+
+      // Broadcast the message to the room
+      socket.to(matchId).emit("new_message", {
+        senderId: userId,
+        encryptedData: encryptedContent,
+        iv: iv,
+        timestamp: Date.now(),
+      });
+
+      // Store the message in the database
+      const message = await Message.create({
+        sender: userId,
+        receiver: receiverId,
+        matchId: matchId,
+        encryptedData: encryptedContent,
+        iv: iv,
+      });
+
+      console.log("[send_message] Message created:", message);
+
+      // Confirm message sent
+      socket.emit("message_sent", {
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      console.error("[send_message] Error:", error);
+      socket.emit("error", { message: error.message });
+    }
+  });
+
+  // Handle chat cancellation
+  socket.on("cancelChat", async (data) => {
+    console.log("[cancelChat] Received cancel chat request:", data);
+
+    try {
+      const { matchId } = data;
+
+      // Clear matches in database
+      await Promise.all([
+        User.findByIdAndUpdate(userId, { activeMatch: null }),
+        User.findByIdAndUpdate(socket.user.activeMatch, { activeMatch: null }),
+      ]);
+
+      // Notify the room
+      socket.to(matchId).emit("chatCancelled", { matchId });
+
+      // Update socket.user
+      socket.user = {
+        ...socket.user,
+        activeMatch: null,
+      };
+
+      // Leave the chat room
+      socket.leave(matchId);
+
+      console.log(`[cancelChat] User ${userId} left room ${matchId}`);
+    } catch (error) {
+      console.error("[cancelChat] Error:", error);
+      socket.emit("error", { message: error.message });
+    }
+  });
+
+  // Handle disconnection
+  socket.on("disconnect", async () => {
+    console.log("[disconnect] Socket disconnected for user:", userId);
+    console.log("[disconnect] Current userSockets Map size:", userSockets.size);
+
+    if (userId) {
+      try {
+        const user = await User.findById(userId);
+        if (user?.activeMatch) {
+          const matchedUserId = user.activeMatch.toString();
+          console.log("[disconnect] User has active match:", matchedUserId);
+
+          await Promise.all([
+            User.findByIdAndUpdate(userId, { activeMatch: null }),
+            User.findByIdAndUpdate(matchedUserId, { activeMatch: null }),
+          ]);
+
+          // Get all sockets for the matched user
+          const matchedUserSockets = Array.from(userSockets.entries())
+            .filter(([uid]) => uid === matchedUserId)
+            .map(([_, socket]) => socket);
+
+          // Notify all sockets of the matched user
+          matchedUserSockets.forEach((socket) => {
+            socket.emit("chatCancelled", {
+              matchId: `match_${userId}_${matchedUserId}`,
+            });
+            console.log(
+              "[disconnect] Notified matched user of chat cancellation"
+            );
+          });
+
+          if (matchedUserSockets.length === 0) {
+            console.log(
+              "[disconnect] No sockets found for matched user:",
+              matchedUserId
+            );
+          }
+        }
+
+        matchmakingUsers.delete(userId);
+
+        // Only remove this specific socket
+        userSockets.delete(userId);
+        socketUsers.delete(socket.id);
+
+        console.log("[disconnect] Removed socket mappings for user:", userId);
+        console.log(
+          "[disconnect] Updated userSockets Map size:",
+          userSockets.size
+        );
+        console.log(
+          "[disconnect] Updated socketUsers Map size:",
+          socketUsers.size
+        );
+
+        // Check if user has any remaining connections
+        const remainingConnections = Array.from(socketUsers.entries()).filter(
+          ([_, uid]) => uid === userId
+        ).length;
+
+        if (remainingConnections === 0) {
+          await User.findByIdAndUpdate(userId, {
+            isActive: false,
+            lastActive: new Date(),
+          });
+        }
+      } catch (error) {
+        console.error("Error handling disconnection:", error);
+      }
+    }
+  });
+};
+
+export default {
+  initialize,
+  handleConnection,
+  createAndNotifyMatch,
+};
