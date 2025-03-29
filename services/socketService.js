@@ -8,13 +8,14 @@ import UserPreference from "../models/UserPreference.js";
 import { calculateAge, isAgeInRange } from "./ageService.js";
 import { encryptionService } from "./encryptionService.js";
 import { keyExchangeService } from "./keyExchangeService.js";
+import { isWithinDistance } from "./locationService.js";
 import matchingService from "./matchingService.js";
 
 // Shared state
 let io = null;
 const userSockets = new Map(); // userId -> socket
 const socketUsers = new Map(); // socketId -> userId
-const matchmakingUsers = new Map(); // userId -> { socket, timestamp }
+const matchmakingUsers = new Map(); // userId -> { socket, timestamp, preferences }
 
 const authenticateSocket = async (socket, next) => {
   try {
@@ -71,38 +72,140 @@ const initialize = (server) => {
   });
 };
 
-const createAndNotifyMatch = async (userId1, userId2, socket1) => {
+const findBestMatch = async (userId, userPreferences) => {
+  let bestMatch = null;
+  let bestScore = -1;
+
+  // Get all users in the pool except the current user, sorted by timestamp
+  const potentialMatches = Array.from(matchmakingUsers.entries())
+    .filter(([uid]) => uid !== userId.toString())
+    .sort(([, a], [, b]) => a.timestamp - b.timestamp) // Sort by timestamp, oldest first
+    .slice(0, 100); // Limit to 100 matches
+
+  if (potentialMatches.length === 0) return null;
+
+  console.log(
+    `[findBestMatch] Found ${potentialMatches.length} potential matches for user ${userId}`
+  );
+
+  // Fetch current user's data to get their location
+  const currentUser = await User.findById(userId).select("-password").lean();
+  if (!currentUser?.location?.coordinates) {
+    console.log(`[findBestMatch] User ${userId} has no location data`);
+    return null;
+  }
+
+  // Fetch all potential matches' data in parallel
+  const matchData = await Promise.all(
+    potentialMatches.map(async ([uid, data]) => {
+      const [user, preferences] = await Promise.all([
+        User.findById(uid).select("-password").lean(),
+        UserPreference.findOne({ user: uid }).lean(),
+      ]);
+      return { uid, user, preferences, socket: data.socket };
+    })
+  );
+
+  // Score each potential match
+  for (const match of matchData) {
+    if (!match.user || !match.preferences) continue;
+
+    // Check location compatibility first
+    const isLocationCompatible = isWithinDistance(
+      match.user.location,
+      currentUser.location,
+      userPreferences.distance
+    );
+
+    if (!isLocationCompatible) {
+      console.log(
+        `[findBestMatch] User ${match.uid} is outside preferred distance for user ${userId}`
+      );
+      continue;
+    }
+
+    const score = calculateMatchScore(userPreferences, match.preferences);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = match;
+    }
+  }
+
+  if (bestMatch) {
+    console.log(
+      `[findBestMatch] Best match found for user ${userId} with score ${bestScore}`
+    );
+  } else {
+    console.log(
+      `[findBestMatch] No compatible matches found for user ${userId}`
+    );
+  }
+
+  return bestMatch;
+};
+
+const calculateMatchScore = (pref1, pref2) => {
+  let score = 0;
+
+  // Age compatibility (highest weight)
+  if (pref1?.ageRange && pref2?.ageRange) {
+    const age1 = calculateAge(pref1.user.dob);
+    const age2 = calculateAge(pref2.user.dob);
+    if (isAgeInRange(age1, pref2) && isAgeInRange(age2, pref1)) {
+      score += 40; // High weight for age compatibility
+    }
+  }
+
+  // Gender preference
+  if (pref1?.interestedIn && pref2?.user?.gender) {
+    if (pref1.interestedIn === pref2.user.gender) {
+      score += 20;
+    }
+  }
+
+  // Goal compatibility
+  if (pref1?.goal && pref2?.goal) {
+    const goals1 = [
+      pref1.goal.primary,
+      pref1.goal.secondary,
+      pref1.goal.tertiary,
+    ].filter(Boolean);
+    const goals2 = [
+      pref2.goal.primary,
+      pref2.goal.secondary,
+      pref2.goal.tertiary,
+    ].filter(Boolean);
+
+    // Find common goals between both users
+    const commonGoals = goals1.filter((goal) => goals2.includes(goal));
+
+    // Each common goal gets 1 point
+    score += commonGoals.length;
+  }
+
+  // Shared interests
+  if (pref1?.interests?.professional && pref2?.interests?.professional) {
+    const sharedInterests = pref1.interests.professional.filter((interest) =>
+      pref2.interests.professional.includes(interest)
+    ).length;
+    score += sharedInterests * 2;
+  }
+
+  if (pref1?.interests?.hobbies && pref2?.interests?.hobbies) {
+    const sharedHobbies = pref1.interests.hobbies.filter((hobby) =>
+      pref2.interests.hobbies.includes(hobby)
+    ).length;
+    score += sharedHobbies * 2;
+  }
+
+  return score;
+};
+
+const createAndNotifyMatch = async (userId1, userId2, socket1, socket2) => {
   try {
     // Remove both users from pool
     matchmakingUsers.delete(userId1.toString());
     matchmakingUsers.delete(userId2.toString());
-
-    // Fetch both users and their preferences
-    const [user1, user2] = await Promise.all([
-      User.findById(userId1).select("-password").lean(),
-      User.findById(userId2).select("-password").lean(),
-    ]);
-
-    const [pref1, pref2] = await Promise.all([
-      UserPreference.findOne({ user: userId1 }).lean(),
-      UserPreference.findOne({ user: userId2 }).lean(),
-    ]);
-
-    // Calculate ages
-    const age1 = calculateAge(user1.dob);
-    const age2 = calculateAge(user2.dob);
-
-    // Check age compatibility
-    const isCompatible = isAgeInRange(age1, pref2) && isAgeInRange(age2, pref1);
-
-    if (!isCompatible) {
-      // Put first user back in pool if age preferences don't match
-      matchmakingUsers.set(userId1.toString(), {
-        socket: socket1,
-        timestamp: Date.now(),
-      });
-      return;
-    }
 
     // Create match in database
     const { user1: matchedUser1, user2: matchedUser2 } =
@@ -111,7 +214,6 @@ const createAndNotifyMatch = async (userId1, userId2, socket1) => {
 
     // Join both users to the match room
     socket1.join(matchId);
-    const socket2 = userSockets.get(userId2.toString());
     if (socket2) {
       socket2.join(matchId);
     }
@@ -180,17 +282,30 @@ const handleConnection = (socket) => {
     try {
       if (matchmakingUsers.has(userId)) return;
 
-      // Add user to matchmaking pool
-      matchmakingUsers.set(userId, { socket, timestamp: Date.now() });
+      // Fetch user preferences
+      const preferences = await UserPreference.findOne({ user: userId }).lean();
+      if (!preferences) {
+        socket.emit("matchmakingError", { message: "No preferences found" });
+        return;
+      }
 
-      // Find another user in the pool
-      const otherUser = Array.from(matchmakingUsers.entries()).find(
-        ([uid]) => uid !== userId
-      );
+      // Add user to matchmaking pool with preferences
+      matchmakingUsers.set(userId, {
+        socket,
+        timestamp: Date.now(),
+        preferences,
+      });
 
-      if (otherUser) {
-        const [matchedUserId] = otherUser;
-        await createAndNotifyMatch(userId, matchedUserId, socket);
+      // Find best match
+      const bestMatch = await findBestMatch(userId, preferences);
+
+      if (bestMatch) {
+        await createAndNotifyMatch(
+          userId,
+          bestMatch.uid,
+          socket,
+          bestMatch.socket
+        );
       }
     } catch (error) {
       socket.emit("matchmakingError", { message: error.message });

@@ -24,6 +24,7 @@ const rejectedProfileSchema = new mongoose.Schema(
     timestamp: {
       type: Date,
       default: Date.now,
+      expires: "7d", // Automatically delete after 7 days
     },
   },
   { timestamps: true }

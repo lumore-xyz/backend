@@ -14,6 +14,7 @@ import authRoutes from "./routes/authRoutes.js";
 import matchingRoutes from "./routes/matchingRoutes.js";
 import profileRoutes from "./routes/profileRoutes.js";
 import slotRoutes from "./routes/slotRoutes.js";
+import { initializeCronJobs } from "./services/cronService.js";
 import socketService from "./services/socketService.js";
 
 // Connect to MongoDB
@@ -24,6 +25,9 @@ const httpServer = createServer(app);
 
 // Initialize Socket.io services
 socketService.initialize(httpServer);
+
+// Initialize cron jobs
+initializeCronJobs();
 
 // Passport initialization
 app.use(passport.initialize());
