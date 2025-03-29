@@ -4,6 +4,8 @@ import { Server } from "socket.io";
 
 import Message from "../models/Message.js";
 import User from "../models/User.js";
+import UserPreference from "../models/UserPreference.js";
+import { calculateAge, isAgeInRange } from "./ageService.js";
 import { encryptionService } from "./encryptionService.js";
 import { keyExchangeService } from "./keyExchangeService.js";
 import matchingService from "./matchingService.js";
@@ -75,11 +77,36 @@ const createAndNotifyMatch = async (userId1, userId2, socket1) => {
     matchmakingUsers.delete(userId1.toString());
     matchmakingUsers.delete(userId2.toString());
 
+    // Fetch both users and their preferences
+    const [user1, user2] = await Promise.all([
+      User.findById(userId1).select("-password").lean(),
+      User.findById(userId2).select("-password").lean(),
+    ]);
+
+    const [pref1, pref2] = await Promise.all([
+      UserPreference.findOne({ user: userId1 }).lean(),
+      UserPreference.findOne({ user: userId2 }).lean(),
+    ]);
+
+    // Calculate ages
+    const age1 = calculateAge(user1.dob);
+    const age2 = calculateAge(user2.dob);
+
+    // Check age compatibility
+    const isCompatible = isAgeInRange(age1, pref2) && isAgeInRange(age2, pref1);
+
+    if (!isCompatible) {
+      // Put first user back in pool if age preferences don't match
+      matchmakingUsers.set(userId1.toString(), {
+        socket: socket1,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
     // Create match in database
-    const { user1, user2 } = await matchingService.createMatch(
-      userId1.toString(),
-      userId2.toString()
-    );
+    const { user1: matchedUser1, user2: matchedUser2 } =
+      await matchingService.createMatch(userId1.toString(), userId2.toString());
     const matchId = `match_${userId1.toString()}_${userId2.toString()}`;
 
     // Join both users to the match room
@@ -90,9 +117,9 @@ const createAndNotifyMatch = async (userId1, userId2, socket1) => {
     }
 
     // Notify both users
-    socket1.emit("matchFound", { matchId, matchedUser: user2?._id });
+    socket1.emit("matchFound", { matchId, matchedUser: matchedUser2?._id });
     if (socket2) {
-      socket2.emit("matchFound", { matchId, matchedUser: user1?._id });
+      socket2.emit("matchFound", { matchId, matchedUser: matchedUser1?._id });
     }
   } catch (error) {
     // If error, put first user back in pool
@@ -255,13 +282,6 @@ const handleConnection = (socket) => {
       // Verify the user is in the correct room
       if (!socket.rooms.has(matchId)) {
         socket.emit("error", { message: "Not in the correct chat room" });
-        return;
-      }
-
-      // Get the session key
-      const keys = keyExchangeService.getTempKeys(userId);
-      if (!keys?.sessionKey) {
-        socket.emit("error", { message: "No encryption key available" });
         return;
       }
 
