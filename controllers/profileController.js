@@ -168,9 +168,26 @@ export const getProfile = async (req, res) => {
     const photos = await UserPhotos.find({ user: userId }).select("photoUrl");
 
     // Check if profile is unlocked by viewer
-    const isUnlocked = await UnlockHistory.exists({
-      user: viewerId,
-      unlockedUser: userId,
+    const isUnlockedByViewer =
+      (await UnlockHistory.countDocuments({
+        user: userId, // The viewer (from req.user.id)
+        unlockedUser: viewerId, // The profile being viewed (from params)
+      })) > 0;
+    const isUnlockedByUser =
+      (await UnlockHistory.countDocuments({
+        user: viewerId, // The profile being viewed (from params)
+        unlockedUser: userId, // The viewer (from req.user.id)
+      })) > 0;
+
+    console.log("Checking unlock status:", {
+      viewerId,
+      userId,
+      isUnlockedByViewer,
+      isUnlockedByUser,
+      query: {
+        user: userId,
+        unlockedUser: viewerId,
+      },
     });
 
     // Fetch user preferences if the viewer is the profile owner
@@ -184,11 +201,20 @@ export const getProfile = async (req, res) => {
       _id: user._id,
       visibleName: user.visibleName,
       distance,
+      isUnlocked: isUnlockedByUser ? true : false,
+      isUnlockedByViewer,
     };
 
     // If the viewer is the profile owner, return full profile
     if (userId === viewerId) {
-      profileData = { ...user, photos, distance, preferences };
+      profileData = {
+        ...user,
+        photos,
+        distance,
+        preferences,
+        isUnlocked: true,
+        isUnlockedByViewer: true,
+      };
     } else {
       // Ensure fieldVisibility is an object
       const fieldVisibility = user.fieldVisibility || {};
@@ -201,14 +227,14 @@ export const getProfile = async (req, res) => {
 
         if (
           visibility === "public" ||
-          (visibility === "unlocked" && isUnlocked)
+          (visibility === "unlocked" && isUnlockedByViewer)
         ) {
           profileData[field] = value;
         }
       });
 
       // Handle photos based on unlock status
-      profileData.photos = isUnlocked ? photos : blurPhotos(photos);
+      profileData.photos = isUnlockedByViewer ? photos : blurPhotos(photos);
     }
 
     return res.status(200).json(profileData);

@@ -23,7 +23,7 @@ connectDB();
 const app = express();
 const httpServer = createServer(app);
 
-// Initialize Socket.io services
+// Initialize Socket.io service
 socketService.initialize(httpServer);
 
 // Initialize cron jobs

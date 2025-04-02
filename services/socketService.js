@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
 
 import Message from "../models/Message.js";
+import UnlockHistory from "../models/UnlockHistory.js";
 import User from "../models/User.js";
 import UserPreference from "../models/UserPreference.js";
 import { calculateAge, isAgeInRange } from "./ageService.js";
@@ -467,6 +468,16 @@ const handleConnection = (socket) => {
     }
   });
 
+  // Handle profile unlock request
+  socket.on("unlockProfile", async ({ profileId, userId, matchId }) => {
+    unlockProfile(socket, userId, profileId, matchId);
+  });
+
+  // Handle profile lock request
+  socket.on("lockProfile", async ({ profileId, userId, matchId }) => {
+    lockProfile(socket, userId, profileId, matchId);
+  });
+
   // Handle disconnection
   socket.on("disconnect", async () => {
     console.log("[disconnect] Socket disconnected for user:", userId);
@@ -474,6 +485,18 @@ const handleConnection = (socket) => {
 
     if (userId) {
       try {
+        // Remove any unlocks held by this user
+        for (const [profileId, unlockInfo] of unlockedProfiles.entries()) {
+          if (unlockInfo.unlockedBy === userId) {
+            unlockedProfiles.delete(profileId);
+            io.of("/api/chat").emit("profileLocked", {
+              profileId,
+              lockedBy: userId,
+              timestamp: new Date(),
+            });
+          }
+        }
+
         const user = await User.findById(userId);
         if (user?.activeMatch) {
           const matchedUserId = user.activeMatch.toString();
@@ -539,6 +562,67 @@ const handleConnection = (socket) => {
       }
     }
   });
+};
+
+const unlockProfile = async (socket, userId, profileId, matchId) => {
+  try {
+    const user = await User.findById(userId);
+    const profile = await User.findById(profileId);
+
+    if (!user) throw new Error("User not found");
+    if (!profile) throw new Error("Profile not found");
+
+    // Create unlock history with correct schema
+    await UnlockHistory.create({
+      user: userId,
+      unlockedUser: profileId,
+      unlockedAt: new Date(),
+    });
+
+    // Emit event to the match room
+    socket.to(matchId).emit("profileUnlocked", {
+      profileId,
+      unlockedBy: userId,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Also emit to the sender
+    socket.emit("profileUnlocked", {
+      profileId,
+      unlockedBy: userId,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("[unlockProfile] Error:", error);
+    socket.emit("error", { message: error.message });
+  }
+};
+
+const lockProfile = async (socket, userId, profileId, matchId) => {
+  try {
+    // Delete unlock history with correct schema
+    await UnlockHistory.deleteOne({
+      user: userId,
+      unlockedUser: profileId,
+    });
+
+    // Emit event to the match room
+    socket.to(matchId).emit("profileLocked", {
+      profileId,
+      lockedBy: userId,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Also emit to the sender
+    socket.emit("profileLocked", {
+      profileId,
+      lockedBy: userId,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("[lockProfile] Error:", error);
+    socket.emit("error", { message: error.message });
+  }
 };
 
 export default {
