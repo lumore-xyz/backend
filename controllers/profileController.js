@@ -651,3 +651,24 @@ export const getRejectionAnalytics = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// Delete Account
+export const deleteAccount = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Delete user's data
+    await Promise.all([
+      User.findByIdAndDelete(userId),
+      Slot.deleteMany({ user: userId }),
+      UnlockHistory.deleteMany({ user: userId }),
+      UserPhotos.deleteMany({ user: userId }),
+      UserPreference.deleteOne({ user: userId }),
+      RejectedProfile.deleteMany({ user: userId }),
+    ]);
+
+    res.status(200).json({ message: "Account deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};

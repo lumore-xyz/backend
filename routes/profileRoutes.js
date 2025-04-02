@@ -4,6 +4,7 @@ import rateLimit from "express-rate-limit";
 import {
   buySlot,
   createProfile,
+  deleteAccount,
   getNextProfile,
   getProfile,
   getRejectionAnalytics,
@@ -170,7 +171,8 @@ router
   .route("/:userId")
   .post(protect, userControl, createProfile)
   .patch(protect, userControl, createProfile)
-  .get(protect, getProfile);
+  .get(protect, getProfile)
+  .delete(protect, userControl, deleteAccount);
 
 /**
  * @swagger

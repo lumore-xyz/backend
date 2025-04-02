@@ -52,6 +52,8 @@ export const login = async (req, res) => {
   const { identifier, password } = req.body;
 
   try {
+    console.log("Login attempt for identifier:", identifier);
+
     const user = await User.findOne({
       $or: [
         { email: identifier },
@@ -60,7 +62,16 @@ export const login = async (req, res) => {
       ],
     }).select("+password"); // Ensure password is retrieved
 
-    if (user && (await user.comparePassword(password))) {
+    if (!user) {
+      console.log("No user found with identifier:", identifier);
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    console.log("User found, comparing passwords");
+    const isMatch = await user.comparePassword(password);
+    console.log("Password match result:", isMatch);
+
+    if (isMatch) {
       await user.updateLastActive();
       res.json({
         _id: user._id,
@@ -72,6 +83,7 @@ export const login = async (req, res) => {
       res.status(401).json({ message: "Invalid credentials" });
     }
   } catch (error) {
+    console.error("Login error:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -123,7 +135,7 @@ export const setPassword = async (req, res) => {
   const userId = req.user.id;
 
   try {
-    const user = await User.findById(userId);
+    const user = await User.findById(userId).select("+password");
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -134,13 +146,19 @@ export const setPassword = async (req, res) => {
     }
 
     // Hash new password before saving
-    user.password = await bcrypt.hash(newPassword, 12);
+    user.password = newPassword; // Set the raw password, let the pre-save hook hash it
     await user.save();
 
-    await user.updateLastActive();
+    // Verify the password was set correctly
+    const updatedUser = await User.findById(userId).select("+password");
+    if (!updatedUser.password) {
+      return res.status(500).json({ message: "Failed to set password" });
+    }
 
+    await user.updateLastActive();
     res.json({ message: "Password set successfully" });
   } catch (error) {
+    console.error("Set password error:", error);
     res.status(500).json({ message: error.message });
   }
 };
