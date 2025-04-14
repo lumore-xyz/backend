@@ -15,6 +15,10 @@ const messageSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    roomId: {
+      type: String,
+      default: null,
+    },
     encryptedData: { type: Buffer, required: true }, // Store encrypted message as binary
     iv: { type: Buffer, required: true }, // Store IV as binary
     timestamp: { type: Date, default: Date.now, expires: "24h" }, // Auto-delete messages after 24 hours

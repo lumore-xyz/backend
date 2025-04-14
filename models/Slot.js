@@ -7,7 +7,16 @@ const slotSchema = new mongoose.Schema(
     profile: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-    }, // Profile that occupies the slot
+      default: null,
+    }, // Profile that occupies the slot can be null
+    roomId: {
+      type: String,
+      default: null,
+    }, // Room ID can be null
+    unReadMessageCount: {
+      type: Number,
+      default: 0,
+    },
   },
   { timestamps: true }
 );

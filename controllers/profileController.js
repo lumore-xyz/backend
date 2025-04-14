@@ -56,8 +56,6 @@ export const createProfile = async (req, res) => {
       "fieldVisibility",
       "dailyConversations",
       "lastConversationReset",
-      "activeMatch",
-      "savedChats",
       "bloodGroup",
     ];
 
@@ -142,8 +140,8 @@ export const updateUserPreference = async (req, res) => {
 // Get Profile
 export const getProfile = async (req, res) => {
   try {
-    const { userId } = req.params;
-    const viewerId = req.user.id;
+    const { userId } = req.params; // profile
+    const viewerId = req.user.id; // logedin user
 
     if (!userId || !viewerId) {
       return res.status(400).json({ message: "Invalid request" });
@@ -168,12 +166,12 @@ export const getProfile = async (req, res) => {
     const photos = await UserPhotos.find({ user: userId }).select("photoUrl");
 
     // Check if profile is unlocked by viewer
-    const isUnlockedByViewer =
+    const isViewerUnlockedByUser =
       (await UnlockHistory.countDocuments({
         user: userId, // The viewer (from req.user.id)
         unlockedUser: viewerId, // The profile being viewed (from params)
       })) > 0;
-    const isUnlockedByUser =
+    const isViewerUnlockedUser =
       (await UnlockHistory.countDocuments({
         user: viewerId, // The profile being viewed (from params)
         unlockedUser: userId, // The viewer (from req.user.id)
@@ -182,8 +180,8 @@ export const getProfile = async (req, res) => {
     console.log("Checking unlock status:", {
       viewerId,
       userId,
-      isUnlockedByViewer,
-      isUnlockedByUser,
+      isViewerUnlockedByUser,
+      isViewerUnlockedUser,
       query: {
         user: userId,
         unlockedUser: viewerId,
@@ -199,10 +197,9 @@ export const getProfile = async (req, res) => {
     // Prepare profile data
     let profileData = {
       _id: user._id,
-      visibleName: user.visibleName,
       distance,
-      isUnlocked: isUnlockedByUser ? true : false,
-      isUnlockedByViewer,
+      isViewerUnlockedByUser,
+      isViewerUnlockedUser,
     };
 
     // If the viewer is the profile owner, return full profile
@@ -212,8 +209,8 @@ export const getProfile = async (req, res) => {
         photos,
         distance,
         preferences,
-        isUnlocked: true,
-        isUnlockedByViewer: true,
+        isViewerUnlockedByUser: true,
+        isViewerUnlockedUser: true,
       };
     } else {
       // Ensure fieldVisibility is an object
@@ -227,14 +224,15 @@ export const getProfile = async (req, res) => {
 
         if (
           visibility === "public" ||
-          (visibility === "unlocked" && isUnlockedByViewer)
+          (visibility === "unlocked" && isViewerUnlockedByUser)
         ) {
           profileData[field] = value;
         }
       });
 
+      profileData.realName = isViewerUnlockedByUser ? user.realName : null;
       // Handle photos based on unlock status
-      profileData.photos = isUnlockedByViewer ? photos : blurPhotos(photos);
+      profileData.photos = isViewerUnlockedByUser ? photos : null;
     }
 
     return res.status(200).json(profileData);
@@ -242,319 +240,6 @@ export const getProfile = async (req, res) => {
     console.error("Error fetching profile:", error);
     return res.status(500).json({ message: "Server error" });
   }
-};
-
-// Get Next Profile (Matchmaking)
-export const getNextProfile = async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id);
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    // Get user preferences
-    const preferences = await UserPreference.findOne({ user: user._id });
-    if (!preferences)
-      return res.status(400).json({ message: "Preferences not set" });
-
-    // Fetch rejected profiles
-    const rejectedProfiles = await RejectedProfile.find({
-      user: user._id,
-    }).select("rejectedUser");
-    const rejectedUserIds = rejectedProfiles.map((r) => r.rejectedUser);
-
-    // Profile filtering
-    const filter = {
-      _id: { $ne: user._id, $nin: rejectedUserIds },
-      dob: {
-        $gte: new Date(
-          new Date().setFullYear(
-            new Date().getFullYear() - preferences.ageRange.max
-          )
-        ),
-        $lte: new Date(
-          new Date().setFullYear(
-            new Date().getFullYear() - preferences.ageRange.min
-          )
-        ),
-      },
-      location: {
-        $near: {
-          $geometry: { type: "Point", coordinates: user.location.coordinates },
-          $maxDistance: preferences.distance * 1000, // Convert km to meters
-        },
-      },
-    };
-
-    if (preferences.gender !== "Any") {
-      filter.gender = preferences.gender;
-    }
-
-    const profiles = await User.find(filter).limit(1);
-    if (profiles.length === 0)
-      return res.status(404).json({ message: "No profiles found" });
-
-    const profile = profiles[0];
-
-    res.status(200).json({
-      _id: profile._id,
-      visibleName: profile.visibleName,
-      age: profile.age,
-      gender: profile.gender,
-      distance: calculateDistance(
-        user.location.coordinates,
-        profile.location.coordinates
-      ),
-      photo: blurPhotos(
-        await UserPhotos.find({ user: profile._id }).select("photoUrl")
-      ),
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// Like Profile (Save to Slot)
-export const likeProfile = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { profileId } = req.body;
-
-    const user = await User.findById(userId);
-    const profile = await User.findById(profileId);
-    if (!user || !profile)
-      return res.status(404).json({ message: "User or profile not found" });
-
-    // Check if profile is already saved in a slot
-    const existingSlot = await Slot.findOne({
-      user: userId,
-      profile: profileId,
-    });
-    if (existingSlot)
-      return res.status(400).json({ message: "Profile already saved" });
-
-    // Get user's slots and find a free one
-    const slots = await Slot.find({ user: userId });
-    const freeSlot = slots.find((slot) => !slot.profile);
-    if (!freeSlot)
-      return res.status(400).json({ message: "No available slots" });
-
-    // Assign profile to the free slot
-    freeSlot.profile = profileId;
-    await freeSlot.save();
-    await user.updateLastActive();
-
-    res.status(200).json({ message: "Profile added to slot", slot: freeSlot });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// Reject Profile
-export const rejectProfile = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { profileId, reason, feedback } = req.body;
-
-    const user = await User.findById(userId);
-    const profile = await User.findById(profileId);
-    if (!user || !profile)
-      return res.status(404).json({ message: "User or profile not found" });
-
-    await RejectedProfile.create({
-      user: userId,
-      rejectedUser: profileId,
-      reason,
-      feedback,
-    });
-    await user.updateLastActive();
-
-    res.status(200).json({ message: "Profile rejected" });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// Unlock Profile
-export const unlockProfile = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { profileId } = req.body;
-
-    const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    await UnlockHistory.create({ user: userId, unlockedUser: profileId });
-    await user.updateLastActive();
-
-    res.status(200).json({ message: "Profile unlocked" });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// Helper function to blur photos
-export const blurPhotos = (photos) => {
-  return photos.map((p) => ({ photoUrl: `${p.photoUrl}?blur=10` }));
-};
-
-// 1️⃣ Buy Slot (Mock Payment)
-export const buySlot = async (req, res) => {
-  try {
-    const userId = req.user.id;
-
-    // Fetch user
-    const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    // Limit to 10 slots max
-    const userSlots = await Slot.countDocuments({ user: userId });
-    if (userSlots >= 10) {
-      return res.status(400).json({ message: "Max slot limit reached (10)" });
-    }
-
-    // TODO: Integrate real payment system (Stripe, Razorpay)
-    const paymentSuccessful = true; // Simulate payment success
-
-    if (!paymentSuccessful) {
-      return res.status(402).json({ message: "Payment failed" });
-    }
-
-    // Create a new slot
-    const newSlot = new Slot({ user: userId, profile: null });
-    await newSlot.save();
-
-    // Increase maxSlots count in user model (optional)
-    user.maxSlots += 1;
-    await user.save();
-    await user.updateLastActive();
-
-    res
-      .status(200)
-      .json({ message: "Slot purchased successfully", slot: newSlot });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// 2️⃣ Get User Slots
-export const getUserSlots = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const slots = await Slot.find({ user: userId }).populate("profile");
-
-    res.status(200).json({ slots });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-export const findMatch = async (socketId, userId) => {
-  try {
-    // 1️⃣ **Fetch User & Preferences**
-    const user = await User.findById(userId);
-    if (!user) return null;
-
-    const preferences = await UserPreference.findOne({ user: userId });
-    if (!preferences) return null;
-
-    // 2️⃣ **Fetch Rejected Users**
-    const rejectedProfiles = await RejectedProfile.find({
-      user: userId,
-    }).select("rejectedUser");
-    const rejectedUserIds = rejectedProfiles.map((r) =>
-      r.rejectedUser.toString()
-    );
-
-    let bestMatch = { socketId: null, profile: null, score: -1 };
-
-    for (const [otherSocketId, profile] of waitingPool.entries()) {
-      if (
-        socketId === otherSocketId ||
-        rejectedUserIds.includes(profile._id.toString())
-      ) {
-        continue; // Skip if same user or rejected
-      }
-
-      let score = 0;
-
-      // Scoring Weights (Adjustable)
-      const weights = {
-        interests: 3,
-        sexualOrientation: 2,
-        primaryGoal: 2,
-        genderMatch: 2,
-        ageMatch: 2,
-        distanceMatch: 2,
-      };
-
-      // 3️⃣ **Interest Matching**
-      if (profile.interests?.hobbies && user.interests?.hobbies) {
-        const sharedInterests = profile.interests.hobbies.filter((i) =>
-          user.interests.hobbies.includes(i)
-        ).length;
-        score += sharedInterests * weights.interests;
-      }
-
-      // 4️⃣ **Sexual Orientation & Goal Matching**
-      if (profile.sexualOrientation === user.sexualOrientation)
-        score += weights.sexualOrientation;
-      if (profile.goal?.primary === preferences.goal?.primary)
-        score += weights.primaryGoal;
-
-      // 5️⃣ **Gender & Preference Matching**
-      if (profile.gender === preferences.gender) score += weights.genderMatch;
-      if (user.gender === profile.preferences?.gender)
-        score += weights.genderMatch;
-
-      // 6️⃣ **Age Matching**
-      const age = calculateAge(profile.dob);
-      if (age >= preferences.ageRange.min && age <= preferences.ageRange.max) {
-        score += weights.ageMatch;
-      }
-
-      // 7️⃣ **Distance Matching**
-      if (profile.location?.coordinates && user.location?.coordinates) {
-        const distance = calculateDistance(
-          profile.location.coordinates,
-          user.location.coordinates
-        );
-        if (distance <= preferences.distance) {
-          score += weights.distanceMatch;
-        }
-      }
-
-      // 8️⃣ **Update Best Match**
-      if (score > bestMatch.score) {
-        bestMatch = { socketId: otherSocketId, profile, score };
-      }
-    }
-
-    // Fetch photos for the matched profile
-    if (bestMatch.profile) {
-      bestMatch.profile.photos = await UserPhotos.find({
-        user: bestMatch.profile._id,
-      }).select("photoUrl");
-    }
-
-    return bestMatch.profile ? bestMatch : null;
-  } catch (error) {
-    console.error("Error in findMatch:", error);
-    return null;
-  }
-};
-
-// Helper function to calculate age
-export const calculateAge = (dob) => {
-  const birthDate = new Date(dob);
-  const today = new Date();
-  let age = today.getFullYear() - birthDate.getFullYear();
-  if (
-    today.getMonth() < birthDate.getMonth() ||
-    (today.getMonth() === birthDate.getMonth() &&
-      today.getDate() < birthDate.getDate())
-  ) {
-    age--;
-  }
-  return age;
 };
 
 // Helper function to calculate distance
@@ -618,61 +303,6 @@ export const updateFieldVisibility = async (req, res) => {
       message: "Field visibility updated successfully",
       fieldVisibility: updatedVisibility,
     });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// @desc    Toggle profile visibility for a match
-// @route   POST /api/profile/toggle-visibility/:matchId
-// @access  Private
-export const toggleProfileVisibility = async (req, res) => {
-  try {
-    const { isVisible } = req.body;
-    const user = await User.findById(req.user._id);
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    user.fieldVisibility = isVisible;
-    await user.save();
-
-    res.json({ fieldVisibility: isVisible });
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
-};
-
-// Get Rejection History
-export const getRejectionHistory = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const rejections = await RejectedProfile.find({ user: userId })
-      .populate("rejectedUser", "visibleName profilePicture")
-      .sort({ createdAt: -1 });
-
-    res.status(200).json(rejections);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// Get Rejection Analytics
-export const getRejectionAnalytics = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const analytics = await RejectedProfile.aggregate([
-      { $match: { user: new mongoose.Types.ObjectId(userId) } },
-      {
-        $group: {
-          _id: "$reason",
-          count: { $sum: 1 },
-        },
-      },
-    ]);
-
-    res.status(200).json(analytics);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

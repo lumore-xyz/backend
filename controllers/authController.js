@@ -1,6 +1,3 @@
-// /controllers/authController.js
-import bcrypt from "bcryptjs";
-import { log } from "console";
 import jwt from "jsonwebtoken";
 import Slot from "../models/Slot.js";
 import User from "../models/User.js";

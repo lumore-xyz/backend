@@ -36,7 +36,6 @@ const authenticateSocket = async (socket, next) => {
     // Attach user to socket with all necessary fields
     socket.user = {
       _id: user._id,
-      activeMatch: user.activeMatch,
       isActive: user.isActive,
       lastActive: user.lastActive,
     };
@@ -269,7 +268,6 @@ const handleConnection = (socket) => {
         // Update socket.user with fresh data
         socket.user = {
           _id: updatedUser._id,
-          activeMatch: updatedUser.activeMatch,
           isActive: updatedUser.isActive,
           lastActive: updatedUser.lastActive,
         };
@@ -331,17 +329,13 @@ const handleConnection = (socket) => {
         `[init_key_exchange] User ${userId} initiated key exchange in room ${matchId}`
       );
 
-      // if (!socket.user?.activeMatch) {
-      //   console.log(
-      //     `[init_key_exchange] User ${userId} has no active match, ignoring`
-      //   );
-      //   return;
-      // }
-
-      // Generate a random key for this session
-      const sessionKey = crypto.randomBytes(32).toString("hex");
+      // Generate a consistent key for this match using the matchId
+      const sessionKey = crypto
+        .createHash("sha256")
+        .update(matchId)
+        .digest("hex");
       console.log(
-        `[init_key_exchange] Generated session key for user ${userId}`
+        `[init_key_exchange] Generated session key for match ${matchId}`
       );
 
       // Store the key temporarily
@@ -419,7 +413,7 @@ const handleConnection = (socket) => {
       const message = await Message.create({
         sender: userId,
         receiver: receiverId,
-        matchId: matchId,
+        roomId: matchId,
         encryptedData: encryptedContent,
         iv: iv,
       });
@@ -436,6 +430,16 @@ const handleConnection = (socket) => {
     }
   });
 
+  // Handle profile unlock request
+  socket.on("unlockProfile", async ({ profileId, userId, matchId }) => {
+    unlockProfile(socket, userId, profileId, matchId);
+  });
+
+  // Handle profile lock request
+  socket.on("lockProfile", async ({ profileId, userId, matchId }) => {
+    lockProfile(socket, userId, profileId, matchId);
+  });
+
   // Handle chat cancellation
   socket.on("cancelChat", async (data) => {
     console.log("[cancelChat] Received cancel chat request:", data);
@@ -443,19 +447,12 @@ const handleConnection = (socket) => {
     try {
       const { matchId } = data;
 
-      // Clear matches in database
-      await Promise.all([
-        User.findByIdAndUpdate(userId, { activeMatch: null }),
-        User.findByIdAndUpdate(socket.user.activeMatch, { activeMatch: null }),
-      ]);
-
       // Notify the room
       socket.to(matchId).emit("chatCancelled", { matchId });
 
       // Update socket.user
       socket.user = {
         ...socket.user,
-        activeMatch: null,
       };
 
       // Leave the chat room
@@ -468,66 +465,26 @@ const handleConnection = (socket) => {
     }
   });
 
-  // Handle profile unlock request
-  socket.on("unlockProfile", async ({ profileId, userId, matchId }) => {
-    unlockProfile(socket, userId, profileId, matchId);
-  });
-
-  // Handle profile lock request
-  socket.on("lockProfile", async ({ profileId, userId, matchId }) => {
-    lockProfile(socket, userId, profileId, matchId);
-  });
-
   // Handle disconnection
-  socket.on("disconnect", async () => {
+  socket.on("disconnect", async (data) => {
     console.log("[disconnect] Socket disconnected for user:", userId);
     console.log("[disconnect] Current userSockets Map size:", userSockets.size);
 
     if (userId) {
       try {
-        // Remove any unlocks held by this user
-        for (const [profileId, unlockInfo] of unlockedProfiles.entries()) {
-          if (unlockInfo.unlockedBy === userId) {
-            unlockedProfiles.delete(profileId);
-            io.of("/api/chat").emit("profileLocked", {
-              profileId,
-              lockedBy: userId,
-              timestamp: new Date(),
-            });
-          }
-        }
+        const { matchId } = data;
 
-        const user = await User.findById(userId);
-        if (user?.activeMatch) {
-          const matchedUserId = user.activeMatch.toString();
-          console.log("[disconnect] User has active match:", matchedUserId);
+        if (matchId) {
+          // Notify the room
+          socket.to(matchId).emit("chatCancelled", { matchId });
 
-          await Promise.all([
-            User.findByIdAndUpdate(userId, { activeMatch: null }),
-            User.findByIdAndUpdate(matchedUserId, { activeMatch: null }),
-          ]);
+          // Update socket.user
+          socket.user = {
+            ...socket.user,
+          };
 
-          // Get all sockets for the matched user
-          const matchedUserSockets = Array.from(userSockets.entries())
-            .filter(([uid]) => uid === matchedUserId)
-            .map(([_, socket]) => socket);
-
-          // Notify all sockets of the matched user
-          matchedUserSockets.forEach((socket) => {
-            socket.emit("chatCancelled", {
-              matchId: `match_${userId}_${matchedUserId}`,
-            });
-            console.log(
-              "[disconnect] Notified matched user of chat cancellation"
-            );
-          });
-
-          if (matchedUserSockets.length === 0) {
-            console.log(
-              "[disconnect] No sockets found for matched user:",
-              matchedUserId
-            );
-          }
+          // Leave the chat room
+          socket.leave(matchId);
         }
 
         matchmakingUsers.delete(userId);

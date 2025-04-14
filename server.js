@@ -11,7 +11,6 @@ import "./config/passport.js";
 import { specs } from "./config/swagger.js";
 import { errorHandler, notFound } from "./middleware/errorMiddleware.js";
 import authRoutes from "./routes/authRoutes.js";
-import matchingRoutes from "./routes/matchingRoutes.js";
 import profileRoutes from "./routes/profileRoutes.js";
 import slotRoutes from "./routes/slotRoutes.js";
 import { initializeCronJobs } from "./services/cronService.js";
@@ -59,7 +58,6 @@ app.get("/", (req, res) => {
 // Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/profile", profileRoutes);
-app.use("/api/matching", matchingRoutes);
 app.use("/api/slots", slotRoutes);
 
 // Error handling middleware

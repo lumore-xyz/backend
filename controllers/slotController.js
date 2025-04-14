@@ -1,107 +1,100 @@
-import slotService from "../services/slotService.js";
+import Slot from "../models/Slot.js";
+import User from "../models/User.js";
 
-// @desc    Create a new slot for a match
-// @route   POST /api/slots/create/:matchId
-// @access  Private
-export const createSlot = async (req, res) => {
-  try {
-    const slot = await slotService.createSlot(req.user._id, req.params.matchId);
-    res.status(201).json(slot);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
+// Create a new slot
+export const createSlot = async (req, res, next) => {
+  const userId = req.user.id;
+
+  // Check if user exists
+  const user = await User.findById(userId);
+  if (!user) {
+    return next(new Error("User not found", 404));
   }
+
+  // Check if user has reached max slots
+  const currentSlots = await Slot.countDocuments({ user: userId });
+  if (currentSlots >= user.maxSlots) {
+    return next(new Error("Maximum number of slots reached", 400));
+  }
+
+  const slot = await Slot.create({ user: userId });
+
+  res.status(201).json({
+    status: "success",
+    data: {
+      slot,
+    },
+  });
 };
 
-// @desc    Get all active slots for a user
-// @route   GET /api/slots
-// @access  Private
-export const getUserSlots = async (req, res) => {
-  try {
-    const slots = await slotService.getUserSlots(req.user._id);
-    res.json(slots);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
-};
+// Update a slot
+export const updateSlot = async (req, res, next) => {
+  const { slotId } = req.params;
+  const { profile, roomId } = req.body;
+  const userId = req.user.id;
 
-// @desc    Get slot by ID
-// @route   GET /api/slots/:slotId
-// @access  Private
-export const getSlotById = async (req, res) => {
-  try {
-    const slot = await slotService.getSlotById(req.params.slotId);
-    if (!slot) {
-      return res.status(404).json({ message: "Slot not found" });
+  const slot = await Slot.findOne({ _id: slotId, user: userId });
+
+  if (!slot) {
+    return next(new Error("Slot not found or unauthorized", 404));
+  }
+
+  // If updating profile, verify the profile exists
+  if (profile) {
+    const profileUser = await User.findById(profile);
+    if (!profileUser) {
+      return next(new Error("Profile user not found", 404));
     }
-    res.json(slot);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
   }
+
+  // Update slot
+  slot.profile = profile || slot.profile;
+  slot.roomId = roomId || slot.roomId;
+  await slot.save();
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      slot,
+    },
+  });
 };
 
-// @desc    Add message to slot chat history
-// @route   POST /api/slots/:slotId/messages
-// @access  Private
-export const addMessageToSlot = async (req, res) => {
-  try {
-    const { content } = req.body;
-    const message = await slotService.addMessageToSlot(
-      req.params.slotId,
-      req.user._id,
-      content
-    );
-    res.status(201).json(message);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
+// Get all slots for a user
+export const getSlots = async (req, res, next) => {
+  const userId = req.user.id;
+
+  const slots = await Slot.find({ user: userId })
+    .populate("profile", "username nickname profilePicture")
+    .sort({ createdAt: -1 });
+
+  res.status(200).json({
+    status: "success",
+    results: slots.length,
+    data: {
+      slots,
+    },
+  });
 };
 
-// @desc    Mark slot messages as read
-// @route   POST /api/slots/:slotId/read
-// @access  Private
-export const markSlotAsRead = async (req, res) => {
-  try {
-    await slotService.markSlotAsRead(req.params.slotId);
-    res.json({ message: "Messages marked as read" });
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
-};
+// Get a single slot
+export const getSlot = async (req, res, next) => {
+  const { slotId } = req.params;
+  const userId = req.user.id;
 
-// @desc    Update slot notes
-// @route   PUT /api/slots/:slotId/notes
-// @access  Private
-export const updateSlotNotes = async (req, res) => {
-  try {
-    const { notes } = req.body;
-    const slot = await slotService.updateSlotNotes(req.params.slotId, notes);
-    res.json(slot);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
-};
+  const slot = await Slot.findOne({ _id: slotId, user: userId }).populate(
+    "profile",
+    "username nickname profilePicture"
+  );
 
-// @desc    Add tags to slot
-// @route   POST /api/slots/:slotId/tags
-// @access  Private
-export const addSlotTags = async (req, res) => {
-  try {
-    const { tags } = req.body;
-    const slot = await slotService.addSlotTags(req.params.slotId, tags);
-    res.json(slot);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
+  if (!slot) {
+    return next(new Error("Slot not found or unauthorized", 404));
   }
-};
 
-// @desc    Deactivate a slot
-// @route   POST /api/slots/:slotId/deactivate
-// @access  Private
-export const deactivateSlot = async (req, res) => {
-  try {
-    const slot = await slotService.deactivateSlot(req.params.slotId);
-    res.json(slot);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
+  res.status(200).json({
+    status: "success",
+    data: {
+      slot,
+    },
+  });
 };

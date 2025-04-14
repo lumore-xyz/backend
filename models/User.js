@@ -230,17 +230,6 @@ const userSchema = new mongoose.Schema(
         },
       ],
     },
-    isVerified: { type: Boolean, default: false },
-    verificationMethod: {
-      type: String,
-      enum: ["video", "document", "photo"],
-      default: "photo",
-    },
-    verificationStatus: {
-      type: String,
-      enum: ["pending", "verified", "rejected"],
-      default: "pending",
-    },
     isActive: { type: Boolean, default: false },
     lastActive: { type: Date, default: Date.now },
     maxSlots: { type: Number, default: 1 },
@@ -303,32 +292,6 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
-    activeMatch: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      sparse: true,
-    },
-    savedChats: [
-      {
-        match: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "User",
-        },
-        messages: [
-          {
-            sender: {
-              type: mongoose.Schema.Types.ObjectId,
-              ref: "User",
-            },
-            content: String,
-            timestamp: {
-              type: Date,
-              default: Date.now,
-            },
-          },
-        ],
-      },
-    ],
   },
   {
     timestamps: true,
@@ -412,6 +375,9 @@ userSchema.methods.resetDailyConversations = async function () {
 
 // Add a method to check field visibility
 userSchema.methods.isFieldVisible = function (field, isUnlocked = false) {
+  if (!this.fieldVisibility) {
+    return true; // Default to visible if fieldVisibility is not set
+  }
   const visibility = this.fieldVisibility[field] || "public";
 
   switch (visibility) {
