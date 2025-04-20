@@ -57,6 +57,9 @@ const createMatch = async (userId1, userId2) => {
         {
           $inc: { dailyConversations: -1 },
           isActive: true,
+          isMatching: false,
+          matchmakingTimestamp: null,
+          matchchedUserId: userId2,
           lastActive: new Date(),
         },
         { new: true }
@@ -68,6 +71,9 @@ const createMatch = async (userId1, userId2) => {
         {
           $inc: { dailyConversations: -1 },
           isActive: true,
+          isMatching: false,
+          matchmakingTimestamp: null,
+          matchchedUserId: userId1,
           lastActive: new Date(),
         },
         { new: true }
@@ -75,17 +81,6 @@ const createMatch = async (userId1, userId2) => {
         .select("-password -googleId -walletAddress")
         .lean(),
     ]);
-
-    console.log("[createMatch] Updated user1:", {
-      id: user1?._id,
-      isActive: user1?.isActive,
-      dailyConversations: user1?.dailyConversations,
-    });
-    console.log("[createMatch] Updated user2:", {
-      id: user2?._id,
-      isActive: user2?.isActive,
-      dailyConversations: user2?.dailyConversations,
-    });
 
     if (!user1 || !user2) {
       throw new Error("Failed to create match - update failed");

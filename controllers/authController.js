@@ -106,6 +106,7 @@ export const googleLogin = async (req, res) => {
           googleId,
           email,
           username,
+          emailVerified: true,
         });
       }
     }
@@ -114,6 +115,7 @@ export const googleLogin = async (req, res) => {
       setPassword = true;
     }
     await user.updateLastActive();
+
     res.redirect(
       `${frontendUrl}/auth/callback?_id=${user._id}&token=${generateToken(
         user._id
@@ -207,4 +209,8 @@ export function generateCleanUsername(name) {
     .replace(/[^a-z0-9._]/g, "") // Remove special characters except dots and underscores
     .replace(/\.{2,}/g, ".") // Replace multiple dots with a single dot
     .replace(/^\.|\.$/g, ""); // Remove leading/trailing dots
+}
+
+function generateOTP() {
+  return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
 }

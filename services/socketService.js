@@ -3,11 +3,11 @@ import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
 
 import Message from "../models/Message.js";
+import Slot from "../models/Slot.js";
 import UnlockHistory from "../models/UnlockHistory.js";
 import User from "../models/User.js";
 import UserPreference from "../models/UserPreference.js";
 import { calculateAge, isAgeInRange } from "./ageService.js";
-import { encryptionService } from "./encryptionService.js";
 import { keyExchangeService } from "./keyExchangeService.js";
 import { isWithinDistance } from "./locationService.js";
 import matchingService from "./matchingService.js";
@@ -15,8 +15,6 @@ import matchingService from "./matchingService.js";
 // Shared state
 let io = null;
 const userSockets = new Map(); // userId -> socket
-const socketUsers = new Map(); // socketId -> userId
-const matchmakingUsers = new Map(); // userId -> { socket, timestamp, preferences }
 
 const authenticateSocket = async (socket, next) => {
   try {
@@ -72,62 +70,80 @@ const initialize = (server) => {
   });
 };
 
+/**
+ * Finds the best matching user for the given user based on preferences and proximity.
+ *
+ * Dev Notes:
+ * - We use the MongoDB aggregation pipeline with $geoNear to first fetch nearby users.
+ * - Only users marked as matching (isMatching: true) and with valid location data are returned.
+ * - The query excludes the current user.
+ * - We limit the number of potential matches (e.g., 100) for performance.
+ * - For each candidate, we load their preferences and then calculate a match score.
+ * - The match with the highest score is selected as the best match.
+ * - Instead of using an in-memory userSocket mapping, we retrieve the matched user’s active socket from their stored socketId.
+ * - Make sure the User model has a 2dsphere index on the location field.
+ *
+ * @param userId - ID of the current user who is looking for a match.
+ * @param userPreferences - Preferences of the current user.
+ * @returns The best match object containing the user data, preferences, and socket (if available), or null if none found.
+ */
 const findBestMatch = async (userId, userPreferences) => {
-  let bestMatch = null;
-  let bestScore = -1;
-
-  // Get all users in the pool except the current user, sorted by timestamp
-  const potentialMatches = Array.from(matchmakingUsers.entries())
-    .filter(([uid]) => uid !== userId.toString())
-    .sort(([, a], [, b]) => a.timestamp - b.timestamp) // Sort by timestamp, oldest first
-    .slice(0, 100); // Limit to 100 matches
-
-  if (potentialMatches.length === 0) return null;
-
-  console.log(
-    `[findBestMatch] Found ${potentialMatches.length} potential matches for user ${userId}`
-  );
-
-  // Fetch current user's data to get their location
-  const currentUser = await User.findById(userId).select("-password").lean();
+  const currentUser = await User.findById(userId).lean();
   if (!currentUser?.location?.coordinates) {
     console.log(`[findBestMatch] User ${userId} has no location data`);
     return null;
   }
 
-  // Fetch all potential matches' data in parallel
-  const matchData = await Promise.all(
-    potentialMatches.map(async ([uid, data]) => {
-      const [user, preferences] = await Promise.all([
-        User.findById(uid).select("-password").lean(),
-        UserPreference.findOne({ user: uid }).lean(),
-      ]);
-      return { uid, user, preferences, socket: data.socket };
-    })
-  );
+  // Get all potential candidates that meet base filters
+  const candidates = await User.find({
+    isMatching: true,
+    isActive: true,
+    _id: { $ne: userId },
+    // gender:  // use current user prefered gender and check in candidates
+  }).lean();
 
-  // Score each potential match
-  for (const match of matchData) {
-    if (!match.user || !match.preferences) continue;
+  console.log(`[findBestMatch] Found ${candidates.length} potential matches`);
 
-    // Check location compatibility first
-    const isLocationCompatible = isWithinDistance(
-      match.user.location,
+  let bestMatch = null;
+  let bestScore = -1;
+
+  for (const candidate of candidates) {
+    if (!candidate?.location?.coordinates) continue;
+
+    const isCloseEnough = isWithinDistance(
       currentUser.location,
+      candidate.location,
       userPreferences.distance
     );
 
-    if (!isLocationCompatible) {
-      console.log(
-        `[findBestMatch] User ${match.uid} is outside preferred distance for user ${userId}`
-      );
+    console.log(
+      `[findBestMatch] Checking candidate ${candidate._id} - Close enough: ${isCloseEnough}`
+    );
+
+    if (!isCloseEnough) {
       continue;
     }
 
-    const score = calculateMatchScore(userPreferences, match.preferences);
+    const candidatePreferences = await UserPreference.findOne({
+      user: candidate._id,
+    }).lean();
+
+    if (!candidatePreferences) continue;
+
+    const score = calculateMatchScore(
+      userPreferences,
+      candidatePreferences,
+      candidate
+    );
+
     if (score > bestScore) {
       bestScore = score;
-      bestMatch = match;
+      bestMatch = {
+        uid: candidate._id.toString(),
+        user: candidate,
+        preferences: candidatePreferences,
+        socket: candidate.socketId,
+      };
     }
   }
 
@@ -144,7 +160,103 @@ const findBestMatch = async (userId, userPreferences) => {
   return bestMatch;
 };
 
-const calculateMatchScore = (pref1, pref2) => {
+const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
+  let score = 0;
+
+  // 1. Gender match
+  if (
+    userPrefs.interestedIn &&
+    candidateUser.gender &&
+    userPrefs.interestedIn.includes(candidateUser.gender)
+  ) {
+    score += 15;
+  }
+
+  // 2. Age range match
+  const age = getAge(candidateUser.dob);
+  if (age >= userPrefs.ageRange.min && age <= userPrefs.ageRange.max) {
+    score += 15;
+  }
+
+  // 3. Goals match
+  const userGoals = [
+    userPrefs.goal?.primary,
+    userPrefs.goal?.secondary,
+    userPrefs.goal?.tertiary,
+  ].filter(Boolean);
+
+  const candidateGoals = [
+    candidatePrefs.goal?.primary,
+    candidatePrefs.goal?.secondary,
+    candidatePrefs.goal?.tertiary,
+  ].filter(Boolean);
+
+  const goalOverlap = userGoals.filter((goal) => candidateGoals.includes(goal));
+
+  score += goalOverlap.length * 10;
+
+  // 4. Interests match
+  const sharedHobbies = intersection(
+    userPrefs.interests?.hobbies || [],
+    candidatePrefs.interests?.hobbies || []
+  );
+  const sharedProfessional = intersection(
+    userPrefs.interests?.professional || [],
+    candidatePrefs.interests?.professional || []
+  );
+
+  score += Math.min(sharedHobbies.length + sharedProfessional.length, 10); // cap at 10 pts
+
+  // 5. Diet match
+  if (
+    hasOverlap(userPrefs.dietPreference, candidateUser.diet) ||
+    hasOverlap(userPrefs.dietPreference, ["Any"])
+  ) {
+    score += 5;
+  }
+
+  // 6. Zodiac match
+  if (
+    hasOverlap(userPrefs.zodiacPreference, candidateUser.zodiacSign) ||
+    hasOverlap(userPrefs.zodiacPreference, ["Any"])
+  ) {
+    score += 5;
+  }
+
+  // 7. Personality type match
+  if (
+    hasOverlap(
+      userPrefs.personalityTypePreference,
+      candidateUser.personalityType
+    ) ||
+    hasOverlap(userPrefs.personalityTypePreference, ["Any"])
+  ) {
+    score += 5;
+  }
+
+  // 8. Language match
+  if (
+    intersection(
+      userPrefs.preferredLanguages || [],
+      candidateUser.languages || []
+    ).length > 0
+  ) {
+    score += 5;
+  }
+
+  // 9. Relationship type match
+  if (
+    userPrefs.relationshipType &&
+    candidatePrefs.relationshipType &&
+    userPrefs.relationshipType === candidatePrefs.relationshipType
+  ) {
+    score += 10;
+  }
+
+  return score;
+};
+
+const calculateMatchScore_disabled = (pref1, pref2) => {
   let score = 0;
 
   // Age compatibility (highest weight)
@@ -201,34 +313,34 @@ const calculateMatchScore = (pref1, pref2) => {
   return score;
 };
 
-const createAndNotifyMatch = async (userId1, userId2, socket1, socket2) => {
+const createAndNotifyMatch = async (userId1, userId2) => {
   try {
-    // Remove both users from pool
-    matchmakingUsers.delete(userId1.toString());
-    matchmakingUsers.delete(userId2.toString());
-
     // Create match in database
     const { user1: matchedUser1, user2: matchedUser2 } =
       await matchingService.createMatch(userId1.toString(), userId2.toString());
     const matchId = `match_${userId1.toString()}_${userId2.toString()}`;
 
+    await User.updateMany(
+      { _id: { $in: [userId1, userId2] } },
+      { $set: { activeMatchRoom: matchId } }
+    );
+
+    const socket1 = userSockets.get(userId1.toString());
+    const socket2 = userSockets.get(userId2.toString());
+
     // Join both users to the match room
     socket1.join(matchId);
-    if (socket2) {
-      socket2.join(matchId);
-    }
+    socket2.join(matchId);
 
     // Notify both users
     socket1.emit("matchFound", { matchId, matchedUser: matchedUser2?._id });
-    if (socket2) {
-      socket2.emit("matchFound", { matchId, matchedUser: matchedUser1?._id });
-    }
+    socket2.emit("matchFound", { matchId, matchedUser: matchedUser1?._id });
   } catch (error) {
-    // If error, put first user back in pool
-    matchmakingUsers.set(userId1.toString(), {
-      socket: socket1,
-      timestamp: Date.now(),
-    });
+    await User.updateMany(
+      { _id: { $in: [userId1, userId2] } },
+      { $set: { isMatching: true, matchmakingTimestamp: Date.now() } }
+    );
+
     throw error;
   }
 };
@@ -237,28 +349,16 @@ const handleConnection = (socket) => {
   // Store user connection
   const userId = socket.user._id.toString();
   console.log("[handleConnection] New socket connection for user:", userId);
-  console.log(
-    "[handleConnection] Current userSockets Map size:",
-    userSockets.size
-  );
-
-  // Store the new socket without removing existing ones
   userSockets.set(userId, socket);
-  socketUsers.set(socket.id, userId);
-
-  console.log(
-    "[handleConnection] Updated userSockets Map size:",
-    userSockets.size
-  );
-  console.log(
-    "[handleConnection] Current socketUsers Map size:",
-    socketUsers.size
-  );
 
   // Update user's active status and refresh socket.user object
   User.findByIdAndUpdate(
     userId,
-    { isActive: true, lastActive: new Date() },
+    {
+      isActive: true,
+      socketId: socket.id, // Store socket ID in user document
+      lastActive: new Date(),
+    },
     { new: true }
   )
     .select("-password")
@@ -273,46 +373,53 @@ const handleConnection = (socket) => {
         };
         console.log("[handleConnection] Updated socket.user:", socket.user);
       }
+      if (updatedUser?.activeMatchRoom) {
+        console.log("user?.activeMatchRoom", updatedUser?.activeMatchRoom);
+        socket.join(updatedUser.activeMatchRoom);
+        socket.emit("matchFound", {
+          matchId: updatedUser?.activeMatchRoom,
+          matchedUser: updatedUser?.matchchedUserId,
+        });
+        console.log(
+          `[handleConnection] User ${userId} joined room ${updatedUser.activeMatchRoom}`
+        );
+      }
     })
     .catch((error) => console.error("Error updating user status:", error));
 
   // Handle matchmaking
   socket.on("startMatchmaking", async () => {
     try {
-      if (matchmakingUsers.has(userId)) return;
+      const user = await User.findById(userId).select("-password").lean();
+      console.log("[startMatchmaking] User");
+      // if (matchmakingUsers.has(userId)) return;
+      // if (user.isMatching) return;
 
       // Fetch user preferences
       const preferences = await UserPreference.findOne({ user: userId }).lean();
-      if (!preferences) {
-        socket.emit("matchmakingError", { message: "No preferences found" });
-        return;
-      }
+      console.log("[startMatchmaking] preferences");
 
-      // Add user to matchmaking pool with preferences
-      matchmakingUsers.set(userId, {
-        socket,
-        timestamp: Date.now(),
-        preferences,
+      await User.findByIdAndUpdate(userId, {
+        isMatching: true,
+        matchmakingTimestamp: Date.now(),
       });
-
+      console.log("[startMatchmaking] User added to matchmaking pool");
       // Find best match
       const bestMatch = await findBestMatch(userId, preferences);
-
+      console.log("[startMatchmaking] bestMatch", bestMatch);
       if (bestMatch) {
-        await createAndNotifyMatch(
-          userId,
-          bestMatch.uid,
-          socket,
-          bestMatch.socket
-        );
+        await createAndNotifyMatch(userId, bestMatch.uid);
       }
     } catch (error) {
       socket.emit("matchmakingError", { message: error.message });
     }
   });
 
-  socket.on("stopMatchmaking", () => {
-    matchmakingUsers.delete(userId);
+  socket.on("stopMatchmaking", async () => {
+    await User.findByIdAndUpdate(userId, {
+      isMatching: false,
+      matchmakingTimestamp: null,
+    });
   });
 
   // Handle joining chat room
@@ -441,19 +548,59 @@ const handleConnection = (socket) => {
   });
 
   // Handle chat cancellation
-  socket.on("cancelChat", async (data) => {
-    console.log("[cancelChat] Received cancel chat request:", data);
-
+  socket.on("cancelChat", async () => {
+    console.log("[cancelChat] Received cancel chat request");
+    const userId = socket.user._id.toString();
     try {
-      const { matchId } = data;
+      // Check if the user is in a match
+      const user = await User.findById(userId).select("-password").lean();
+      if (!user || !user.activeMatchRoom) {
+        socket.emit("error", { message: "User not in a match" });
+        return;
+      }
+      const matchId = user.activeMatchRoom;
+      console.log("[cancelChat] User is in match:", matchId);
+      const inUserSlot = await Slot.findOne({
+        user: userId,
+        roomId: matchId,
+      }).lean();
+      const inPartnerSlot = await Slot.findOne({
+        user: user?.matchchedUserId,
+        roomId: matchId,
+      }).lean();
+
+      console.log("[inUserSlot]", inUserSlot);
+      console.log("[inPartnerSlot]", inPartnerSlot);
+
+      if (inUserSlot) {
+        await Slot.findOneAndDelete({
+          user: userId,
+          roomId: matchId,
+        });
+      }
+      if (inPartnerSlot) {
+        await Slot.findOneAndDelete({
+          user: user?.matchchedUserId,
+          roomId: matchId,
+        });
+      }
+
+      // Notify the other user in the match
+      await User.findByIdAndUpdate(user.matchchedUserId, {
+        isMatching: true,
+        matchmakingTimestamp: Date.now(),
+        activeMatchRoom: null,
+        matchchedUserId: null,
+      });
+      await User.findByIdAndUpdate(userId, {
+        isMatching: true,
+        matchmakingTimestamp: Date.now(),
+        activeMatchRoom: null,
+        matchchedUserId: null,
+      });
 
       // Notify the room
       socket.to(matchId).emit("chatCancelled", { matchId });
-
-      // Update socket.user
-      socket.user = {
-        ...socket.user,
-      };
 
       // Leave the chat room
       socket.leave(matchId);
@@ -466,54 +613,30 @@ const handleConnection = (socket) => {
   });
 
   // Handle disconnection
-  socket.on("disconnect", async (data) => {
+  socket.on("disconnect", async () => {
     console.log("[disconnect] Socket disconnected for user:", userId);
-    console.log("[disconnect] Current userSockets Map size:", userSockets.size);
 
     if (userId) {
       try {
-        const { matchId } = data;
-
-        if (matchId) {
-          // Notify the room
-          socket.to(matchId).emit("chatCancelled", { matchId });
-
-          // Update socket.user
-          socket.user = {
-            ...socket.user,
-          };
-
-          // Leave the chat room
-          socket.leave(matchId);
+        const user = await User.findById(userId).select("-password").lean();
+        if (!user) {
+          console.log("[disconnect] User not found:", userId);
+          return;
         }
 
-        matchmakingUsers.delete(userId);
+        socket.to(user.activeMatchRoom).emit("userDisconnected");
 
-        // Only remove this specific socket
         userSockets.delete(userId);
-        socketUsers.delete(socket.id);
-
-        console.log("[disconnect] Removed socket mappings for user:", userId);
-        console.log(
-          "[disconnect] Updated userSockets Map size:",
-          userSockets.size
-        );
-        console.log(
-          "[disconnect] Updated socketUsers Map size:",
-          socketUsers.size
-        );
-
-        // Check if user has any remaining connections
-        const remainingConnections = Array.from(socketUsers.entries()).filter(
-          ([_, uid]) => uid === userId
-        ).length;
-
-        if (remainingConnections === 0) {
-          await User.findByIdAndUpdate(userId, {
-            isActive: false,
-            lastActive: new Date(),
-          });
-        }
+        // matchmakingUsers.delete(userId);
+        await User.findByIdAndUpdate(userId, {
+          isMatching: false,
+          matchmakingTimestamp: null,
+          socketId: null,
+          isActive: false,
+          // matchchedUserId: null,
+          // activeMatchRoom: null,
+          lastActive: new Date(),
+        });
       } catch (error) {
         console.error("Error handling disconnection:", error);
       }
@@ -587,3 +710,27 @@ export default {
   handleConnection,
   createAndNotifyMatch,
 };
+
+function getAge(dob) {
+  if (!dob) return 0;
+  const today = new Date();
+  const birthDate = new Date(dob);
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const monthDiff = today.getMonth() - birthDate.getMonth();
+  if (
+    monthDiff < 0 ||
+    (monthDiff === 0 && today.getDate() < birthDate.getDate())
+  ) {
+    age--;
+  }
+  return age;
+}
+
+function hasOverlap(array, value) {
+  if (!Array.isArray(array)) return false;
+  return array.includes(value);
+}
+
+function intersection(a = [], b = []) {
+  return a.filter((item) => b.includes(item));
+}

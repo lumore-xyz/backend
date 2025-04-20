@@ -49,6 +49,8 @@ const userSchema = new mongoose.Schema(
         message: "Invalid phone number format",
       },
     },
+    emailVerified: { type: Boolean, default: false },
+    phoneVerified: { type: Boolean, default: false },
     password: {
       type: String,
       minlength: 8,
@@ -231,6 +233,19 @@ const userSchema = new mongoose.Schema(
       ],
     },
     isActive: { type: Boolean, default: false },
+    isMatching: { type: Boolean, default: false },
+    matchmakingTimestamp: { type: Date, sparse: true, default: null },
+    socketId: { type: String, unique: true, sparse: true },
+    matchchedUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      sparse: true,
+    },
+    activeMatchRoom: {
+      type: String,
+      sparse: true,
+      default: null,
+    },
     lastActive: { type: Date, default: Date.now },
     maxSlots: { type: Number, default: 1 },
     location: {
@@ -238,11 +253,12 @@ const userSchema = new mongoose.Schema(
         type: String,
         enum: ["Point"],
         default: "Point",
+        required: true,
       },
       coordinates: {
-        type: [Number],
+        type: [Number], // [longitude, latitude]
+        required: true,
         index: "2dsphere",
-        default: [0, 0],
       },
       formattedAddress: {
         type: String,
@@ -412,7 +428,6 @@ userSchema.methods.toJSON = function (isUnlocked = false) {
   return visibleObj;
 };
 
-// Add this after the schema definition but before the model creation
 userSchema.index({ location: "2dsphere" });
 
 export default mongoose.model("User", userSchema);
