@@ -253,11 +253,11 @@ const userSchema = new mongoose.Schema(
         type: String,
         enum: ["Point"],
         default: "Point",
-        required: true,
+        sparse: true,
       },
       coordinates: {
         type: [Number], // [longitude, latitude]
-        required: true,
+        sparse: true,
         index: "2dsphere",
       },
       formattedAddress: {

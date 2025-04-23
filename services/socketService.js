@@ -113,7 +113,7 @@ const findBestMatch = async (userId, userPreferences) => {
     const isCloseEnough = isWithinDistance(
       currentUser.location,
       candidate.location,
-      userPreferences.distance
+      userPreferences?.distance || 10 * 1000 // default to 10km
     );
 
     console.log(
@@ -128,7 +128,7 @@ const findBestMatch = async (userId, userPreferences) => {
       user: candidate._id,
     }).lean();
 
-    if (!candidatePreferences) continue;
+    // if (!candidatePreferences) continue;
 
     const score = calculateMatchScore(
       userPreferences,
@@ -165,60 +165,60 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
 
   // 1. Gender match
   if (
-    userPrefs.interestedIn &&
+    userPrefs?.interestedIn &&
     candidateUser.gender &&
-    userPrefs.interestedIn.includes(candidateUser.gender)
+    userPrefs?.interestedIn?.includes(candidateUser.gender)
   ) {
     score += 15;
   }
 
   // 2. Age range match
   const age = getAge(candidateUser.dob);
-  if (age >= userPrefs.ageRange.min && age <= userPrefs.ageRange.max) {
+  if (age >= userPrefs?.ageRange.min && age <= userPrefs?.ageRange.max) {
     score += 15;
   }
 
   // 3. Goals match
   const userGoals = [
-    userPrefs.goal?.primary,
-    userPrefs.goal?.secondary,
-    userPrefs.goal?.tertiary,
-  ].filter(Boolean);
+    userPrefs?.goal?.primary,
+    userPrefs?.goal?.secondary,
+    userPrefs?.goal?.tertiary,
+  ]?.filter(Boolean);
 
   const candidateGoals = [
-    candidatePrefs.goal?.primary,
-    candidatePrefs.goal?.secondary,
-    candidatePrefs.goal?.tertiary,
-  ].filter(Boolean);
+    candidatePrefs?.goal?.primary,
+    candidatePrefs?.goal?.secondary,
+    candidatePrefs?.goal?.tertiary,
+  ]?.filter(Boolean);
 
   const goalOverlap = userGoals.filter((goal) => candidateGoals.includes(goal));
 
-  score += goalOverlap.length * 10;
+  score += goalOverlap?.length * 10;
 
   // 4. Interests match
   const sharedHobbies = intersection(
-    userPrefs.interests?.hobbies || [],
-    candidatePrefs.interests?.hobbies || []
+    userPrefs?.interests?.hobbies || [],
+    candidatePrefs?.interests?.hobbies || []
   );
   const sharedProfessional = intersection(
-    userPrefs.interests?.professional || [],
-    candidatePrefs.interests?.professional || []
+    userPrefs?.interests?.professional || [],
+    candidatePrefs?.interests?.professional || []
   );
 
   score += Math.min(sharedHobbies.length + sharedProfessional.length, 10); // cap at 10 pts
 
   // 5. Diet match
   if (
-    hasOverlap(userPrefs.dietPreference, candidateUser.diet) ||
-    hasOverlap(userPrefs.dietPreference, ["Any"])
+    hasOverlap(userPrefs?.dietPreference, candidateUser.diet) ||
+    hasOverlap(userPrefs?.dietPreference, ["Any"])
   ) {
     score += 5;
   }
 
   // 6. Zodiac match
   if (
-    hasOverlap(userPrefs.zodiacPreference, candidateUser.zodiacSign) ||
-    hasOverlap(userPrefs.zodiacPreference, ["Any"])
+    hasOverlap(userPrefs?.zodiacPreference, candidateUser.zodiacSign) ||
+    hasOverlap(userPrefs?.zodiacPreference, ["Any"])
   ) {
     score += 5;
   }
@@ -226,10 +226,10 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
   // 7. Personality type match
   if (
     hasOverlap(
-      userPrefs.personalityTypePreference,
+      userPrefs?.personalityTypePreference,
       candidateUser.personalityType
     ) ||
-    hasOverlap(userPrefs.personalityTypePreference, ["Any"])
+    hasOverlap(userPrefs?.personalityTypePreference, ["Any"])
   ) {
     score += 5;
   }
@@ -237,7 +237,7 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
   // 8. Language match
   if (
     intersection(
-      userPrefs.preferredLanguages || [],
+      userPrefs?.preferredLanguages || [],
       candidateUser.languages || []
     ).length > 0
   ) {
@@ -246,9 +246,9 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
 
   // 9. Relationship type match
   if (
-    userPrefs.relationshipType &&
+    userPrefs?.relationshipType &&
     candidatePrefs.relationshipType &&
-    userPrefs.relationshipType === candidatePrefs.relationshipType
+    userPrefs?.relationshipType === candidatePrefs?.relationshipType
   ) {
     score += 10;
   }
@@ -297,15 +297,15 @@ const calculateMatchScore_disabled = (pref1, pref2) => {
 
   // Shared interests
   if (pref1?.interests?.professional && pref2?.interests?.professional) {
-    const sharedInterests = pref1.interests.professional.filter((interest) =>
-      pref2.interests.professional.includes(interest)
+    const sharedInterests = pref1?.interests.professional.filter((interest) =>
+      pref2?.interests.professional.includes(interest)
     ).length;
     score += sharedInterests * 2;
   }
 
   if (pref1?.interests?.hobbies && pref2?.interests?.hobbies) {
-    const sharedHobbies = pref1.interests.hobbies.filter((hobby) =>
-      pref2.interests.hobbies.includes(hobby)
+    const sharedHobbies = pref1?.interests.hobbies.filter((hobby) =>
+      pref2?.interests.hobbies.includes(hobby)
     ).length;
     score += sharedHobbies * 2;
   }
@@ -330,11 +330,13 @@ const createAndNotifyMatch = async (userId1, userId2) => {
 
     // Join both users to the match room
     socket1.join(matchId);
-    socket2.join(matchId);
+    socket1.emit("matchFound", { matchId, matchedUser: matchedUser2?._id });
+    if (socket2) {
+      socket2.join(matchId);
+      socket2.emit("matchFound", { matchId, matchedUser: matchedUser1?._id });
+    }
 
     // Notify both users
-    socket1.emit("matchFound", { matchId, matchedUser: matchedUser2?._id });
-    socket2.emit("matchFound", { matchId, matchedUser: matchedUser1?._id });
   } catch (error) {
     await User.updateMany(
       { _id: { $in: [userId1, userId2] } },
