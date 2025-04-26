@@ -589,13 +589,13 @@ const handleConnection = (socket) => {
 
       // Notify the other user in the match
       await User.findByIdAndUpdate(user.matchchedUserId, {
-        isMatching: true,
+        isMatching: false,
         matchmakingTimestamp: Date.now(),
         activeMatchRoom: null,
         matchchedUserId: null,
       });
       await User.findByIdAndUpdate(userId, {
-        isMatching: true,
+        isMatching: false,
         matchmakingTimestamp: Date.now(),
         activeMatchRoom: null,
         matchchedUserId: null,

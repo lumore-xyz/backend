@@ -253,12 +253,9 @@ const userSchema = new mongoose.Schema(
         type: String,
         enum: ["Point"],
         default: "Point",
-        sparse: true,
       },
       coordinates: {
         type: [Number], // [longitude, latitude]
-        sparse: true,
-        index: "2dsphere",
       },
       formattedAddress: {
         type: String,
@@ -428,6 +425,21 @@ userSchema.methods.toJSON = function (isUnlocked = false) {
   return visibleObj;
 };
 
-userSchema.index({ location: "2dsphere" });
+userSchema.pre("validate", function (next) {
+  if (
+    this.location &&
+    (!Array.isArray(this.location.coordinates) ||
+      this.location.coordinates.length !== 2)
+  ) {
+    this.location = undefined;
+  }
+  next();
+});
+
+// 🧠 Add partial 2dsphere index (prevents geo errors for incomplete/null location)
+userSchema.index(
+  { location: "2dsphere" },
+  { partialFilterExpression: { "location.coordinates": { $type: "array" } } }
+);
 
 export default mongoose.model("User", userSchema);

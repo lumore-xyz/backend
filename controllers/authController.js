@@ -11,21 +11,27 @@ const generateToken = (id) => {
 
 // Signup user
 export const signup = async (req, res) => {
-  const { username, password } = req.body;
+  const { username, email, password } = req.body;
 
   try {
     // Check for existing user
     const existingUser = await User.findOne({
       username,
+      email,
     });
 
     if (existingUser) {
       return res.status(400).json({ message: "Username already in use" });
     }
 
+    if (userData.location && !Array.isArray(userData.location.coordinates)) {
+      delete userData.location; // ⛔ Prevent MongoDB from seeing invalid location
+    }
+
     // Create user
     const user = await User.create({
       username,
+      email,
       password,
     });
 
@@ -102,6 +108,9 @@ export const googleLogin = async (req, res) => {
         await existingUser.save();
         user = existingUser;
       } else {
+        if (!location || !Array.isArray(location.coordinates)) {
+          delete userData.location;
+        }
         user = await User.create({
           googleId,
           email,
