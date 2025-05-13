@@ -5,10 +5,12 @@ import {
   deleteAccount,
   getProfile,
   updateFieldVisibility,
+  updateProfilePicture,
   updateUserPreference,
 } from "../controllers/profileController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { userControl } from "../middleware/userActionMiddleware.js";
+import { upload } from "../middleware/upload.js";
 
 const router = express.Router();
 
@@ -157,7 +159,6 @@ const router = express.Router();
  *       404:
  *         description: User not found
  */
-
 router
   .route("/:userId")
   .post(protect, userControl, createProfile)
@@ -300,6 +301,13 @@ router.patch(
   protect,
   userControl,
   updateUserPreference
+);
+
+
+router.patch("/:userId/update-profile-picture",
+  protect,
+  upload.single("profilePic"),
+  updateProfilePicture
 );
 
 export default router;

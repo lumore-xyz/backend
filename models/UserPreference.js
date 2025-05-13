@@ -4,8 +4,8 @@ const userPreferenceSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   interestedIn: {
     type: String,
-    enum: ["Men", "Women", "Non-Binary"],
-    default: "Men",
+    enum: ["Man", "Woman", "Gay", "Lesbian", "Non-Binary", "all"],
+    default: "all",
   },
   ageRange: {
     min: { type: Number, default: 18 },
@@ -15,63 +15,13 @@ const userPreferenceSchema = new mongoose.Schema({
   goal: {
     primary: {
       type: String,
-      enum: [
-        "Serious Relationship",
-        "Casual Dating",
-        "Marriage",
-        "Friendship",
-        "Quick Sex",
-        "Undecided",
-        "Long-Term Dating",
-        "Open Relationship",
-        "Networking",
-        "Exploring Sexuality",
-        "Travel Companion",
-        "Polyamorous Relationship",
-        "Activity Partner",
-        "Sugar Dating",
-        "Spiritual Connection",
-      ],
     },
     secondary: {
       type: String,
-      enum: [
-        "Serious Relationship",
-        "Casual Dating",
-        "Marriage",
-        "Friendship",
-        "Quick Sex",
-        "Undecided",
-        "Long-Term Dating",
-        "Open Relationship",
-        "Networking",
-        "Exploring Sexuality",
-        "Travel Companion",
-        "Polyamorous Relationship",
-        "Activity Partner",
-        "Sugar Dating",
-        "Spiritual Connection",
-      ],
     },
     tertiary: {
       type: String,
-      enum: [
-        "Serious Relationship",
-        "Casual Dating",
-        "Marriage",
-        "Friendship",
-        "Quick Sex",
-        "Undecided",
-        "Long-Term Dating",
-        "Open Relationship",
-        "Networking",
-        "Exploring Sexuality",
-        "Travel Companion",
-        "Polyamorous Relationship",
-        "Activity Partner",
-        "Sugar Dating",
-        "Spiritual Connection",
-      ],
+
     },
   },
   interests: {
@@ -118,23 +68,12 @@ const userPreferenceSchema = new mongoose.Schema({
     ],
     default: ["Any"],
   },
-  education: {
-    institutions: {
-      type: [String],
-      default: [],
-    },
-    minimumDegreeLevel: {
-      type: String,
-      enum: [
-        "High School",
-        "Bachelor's",
-        "Master's",
-        "Doctorate",
-        "No Preference",
-      ],
-      default: "No Preference",
-    },
+  institutions: {
+    type: [String],
+    default: [],
   },
+
+
   personalityTypePreference: {
     type: [String],
     enum: [
@@ -164,25 +103,17 @@ const userPreferenceSchema = new mongoose.Schema({
       "Vegetarian",
       "Vegan",
       "Jain",
-      "Pescatarian",
       "Non-Vegetarian",
-      "Gluten-Free",
-      "Kosher",
-      "Halal",
       "Any",
     ],
     default: ["Any"],
   },
-  locationPreferences: {
-    homeTown: {
-      type: [String],
-      default: [],
-    },
-    currentLocation: {
-      type: [String],
-      default: [],
-    },
+  homeTown: {
+    type: [String],
+    default: [],
   },
+
+
 });
 
 // 1️⃣ Serious Relationship – Looking for a long-term, committed relationship.

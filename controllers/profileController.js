@@ -1,5 +1,6 @@
 // /controllers/profileController.js
 import mongoose from "mongoose";
+import cloudinary from "../utils/cloudinary.js";
 import RejectedProfile from "../models/RejectedProfile.js";
 import Slot from "../models/Slot.js";
 import UnlockHistory from "../models/UnlockHistory.js";
@@ -17,7 +18,6 @@ export const createProfile = async (req, res) => {
       "realName",
       "phoneNumber",
       "gender",
-      "sexualOrientation",
       "dob",
       "height",
       "bio",
@@ -33,13 +33,9 @@ export const createProfile = async (req, res) => {
       "work",
       "work.title",
       "work.company",
-      "education",
-      "education.degree",
-      "education.institution",
-      "education.field",
+      "institution",
       "maritalStatus",
       "religion",
-      "currentLocation",
       "homeTown",
       "languages",
       "personalityType",
@@ -81,6 +77,51 @@ export const createProfile = async (req, res) => {
     res.status(200).json(updatedUser);
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+export const updateProfilePicture = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const file = req.file;
+
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!file) return res.status(400).json({ message: "No file uploaded" });
+
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        resource_type: "image",
+        folder: "profile_pictures",
+        format: "webp", // force WebP output
+        transformation: [
+          { fetch_format: "auto" },        // best format (webp/avif/etc.)
+          { quality: "auto" },             // optimized quality
+          { crop: "limit", width: 600, height: 600 }, // optional size limit
+        ],
+      },
+      async (error, result) => {
+        if (error) {
+          console.error("Cloudinary Upload Error:", error);
+          return res.status(500).json({ message: "Upload failed" });
+        }
+
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ message: "User not found" });
+
+        user.profilePicture = result.secure_url;
+        await user.save();
+
+        return res.status(200).json({
+          message: "Profile picture updated successfully",
+          profilePicture: result.secure_url,
+        });
+      }
+    );
+
+    uploadStream.end(file.buffer);
+  } catch (error) {
+    console.error("Error updating profile picture:", error);
+    return res.status(500).json({ message: "Internal server error" });
   }
 };
 
@@ -254,8 +295,8 @@ export const calculateDistance = (location1, location2) => {
   const a =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1 * (Math.PI / 180)) *
-      Math.cos(lat2 * (Math.PI / 180)) *
-      Math.sin(dLon / 2) ** 2;
+    Math.cos(lat2 * (Math.PI / 180)) *
+    Math.sin(dLon / 2) ** 2;
   return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 };
 

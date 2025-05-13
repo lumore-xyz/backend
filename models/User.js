@@ -58,22 +58,9 @@ const userSchema = new mongoose.Schema(
     },
     gender: {
       type: String,
-      enum: ["Man", "Woman", "Non-Binary", "Prefer Not to Say"],
+      enum: ["Man", "Woman", "Gay", "Lesbian", "Non-Binary", "Prefer Not to Say"],
     },
-    sexualOrientation: {
-      type: String,
-      enum: [
-        "Straight",
-        "Gay",
-        "Lesbian",
-        "Bisexual",
-        "Pansexual",
-        "Asexual",
-        "Queer",
-        "Questioning",
-        "Prefer Not to Say",
-      ],
-    },
+
     height: { type: Number }, // in centimeters
     dob: {
       type: Date,
@@ -96,11 +83,8 @@ const userSchema = new mongoose.Schema(
       enum: [
         "Vegetarian",
         "Vegan",
-        "Pescatarian",
+        "Jain",
         "Non-Vegetarian",
-        "Gluten-Free",
-        "Kosher",
-        "Halal",
         "No Specific Diet",
       ],
     },
@@ -151,22 +135,7 @@ const userSchema = new mongoose.Schema(
       title: { type: String },
       company: { type: String },
     },
-    education: {
-      degree: {
-        type: String,
-        enum: [
-          "High School",
-          "Associate's",
-          "Bachelor's",
-          "Master's",
-          "Doctorate",
-          "Professional Degree",
-          "Other",
-        ],
-      },
-      institution: String,
-      field: String,
-    },
+    institution: String,
     maritalStatus: {
       type: String,
       enum: [
@@ -194,7 +163,6 @@ const userSchema = new mongoose.Schema(
         "Prefer Not to Say",
       ],
     },
-    currentLocation: { type: String },
     homeTown: { type: String },
     languages: [
       {
@@ -224,14 +192,12 @@ const userSchema = new mongoose.Schema(
       ],
     },
     profilePicture: { type: String }, // URL to the profile picture
-    web3Wallet: {
-      addresses: [
-        {
-          type: String,
-          sparse: true, // Allows null values without breaking uniqueness constraint
-        },
-      ],
-    },
+    web3Wallet: [
+      {
+        type: String,
+        sparse: true, // Allows null values without breaking uniqueness constraint
+      },
+    ],
     isActive: { type: Boolean, default: false },
     isMatching: { type: Boolean, default: false },
     matchmakingTimestamp: { type: Date, sparse: true, default: null },
@@ -271,7 +237,6 @@ const userSchema = new mongoose.Schema(
         realName: "public",
         age: "public",
         gender: "public",
-        sexualOrientation: "public",
         height: "public",
         bio: "public",
         interests: "public",
@@ -279,10 +244,9 @@ const userSchema = new mongoose.Schema(
         zodiacSign: "public",
         lifestyle: "public",
         work: "public",
-        education: "public",
+        institution: "public",
         maritalStatus: "public",
         religion: "public",
-        currentLocation: "public",
         homeTown: "public",
         languages: "public",
         personalityType: "public",

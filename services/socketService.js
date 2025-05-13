@@ -1,13 +1,11 @@
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
-
 import Message from "../models/Message.js";
 import Slot from "../models/Slot.js";
 import UnlockHistory from "../models/UnlockHistory.js";
 import User from "../models/User.js";
 import UserPreference from "../models/UserPreference.js";
-import { calculateAge, isAgeInRange } from "./ageService.js";
 import { keyExchangeService } from "./keyExchangeService.js";
 import { isWithinDistance } from "./locationService.js";
 import matchingService from "./matchingService.js";
@@ -256,63 +254,6 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
   return score;
 };
 
-const calculateMatchScore_disabled = (pref1, pref2) => {
-  let score = 0;
-
-  // Age compatibility (highest weight)
-  if (pref1?.ageRange && pref2?.ageRange) {
-    const age1 = calculateAge(pref1.user.dob);
-    const age2 = calculateAge(pref2.user.dob);
-    if (isAgeInRange(age1, pref2) && isAgeInRange(age2, pref1)) {
-      score += 40; // High weight for age compatibility
-    }
-  }
-
-  // Gender preference
-  if (pref1?.interestedIn && pref2?.user?.gender) {
-    if (pref1.interestedIn === pref2.user.gender) {
-      score += 20;
-    }
-  }
-
-  // Goal compatibility
-  if (pref1?.goal && pref2?.goal) {
-    const goals1 = [
-      pref1.goal.primary,
-      pref1.goal.secondary,
-      pref1.goal.tertiary,
-    ].filter(Boolean);
-    const goals2 = [
-      pref2.goal.primary,
-      pref2.goal.secondary,
-      pref2.goal.tertiary,
-    ].filter(Boolean);
-
-    // Find common goals between both users
-    const commonGoals = goals1.filter((goal) => goals2.includes(goal));
-
-    // Each common goal gets 1 point
-    score += commonGoals.length;
-  }
-
-  // Shared interests
-  if (pref1?.interests?.professional && pref2?.interests?.professional) {
-    const sharedInterests = pref1?.interests.professional.filter((interest) =>
-      pref2?.interests.professional.includes(interest)
-    ).length;
-    score += sharedInterests * 2;
-  }
-
-  if (pref1?.interests?.hobbies && pref2?.interests?.hobbies) {
-    const sharedHobbies = pref1?.interests.hobbies.filter((hobby) =>
-      pref2?.interests.hobbies.includes(hobby)
-    ).length;
-    score += sharedHobbies * 2;
-  }
-
-  return score;
-};
-
 const createAndNotifyMatch = async (userId1, userId2) => {
   try {
     // Create match in database
@@ -496,7 +437,7 @@ const handleConnection = (socket) => {
   // Handle new message
   socket.on("send_message", async (data) => {
     try {
-      const { matchId, encryptedContent, iv, receiverId } = data;
+      const { matchId, encryptedContent, iv, receiverId, originalMessageId } = data;
 
       // Verify the user is in the correct room
       if (!socket.rooms.has(matchId)) {
@@ -513,6 +454,8 @@ const handleConnection = (socket) => {
       // Broadcast the message to the room
       socket.to(matchId).emit("new_message", {
         senderId: userId,
+        receiverId,
+        originalMessageId,
         encryptedData: encryptedContent,
         iv: iv,
         timestamp: Date.now(),
@@ -522,6 +465,7 @@ const handleConnection = (socket) => {
       const message = await Message.create({
         sender: userId,
         receiver: receiverId,
+        replyTo: originalMessageId,
         roomId: matchId,
         encryptedData: encryptedContent,
         iv: iv,
@@ -535,6 +479,40 @@ const handleConnection = (socket) => {
       });
     } catch (error) {
       console.error("[send_message] Error:", error);
+      socket.emit("error", { message: error.message });
+    }
+  });
+
+  socket.on("like_message", async (data) => {
+    try {
+      const { messageId } = data;
+      const userId = socket.userId; // Assume userId is set when socket connects via auth
+
+      if (!messageId) {
+        socket.emit("error", { message: "Message ID is required to like" });
+        return;
+      }
+
+      // Add the like (prevent duplicates with $addToSet)
+      const updatedMessage = await Message.findByIdAndUpdate(
+        messageId,
+        { $addToSet: { likedBy: userId } },
+        { new: true }
+      );
+
+      // Notify the room or sender that the message was liked
+      socket.to(updatedMessage.roomId).emit("message_liked", {
+        messageId: updatedMessage._id,
+        likedBy: userId,
+        totalLikes: updatedMessage.likedBy.length,
+      });
+
+      socket.emit("like_success", {
+        messageId: updatedMessage._id,
+        totalLikes: updatedMessage.likedBy.length,
+      });
+    } catch (error) {
+      console.error("[like_message] Error:", error);
       socket.emit("error", { message: error.message });
     }
   });
