@@ -13,6 +13,7 @@ import { errorHandler, notFound } from "./middleware/errorMiddleware.js";
 import authRoutes from "./routes/authRoutes.js";
 import profileRoutes from "./routes/profileRoutes.js";
 import slotRoutes from "./routes/slotRoutes.js";
+import messagesRoutes from "./routes/messagesRoutes.js";
 import { initializeCronJobs } from "./services/cronService.js";
 import socketService from "./services/socketService.js";
 
@@ -59,6 +60,7 @@ app.get("/", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/slots", slotRoutes);
+app.use("/api/messages", messagesRoutes);
 
 // Error handling middleware
 app.use(notFound);
