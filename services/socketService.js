@@ -164,14 +164,14 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
   // 1. Gender match
   if (
     userPrefs?.interestedIn &&
-    candidateUser.gender &&
+    candidateUser?.gender &&
     userPrefs?.interestedIn?.includes(candidateUser.gender)
   ) {
     score += 15;
   }
 
   // 2. Age range match
-  const age = getAge(candidateUser.dob);
+  const age = getAge(candidateUser?.dob);
   if (age >= userPrefs?.ageRange.min && age <= userPrefs?.ageRange.max) {
     score += 15;
   }
@@ -207,7 +207,7 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
 
   // 5. Diet match
   if (
-    hasOverlap(userPrefs?.dietPreference, candidateUser.diet) ||
+    hasOverlap(userPrefs?.dietPreference, candidateUser?.diet) ||
     hasOverlap(userPrefs?.dietPreference, ["Any"])
   ) {
     score += 5;
@@ -225,7 +225,7 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
   if (
     hasOverlap(
       userPrefs?.personalityTypePreference,
-      candidateUser.personalityType
+      candidateUser?.personalityType
     ) ||
     hasOverlap(userPrefs?.personalityTypePreference, ["Any"])
   ) {
@@ -236,7 +236,7 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
   if (
     intersection(
       userPrefs?.preferredLanguages || [],
-      candidateUser.languages || []
+      candidateUser?.languages || []
     ).length > 0
   ) {
     score += 5;
@@ -245,7 +245,7 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
   // 9. Relationship type match
   if (
     userPrefs?.relationshipType &&
-    candidatePrefs.relationshipType &&
+    candidatePrefs?.relationshipType &&
     userPrefs?.relationshipType === candidatePrefs?.relationshipType
   ) {
     score += 10;
@@ -437,7 +437,8 @@ const handleConnection = (socket) => {
   // Handle new message
   socket.on("send_message", async (data) => {
     try {
-      const { matchId, encryptedContent, iv, receiverId, originalMessageId } = data;
+      const { matchId, encryptedContent, iv, receiverId, originalMessageId } =
+        data;
 
       // Verify the user is in the correct room
       if (!socket.rooms.has(matchId)) {
