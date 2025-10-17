@@ -1,11 +1,12 @@
 // /routes/authRoutes.js
 import express from "express";
 import rateLimit from "express-rate-limit";
-import passport from "passport";
 import {
   googleLogin,
+  googleLoginWeb,
   isUniqueUsername,
   login,
+  refreshToken,
   setPassword,
   signup,
 } from "../controllers/authController.js";
@@ -94,49 +95,10 @@ router.post("/signup", signup);
  */
 router.post("/login", loginLimiter, login);
 
-/**
- * @swagger
- * /api/auth/google:
- *   get:
- *     summary: Initiate Google OAuth login
- *     tags: [Auth]
- *     responses:
- *       302:
- *         description: Redirects to Google login page
- */
-router.get(
-  "/google",
-  passport.authenticate("google", { scope: ["profile", "email"] })
-);
+router.post("/google-signin", googleLogin);
+router.post("/google-signin-web", googleLoginWeb);
 
-/**
- * @swagger
- * /api/auth/google/callback:
- *   get:
- *     summary: Handle Google OAuth callback
- *     tags: [Auth]
- *     responses:
- *       200:
- *         description: Google login successful
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 token:
- *                   type: string
- *                   description: JWT token
- *       401:
- *         description: Google authentication failed
- */
-router.get(
-  "/google/callback",
-  passport.authenticate("google", {
-    session: false,
-    failureRedirect: "/login",
-  }),
-  googleLogin
-);
+router.get("/refresh-token", refreshToken);
 
 /**
  * @swagger
@@ -197,5 +159,3 @@ router.post("/set-password", protect, setPassword);
 router.get("/check-username/:username", isUniqueUsername);
 
 export default router;
-
-///new line added

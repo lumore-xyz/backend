@@ -4,29 +4,18 @@ import mongoose from "mongoose";
 
 const userSchema = new mongoose.Schema(
   {
+    googleId: { type: String, unique: true, sparse: true },
+    profilePicture: { type: String },
+    nickname: String,
+    realName: String,
+    bloodGroup: String,
     username: {
       type: String,
       required: [true, "Username is required"],
       unique: true,
       trim: true,
       minlength: 3,
-      maxlength: 30,
-    },
-    nickname: { type: String, trim: true },
-    realName: { type: String, trim: true },
-    bloodGroup: {
-      type: String,
-      enum: [
-        "A+",
-        "A-",
-        "B+",
-        "B-",
-        "AB+",
-        "AB-",
-        "O+",
-        "O-",
-        "Prefer Not to Say",
-      ],
+      maxlength: 13,
     },
     email: {
       type: String,
@@ -54,155 +43,50 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       minlength: 8,
-      select: true,
     },
-    gender: {
-      type: String,
-      enum: ["Man", "Woman", "Gay", "Lesbian", "Non-Binary", "Prefer Not to Say"],
-    },
-
-    height: { type: Number }, // in centimeters
-    dob: {
-      type: Date,
-      validate: {
-        validator: function (dob) {
-          const minAgeDate = new Date();
-          minAgeDate.setFullYear(minAgeDate.getFullYear() - 18);
-          return dob <= minAgeDate;
-        },
-        message: "Must be at least 18 years old",
-      },
-    },
+    gender: String,
+    height: Number,
+    dob: Date,
+    diet: String,
+    zodiacSign: String,
     bio: { type: String, maxlength: 500 },
     interests: {
-      professional: [String],
-      hobbies: [String],
-    },
-    diet: {
-      type: String,
-      enum: [
-        "Vegetarian",
-        "Vegan",
-        "Jain",
-        "Non-Vegetarian",
-        "No Specific Diet",
-      ],
-    },
-    zodiacSign: {
-      type: String,
-      enum: [
-        "Aries",
-        "Taurus",
-        "Gemini",
-        "Cancer",
-        "Leo",
-        "Virgo",
-        "Libra",
-        "Scorpio",
-        "Sagittarius",
-        "Capricorn",
-        "Aquarius",
-        "Pisces",
-      ],
+      type: [String],
+      validate: {
+        validator: function (v) {
+          return v.length <= 5;
+        },
+        message: (props) =>
+          `You can only select up to 5 interests, but got ${props.value.length}.`,
+      },
     },
     lifestyle: {
       drinking: {
         type: String,
-        enum: ["Never", "Rarely", "Socially", "Regular", "Prefer Not to Say"],
       },
       smoking: {
         type: String,
-        enum: [
-          "Never",
-          "Occasionally",
-          "Regularly",
-          "Trying to Quit",
-          "Prefer Not to Say",
-        ],
       },
       pets: {
         type: String,
-        enum: [
-          "Have Pets",
-          "Love Pets",
-          "Allergic to Pets",
-          "No Pets",
-          "Prefer Not to Say",
-        ],
       },
     },
-    work: {
-      title: { type: String },
-      company: { type: String },
-    },
+    work: String,
     institution: String,
-    maritalStatus: {
-      type: String,
-      enum: [
-        "Single",
-        "Divorced",
-        "Separated",
-        "Widowed",
-        "Married",
-        "Prefer Not to Say",
-      ],
-    },
-    religion: {
-      type: String,
-      enum: [
-        "Christianity",
-        "Islam",
-        "Hinduism",
-        "Buddhism",
-        "Judaism",
-        "Sikhism",
-        "Atheism",
-        "Agnostic",
-        "Spiritual",
-        "Other",
-        "Prefer Not to Say",
-      ],
-    },
-    homeTown: { type: String },
+    maritalStatus: String,
+    religion: String,
+    hometown: String,
     languages: [
       {
         type: String,
       },
     ],
-    personalityType: {
-      type: String,
-      enum: [
-        "INTJ",
-        "INTP",
-        "ENTJ",
-        "ENTP",
-        "INFJ",
-        "INFP",
-        "ENFJ",
-        "ENFP",
-        "ISTJ",
-        "ISFJ",
-        "ESTJ",
-        "ESFJ",
-        "ISTP",
-        "ISFP",
-        "ESTP",
-        "ESFP",
-        "Not Sure",
-      ],
-    },
-    profilePicture: { type: String }, // URL to the profile picture
-    web3Wallet: [
-      {
-        type: String,
-        sparse: true, // Allows null values without breaking uniqueness constraint
-      },
-    ],
+    personalityType: String,
     isActive: { type: Boolean, default: false },
     isMatching: { type: Boolean, default: false },
     matchmakingTimestamp: { type: Date, sparse: true, default: null },
     socketId: { type: String, unique: true, sparse: true },
-    matchchedUserId: {
+    matchedUserId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       sparse: true,
@@ -213,7 +97,6 @@ const userSchema = new mongoose.Schema(
       default: null,
     },
     lastActive: { type: Date, default: Date.now },
-    maxSlots: { type: Number, default: 1 },
     location: {
       type: {
         type: String,
@@ -228,14 +111,27 @@ const userSchema = new mongoose.Schema(
         default: "",
       },
     },
-    googleId: { type: String, unique: true, sparse: true },
-    googleEmail: String,
+    web3Wallet: [
+      {
+        type: String,
+        sparse: true, // Allows null values without breaking uniqueness constraint
+      },
+    ],
+    dailyConversations: {
+      type: Number,
+      default: 10,
+    },
+    lastConversationReset: {
+      type: Date,
+      default: Date.now,
+    },
     fieldVisibility: {
       type: Object,
       default: {
         nickname: "public",
         realName: "public",
-        age: "public",
+        bloodGroup: "public",
+        dob: "public",
         gender: "public",
         height: "public",
         bio: "public",
@@ -260,14 +156,6 @@ const userSchema = new mongoose.Schema(
         message:
           "Invalid visibility value. Must be one of: public, unlocked, private",
       },
-    },
-    dailyConversations: {
-      type: Number,
-      default: 10,
-    },
-    lastConversationReset: {
-      type: Date,
-      default: Date.now,
     },
   },
   {
@@ -388,22 +276,5 @@ userSchema.methods.toJSON = function (isUnlocked = false) {
 
   return visibleObj;
 };
-
-userSchema.pre("validate", function (next) {
-  if (
-    this.location &&
-    (!Array.isArray(this.location.coordinates) ||
-      this.location.coordinates.length !== 2)
-  ) {
-    this.location = undefined;
-  }
-  next();
-});
-
-// 🧠 Add partial 2dsphere index (prevents geo errors for incomplete/null location)
-userSchema.index(
-  { location: "2dsphere" },
-  { partialFilterExpression: { "location.coordinates": { $type: "array" } } }
-);
 
 export default mongoose.model("User", userSchema);

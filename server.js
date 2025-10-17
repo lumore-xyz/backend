@@ -4,16 +4,14 @@ import "dotenv/config";
 import express from "express";
 import helmet from "helmet";
 import { createServer } from "http";
-import passport from "passport";
 import swaggerUi from "swagger-ui-express";
 import connectDB from "./config/db.js";
-import "./config/passport.js";
 import { specs } from "./config/swagger.js";
 import { errorHandler, notFound } from "./middleware/errorMiddleware.js";
 import authRoutes from "./routes/authRoutes.js";
+import messagesRoutes from "./routes/messagesRoutes.js";
 import profileRoutes from "./routes/profileRoutes.js";
 import slotRoutes from "./routes/slotRoutes.js";
-import messagesRoutes from "./routes/messagesRoutes.js";
 import { initializeCronJobs } from "./services/cronService.js";
 import socketService from "./services/socketService.js";
 
@@ -28,9 +26,6 @@ socketService.initialize(httpServer);
 
 // Initialize cron jobs
 initializeCronJobs();
-
-// Passport initialization
-app.use(passport.initialize());
 
 // Middleware
 app.use(

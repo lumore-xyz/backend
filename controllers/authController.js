@@ -1,12 +1,24 @@
+import { OAuth2Client } from "google-auth-library";
 import jwt from "jsonwebtoken";
 import Slot from "../models/Slot.js";
 import User from "../models/User.js";
 
-// Generate JWT Token
+const client = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  "postmessage"
+);
+
+// Generate JWT Token (id = userId)
 const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, {
-    expiresIn: "30d",
+  const accessToken = jwt.sign({ id }, process.env.ACCESS_TOKEN_SECRET, {
+    expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
   });
+  const refreshToken = jwt.sign({ id }, process.env.REFRESH_TOKEN_SECRET, {
+    expiresIn: process.env.REFRESH_TOKEN_EXPIRY,
+  });
+
+  return { accessToken, refreshToken };
 };
 
 // Signup user
@@ -55,32 +67,22 @@ export const login = async (req, res) => {
   const { identifier, password } = req.body;
 
   try {
-    console.log("Login attempt for identifier:", identifier);
-
     const user = await User.findOne({
-      $or: [
-        { email: identifier },
-        { username: identifier },
-        { phoneNumber: identifier },
-      ],
-    }).select("+password"); // Ensure password is retrieved
+      $or: [{ email: identifier }, { username: identifier }],
+    });
 
     if (!user) {
-      console.log("No user found with identifier:", identifier);
       return res.status(401).json({ message: "Invalid credentials" });
     }
+    const isMatched = await user.comparePassword(password);
 
-    console.log("User found, comparing passwords");
-    const isMatch = await user.comparePassword(password);
-    console.log("Password match result:", isMatch);
-
-    if (isMatch) {
+    if (isMatched) {
       await user.updateLastActive();
-      res.json({
-        _id: user._id,
-        username: user.username,
-        email: user.email,
-        token: generateToken(user._id),
+      const { accessToken, refreshToken } = generateToken(user?._id);
+      res.status(200).json({
+        user,
+        accessToken,
+        refreshToken,
       });
     } else {
       res.status(401).json({ message: "Invalid credentials" });
@@ -91,49 +93,140 @@ export const login = async (req, res) => {
   }
 };
 
-// Google Login / Create User
+// Google Login / Create User // app-focused
 export const googleLogin = async (req, res) => {
+  const { id_token } = req.body;
   try {
-    // Extract user from Passport's req.user
-    let { googleId, email, username } = req.user;
-    // const uniqueUsername = await generateUniqueUsername(username);
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-    let setPassword = false;
+    const tickit = await client.verifyIdToken({
+      idToken: id_token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = tickit.getPayload();
+    const { email, sub: googleId, name, picture, email_verified } = payload;
+    if (!email_verified) {
+      return res.status(400).json("email not verified by google");
+    }
+    const uniqueUsername = await generateUniqueUsername(name);
+    let isNewUser = false;
     let user = await User.findOne({ googleId });
 
     if (!user) {
       const existingUser = await User.findOne({ email });
       if (existingUser) {
         existingUser.googleId = googleId;
+        existingUser.emailVerified = email_verified;
         await existingUser.save();
         user = existingUser;
       } else {
-        if (!location || !Array.isArray(location.coordinates)) {
-          delete userData.location;
-        }
+        // if (!location || !Array.isArray(location.coordinates)) {
+        //   console.log("location");
+        //   delete userData.location;
+        // }
         user = await User.create({
           googleId,
           email,
-          username,
-          emailVerified: true,
+          username: uniqueUsername,
+          emailVerified: email_verified,
+          profilePicture: picture,
         });
+        console.log("created user...");
+        isNewUser = true;
       }
     }
-    // Ensure user is defined before checking password
-    if (!user?.password) {
-      setPassword = true;
-    }
     await user.updateLastActive();
-
-    res.redirect(
-      `${frontendUrl}/auth/callback?_id=${user._id}&token=${generateToken(
-        user._id
-      )}&email=${req.user.email}&username=${
-        req.user.username
-      }&setPassword=${setPassword}`
-    );
+    const { accessToken, refreshToken } = generateToken(user?._id);
+    console.log({ accessToken, refreshToken });
+    res.status(200).json({
+      isNewUser,
+      user,
+      accessToken,
+      refreshToken,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+export const googleLoginWeb = async (req, res) => {
+  const { code } = req.body;
+  try {
+    const { tokens } = await client.getToken(code); // exchange code for tokens
+    const tickit = await client.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = await tickit.getPayload();
+
+    const { email, sub: googleId, name, picture, email_verified } = payload;
+    if (!email_verified) {
+      return res.status(400).json("email not verified by google");
+    }
+    const uniqueUsername = await generateUniqueUsername(name);
+    let isNewUser = false;
+    let user = await User.findOne({ googleId });
+
+    if (!user) {
+      const existingUser = await User.findOne({ email });
+      if (existingUser) {
+        existingUser.googleId = googleId;
+        existingUser.emailVerified = email_verified;
+        await existingUser.save();
+        user = existingUser;
+      } else {
+        // if (!location || !Array.isArray(location.coordinates)) {
+        //   console.log("location");
+        //   delete userData.location;
+        // }
+        user = await User.create({
+          googleId,
+          email,
+          username: uniqueUsername,
+          emailVerified: email_verified,
+          profilePicture: picture,
+        });
+        isNewUser = true;
+      }
+    }
+    await user.updateLastActive();
+    const { accessToken, refreshToken } = generateToken(user?._id);
+
+    res.status(200).json({
+      isNewUser,
+      user,
+      accessToken,
+      refreshToken,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const refreshToken = async (req, res) => {
+  const { refreshToken: reqRefreshToken } = req.body;
+  if (!refreshToken) {
+    return res.status(401).json({
+      error: "No refresh token provided",
+    });
+  }
+  try {
+    const decoded = jwt.verify(
+      reqRefreshToken,
+      process.env.REFRESH_TOKEN_SECRET
+    );
+    const user = await User.findById(decoded.id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    const newAccessToken = jwt.sign(
+      { id: user._id },
+      process.env.ACCESS_TOKEN_SECRET,
+      {
+        expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
+      }
+    );
+    res.status(200).json({ accessToken: newAccessToken });
+  } catch (error) {
+    console.error("Refresh token error", error);
+    res.status(403).json({ error: "Invalid or expired refresh token" });
   }
 };
 

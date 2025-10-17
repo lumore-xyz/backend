@@ -1,15 +1,14 @@
 // /controllers/profileController.js
-import mongoose from "mongoose";
-import cloudinary from "../utils/cloudinary.js";
 import RejectedProfile from "../models/RejectedProfile.js";
 import Slot from "../models/Slot.js";
 import UnlockHistory from "../models/UnlockHistory.js";
 import User from "../models/User.js";
 import UserPhotos from "../models/UserPhotos.js";
 import UserPreference from "../models/UserPreference.js";
+import cloudinary from "../utils/cloudinary.js";
 
 // Create or Update Profile
-export const createProfile = async (req, res) => {
+export const createUpdateProfile = async (req, res) => {
   try {
     const userId = req.user.id;
     const allowedFields = [
@@ -22,8 +21,6 @@ export const createProfile = async (req, res) => {
       "height",
       "bio",
       "interests",
-      "interests.professional",
-      "interests.hobbies",
       "diet",
       "zodiacSign",
       "lifestyle",
@@ -31,8 +28,6 @@ export const createProfile = async (req, res) => {
       "lifestyle.smoking",
       "lifestyle.pets",
       "work",
-      "work.title",
-      "work.company",
       "institution",
       "maritalStatus",
       "religion",
@@ -94,8 +89,8 @@ export const updateProfilePicture = async (req, res) => {
         folder: "profile_pictures",
         format: "webp", // force WebP output
         transformation: [
-          { fetch_format: "auto" },        // best format (webp/avif/etc.)
-          { quality: "auto" },             // optimized quality
+          { fetch_format: "auto" }, // best format (webp/avif/etc.)
+          { quality: "auto" }, // optimized quality
           { crop: "limit", width: 600, height: 600 }, // optional size limit
         ],
       },
@@ -138,10 +133,8 @@ export const updateUserPreference = async (req, res) => {
       relationshipType,
       preferredLanguages,
       zodiacPreference,
-      education,
       personalityTypePreference,
       dietPreference,
-      locationPreferences,
     } = req.body;
 
     let preferences = await UserPreference.findOne({ user: userId });
@@ -160,19 +153,36 @@ export const updateUserPreference = async (req, res) => {
     if (relationshipType) preferences.relationshipType = relationshipType;
     if (preferredLanguages) preferences.preferredLanguages = preferredLanguages;
     if (zodiacPreference) preferences.zodiacPreference = zodiacPreference;
-    if (education) preferences.education = education;
     if (personalityTypePreference)
       preferences.personalityTypePreference = personalityTypePreference;
     if (dietPreference) preferences.dietPreference = dietPreference;
-    if (locationPreferences)
-      preferences.locationPreferences = locationPreferences;
 
     await preferences.save();
-    // await User.findById(userId).updateLastActive();
 
     res
       .status(200)
       .json({ message: "Preferences updated successfully", preferences });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// get user prefrence
+export const getUserPrefrence = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await User.findById(userId).lean().select("-password");
+    if (!user) {
+      throw new Error("User does not exist");
+    }
+    let preferences = await UserPreference.findOne({ user: userId });
+    if (!preferences) {
+      // Create new preferences if not found
+      preferences = new UserPreference({ user: userId });
+      await preferences.save();
+    }
+
+    res.status(200).json(preferences);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -196,6 +206,7 @@ export const getProfile = async (req, res) => {
 
     // Fetch viewer's profile to access location
     const viewer = await User.findById(viewerId).lean().select("location");
+    console.log("location viewer ", viewer);
     if (!viewer || !viewer.location || !user.location) {
       return res.status(400).json({ message: "Location data missing" });
     }
@@ -229,12 +240,6 @@ export const getProfile = async (req, res) => {
       },
     });
 
-    // Fetch user preferences if the viewer is the profile owner
-    let preferences = null;
-    if (userId === viewerId) {
-      preferences = await UserPreference.findOne({ user: userId }).lean();
-    }
-
     // Prepare profile data
     let profileData = {
       _id: user._id,
@@ -249,7 +254,6 @@ export const getProfile = async (req, res) => {
         ...user,
         photos,
         distance,
-        preferences,
         isViewerUnlockedByUser: true,
         isViewerUnlockedUser: true,
       };
@@ -295,8 +299,8 @@ export const calculateDistance = (location1, location2) => {
   const a =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1 * (Math.PI / 180)) *
-    Math.cos(lat2 * (Math.PI / 180)) *
-    Math.sin(dLon / 2) ** 2;
+      Math.cos(lat2 * (Math.PI / 180)) *
+      Math.sin(dLon / 2) ** 2;
   return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 };
 

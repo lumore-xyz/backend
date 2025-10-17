@@ -14,11 +14,13 @@ export const protect = async (req, res, next) => {
 
   if (!token) {
     console.warn("[authMiddleware] No token provided");
-    return res.status(401).json({ message: "Not authorized, no token" });
+    return res
+      .status(401)
+      .json({ message: "Not authorized, no token provided" });
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
     console.log("[authMiddleware] Decoded:", decoded);
     const user = await User.findById(decoded.id).select("-password");
 

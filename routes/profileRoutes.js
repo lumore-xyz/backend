@@ -1,16 +1,17 @@
 // /routes/profileRoutes.js
 import express from "express";
 import {
-  createProfile,
+  createUpdateProfile,
   deleteAccount,
   getProfile,
+  getUserPrefrence,
   updateFieldVisibility,
   updateProfilePicture,
   updateUserPreference,
 } from "../controllers/profileController.js";
 import { protect } from "../middleware/authMiddleware.js";
-import { userControl } from "../middleware/userActionMiddleware.js";
 import { upload } from "../middleware/upload.js";
+import { userControl } from "../middleware/userActionMiddleware.js";
 
 const router = express.Router();
 
@@ -161,8 +162,8 @@ const router = express.Router();
  */
 router
   .route("/:userId")
-  .post(protect, userControl, createProfile)
-  .patch(protect, userControl, createProfile)
+  .post(protect, userControl, createUpdateProfile)
+  .patch(protect, userControl, createUpdateProfile)
   .get(protect, getProfile)
   .delete(protect, userControl, deleteAccount);
 
@@ -296,15 +297,13 @@ router.patch("/:userId/visibility", protect, updateFieldVisibility);
  *       404:
  *         description: User not found
  */
+router
+  .route("/:userId/preferences")
+  .get(protect, getUserPrefrence)
+  .patch(protect, userControl, updateUserPreference);
+
 router.patch(
-  "/:userId/preferences",
-  protect,
-  userControl,
-  updateUserPreference
-);
-
-
-router.patch("/:userId/update-profile-picture",
+  "/:userId/update-profile-picture",
   protect,
   upload.single("profilePic"),
   updateProfilePicture
