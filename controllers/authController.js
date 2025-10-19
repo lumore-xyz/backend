@@ -148,14 +148,16 @@ export const googleLogin = async (req, res) => {
 };
 export const googleLoginWeb = async (req, res) => {
   const { code } = req.body;
+  console.log("code", code);
   try {
     const { tokens } = await client.getToken(code); // exchange code for tokens
+    console.log("tokens", tokens);
     const tickit = await client.verifyIdToken({
       idToken: tokens.id_token,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
     const payload = await tickit.getPayload();
-
+    console.log("payload", payload);
     const { email, sub: googleId, name, picture, email_verified } = payload;
     if (!email_verified) {
       return res.status(400).json("email not verified by google");
@@ -163,19 +165,23 @@ export const googleLoginWeb = async (req, res) => {
     const uniqueUsername = await generateUniqueUsername(name);
     let isNewUser = false;
     let user = await User.findOne({ googleId });
-
+    console.log("user 1", user);
     if (!user) {
       const existingUser = await User.findOne({ email });
       if (existingUser) {
+        console.log("existingUser", existingUser);
         existingUser.googleId = googleId;
         existingUser.emailVerified = email_verified;
         await existingUser.save();
         user = existingUser;
       } else {
-        // if (!location || !Array.isArray(location.coordinates)) {
-        //   console.log("location");
-        //   delete userData.location;
-        // }
+        console.log("creating new user", {
+          googleId,
+          email,
+          username: uniqueUsername,
+          emailVerified: email_verified,
+          profilePicture: picture,
+        });
         user = await User.create({
           googleId,
           email,
@@ -183,12 +189,15 @@ export const googleLoginWeb = async (req, res) => {
           emailVerified: email_verified,
           profilePicture: picture,
         });
+        console.log("user created");
         isNewUser = true;
       }
     }
+    console.log("updating last active");
     await user.updateLastActive();
+    console.log("generating tokens");
     const { accessToken, refreshToken } = generateToken(user?._id);
-
+    console.log("tokens :", { accessToken, refreshToken });
     res.status(200).json({
       isNewUser,
       user,

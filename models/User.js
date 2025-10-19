@@ -105,6 +105,7 @@ const userSchema = new mongoose.Schema(
       },
       coordinates: {
         type: [Number], // [longitude, latitude]
+        default: [0, 0], // fallback to valid Point
       },
       formattedAddress: {
         type: String,
@@ -182,17 +183,17 @@ userSchema.virtual("age").get(function () {
 });
 
 // Password Hashing (Only if Modified)
-userSchema.pre("save", async function (next) {
-  if (!this.isModified("password") || !this.password) return next();
+// userSchema.pre("save", async function (next) {
+//   if (!this.isModified("password") || !this.password) return next();
 
-  try {
-    const saltRounds = 12;
-    this.password = await bcrypt.hash(this.password, saltRounds);
-    next();
-  } catch (error) {
-    next(error);
-  }
-});
+//   try {
+//     const saltRounds = 12;
+//     this.password = await bcrypt.hash(this.password, saltRounds);
+//     next();
+//   } catch (error) {
+//     next(error);
+//   }
+// });
 
 userSchema.pre("save", function (next) {
   if (this.username) {

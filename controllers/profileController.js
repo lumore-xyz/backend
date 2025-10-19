@@ -131,7 +131,7 @@ export const updateUserPreference = async (req, res) => {
       goal,
       interests,
       relationshipType,
-      preferredLanguages,
+      languages,
       zodiacPreference,
       personalityTypePreference,
       dietPreference,
@@ -151,7 +151,7 @@ export const updateUserPreference = async (req, res) => {
     if (goal) preferences.goal = goal;
     if (interests) preferences.interests = interests;
     if (relationshipType) preferences.relationshipType = relationshipType;
-    if (preferredLanguages) preferences.preferredLanguages = preferredLanguages;
+    if (languages) preferences.languages = languages;
     if (zodiacPreference) preferences.zodiacPreference = zodiacPreference;
     if (personalityTypePreference)
       preferences.personalityTypePreference = personalityTypePreference;

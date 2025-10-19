@@ -35,7 +35,7 @@ const userPreferenceSchema = new mongoose.Schema({
   relationshipType: {
     type: String,
   },
-  preferredLanguages: {
+  languages: {
     type: [String],
     default: [],
   },
