@@ -27,7 +27,6 @@ socketService.initialize(httpServer);
 // Initialize cron jobs
 initializeCronJobs();
 
-// Middleware
 app.use(
   helmet({
     crossOriginResourcePolicy: false,
