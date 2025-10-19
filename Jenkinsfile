@@ -2,6 +2,7 @@ pipeline {
     agent any
 
     environment {
+        APP_DIR = "/opt/backend"
         PM2_ECOSYSTEM = "ecosystem.config.cjs"
     }
 
@@ -9,22 +10,28 @@ pipeline {
         stage('Pull Latest Code') {
             steps {
                 echo "Pulling latest code from GitHub..."
-                sh 'git pull origin main'
+                dir("${APP_DIR}") {
+                    sh 'git pull origin main'
+                }
             }
         }
 
         stage('Install Dependencies') {
             steps {
                 echo "Installing npm dependencies..."
-                sh 'npm install'
+                dir("${APP_DIR}") {
+                    sh 'npm install'
+                }
             }
         }
 
         stage('Restart Backend') {
             steps {
                 echo "Restarting backend with PM2..."
-                sh "pm2 restart ${PM2_ECOSYSTEM} || pm2 start ${PM2_ECOSYSTEM}"
-                sh "pm2 save"
+                dir("${APP_DIR}") {
+                    sh "pm2 restart ${PM2_ECOSYSTEM} || pm2 start ${PM2_ECOSYSTEM}"
+                    sh "pm2 save"
+                }
             }
         }
     }
