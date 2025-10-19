@@ -18,11 +18,13 @@ const authenticateSocket = async (socket, next) => {
   try {
     const token = socket.handshake.auth.token;
 
+    console.log("got token", token);
+
     if (!token) {
       return next(new Error("Authentication error: No token provided"));
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
     const user = await User.findById(decoded.id).select("-password").lean(); // Use lean() to get a plain JavaScript object
 
     if (!user) {
