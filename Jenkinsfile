@@ -9,8 +9,11 @@ pipeline {
     stages {
         stage('Pull Latest Code') {
             steps {
-                echo "Pulling latest code from GitHub..."
+                echo "Cleaning workspace and pulling latest code from GitHub..."
                 dir("${APP_DIR}") {
+                    // Remove any local changes or untracked files
+                    sh 'git reset --hard'
+                    sh 'git clean -fd'
                     sh 'git pull origin main'
                 }
             }
