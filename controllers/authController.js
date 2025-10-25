@@ -226,7 +226,7 @@ export const tma_login = async (req, res) => {
     }
     await user.updateLastActive();
     console.log("generating tokens");
-    const { accessToken, refreshToken } = generateToken(user?._id);
+    const { accessToken, refreshToken } = generateToken(_user?._id);
     res.status(200).json({
       isNewUser,
       user: _user,
