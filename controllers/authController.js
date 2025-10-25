@@ -209,7 +209,7 @@ export const tma_login = async (req, res) => {
   try {
     // const init_data = parse(initData);
     const { user } = initData;
-
+    console.log("===> user", user);
     // validate(initData, bot_token);
     const uniqueUsername = await generateUniqueUsername(user?.username);
     let isNewUser = false;
@@ -234,9 +234,6 @@ export const tma_login = async (req, res) => {
       refreshToken,
     });
   } catch (error) {
-    if (SignatureInvalidError.is(error)) {
-      res.status(403).json({ message: error.message });
-    }
     res.status(500).json({ message: error.message });
   }
 };
