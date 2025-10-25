@@ -1,4 +1,4 @@
-import { parse, validate } from "@tma.js/init-data-node";
+// import { parse, validate } from "@tma.js/init-data-node";
 // new push
 import { OAuth2Client } from "google-auth-library";
 import jwt from "jsonwebtoken";
@@ -205,12 +205,12 @@ export const googleLoginWeb = async (req, res) => {
 };
 export const tma_login = async (req, res) => {
   const { initData } = req.body;
-  const bot_token = process.env.TMA_BOT_TOKEN;
+  // const bot_token = process.env.TMA_BOT_TOKEN;
   try {
-    const init_data = parse(initData);
-    const { user } = init_data;
+    // const init_data = parse(initData);
+    const { user } = initData;
 
-    validate(initData, bot_token);
+    // validate(initData, bot_token);
     const uniqueUsername = await generateUniqueUsername(user?.username);
     let isNewUser = false;
 
