@@ -224,6 +224,15 @@ export const tma_login = async (req, res) => {
       console.log("user created through tma");
       isNewUser = true;
     }
+    await user.updateLastActive();
+    console.log("generating tokens");
+    const { accessToken, refreshToken } = generateToken(user?._id);
+    res.status(200).json({
+      isNewUser,
+      user: _user,
+      accessToken,
+      refreshToken,
+    });
   } catch (error) {
     if (SignatureInvalidError.is(error)) {
       res.status(403).json({ message: error.message });
