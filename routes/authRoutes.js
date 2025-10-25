@@ -9,6 +9,7 @@ import {
   refreshToken,
   setPassword,
   signup,
+  tma_login,
 } from "../controllers/authController.js";
 import { protect } from "../middleware/authMiddleware.js";
 
@@ -97,6 +98,7 @@ router.post("/login", loginLimiter, login);
 
 router.post("/google-signin", googleLogin);
 router.post("/google-signin-web", googleLoginWeb);
+router.post("/tma-login", tma_login);
 
 router.get("/refresh-token", refreshToken);
 

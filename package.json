@@ -13,6 +13,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@tma.js/init-data-node": "^2.0.3",
     "aws-sdk": "^2.1692.0",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^2.6.1",

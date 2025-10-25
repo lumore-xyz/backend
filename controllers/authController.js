@@ -1,3 +1,4 @@
+import { parse, validate } from "@tma.js/init-data-node";
 import { OAuth2Client } from "google-auth-library";
 import jwt from "jsonwebtoken";
 import Slot from "../models/Slot.js";
@@ -175,13 +176,6 @@ export const googleLoginWeb = async (req, res) => {
         await existingUser.save();
         user = existingUser;
       } else {
-        console.log("creating new user", {
-          googleId,
-          email,
-          username: uniqueUsername,
-          emailVerified: email_verified,
-          profilePicture: picture,
-        });
         user = await User.create({
           googleId,
           email,
@@ -205,6 +199,34 @@ export const googleLoginWeb = async (req, res) => {
       refreshToken,
     });
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+export const tma_login = async (req, res) => {
+  const { initData } = req.body;
+  const bot_token = process.env.TMA_BOT_TOKEN;
+  try {
+    const init_data = parse(initData);
+    const { user } = init_data;
+
+    validate(initData, bot_token);
+    const uniqueUsername = await generateUniqueUsername(user?.username);
+    let isNewUser = false;
+
+    let _user = await User.findOne({ telegramId: user?.id });
+    if (!_user) {
+      _user = await User.create({
+        telegramId: user?.id,
+        username: uniqueUsername,
+        profilePicture: user?.photo_url,
+      });
+      console.log("user created through tma");
+      isNewUser = true;
+    }
+  } catch (error) {
+    if (SignatureInvalidError.is(error)) {
+      res.status(403).json({ message: error.message });
+    }
     res.status(500).json({ message: error.message });
   }
 };

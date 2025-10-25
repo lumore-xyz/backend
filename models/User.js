@@ -5,6 +5,7 @@ import mongoose from "mongoose";
 const userSchema = new mongoose.Schema(
   {
     googleId: { type: String, unique: true, sparse: true },
+    telegramId: { type: String, unique: true, sparse: true },
     profilePicture: { type: String },
     nickname: String,
     realName: String,
@@ -15,7 +16,6 @@ const userSchema = new mongoose.Schema(
       unique: true,
       trim: true,
       minlength: 3,
-      maxlength: 25,
     },
     email: {
       type: String,
