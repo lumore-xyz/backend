@@ -75,6 +75,107 @@ export const createUpdateProfile = async (req, res) => {
   }
 };
 
+/**
+ * Update user location
+ * POST /api/location
+ */
+export const updateUserLocation = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { latitude, longitude, formattedAddress } = req.body;
+
+    // Validate input
+    if (
+      !userId ||
+      typeof latitude !== "number" ||
+      typeof longitude !== "number"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "userId, latitude, and longitude are required",
+      });
+    }
+
+    // Find user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Update location using the model method
+    await user.updateLocation(latitude, longitude, formattedAddress);
+
+    res.json({
+      success: true,
+      message: "Location updated",
+      data: {
+        location: user.location,
+        lastLocationUpdate: user.lastLocationUpdate,
+      },
+    });
+  } catch (error) {
+    console.error("[Location] Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+export const findNearbyUsers = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    let preferences = await UserPreference.findOne({ user: userId });
+    const maxDistance = (preferences?.distance || 10) * 1000;
+
+    const user = await User.findById(userId);
+    if (!user || !user.hasValidLocation()) {
+      return res.status(400).json({
+        success: false,
+        message: "User not found or location not set",
+      });
+    }
+
+    const [lng, lat] = user.location.coordinates;
+
+    // Use the static method for finding nearby users
+    const nearbyUsers = await User.findNearby(
+      lng,
+      lat,
+      maxDistance,
+      {
+        // isActive: true
+      }, // additional filters
+      userId
+    );
+
+    res.json({
+      success: true,
+      data: {
+        total: nearbyUsers.length,
+        maxDistance: maxDistance,
+        users: nearbyUsers.map((u) => ({
+          id: u._id,
+          username: u.username,
+          gender: u.gender,
+          age: u.age,
+          distance: Math.round(u.distance),
+          bio: u.bio,
+        })),
+      },
+    });
+  } catch (error) {
+    console.error("[Nearby] Error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 export const updateProfilePicture = async (req, res) => {
   try {
     const userId = req.user?.id;
@@ -206,7 +307,6 @@ export const getProfile = async (req, res) => {
 
     // Fetch viewer's profile to access location
     const viewer = await User.findById(viewerId).lean().select("location");
-    console.log("location viewer ", viewer);
     if (!viewer || !viewer.location || !user.location) {
       return res.status(400).json({ message: "Location data missing" });
     }
@@ -228,17 +328,6 @@ export const getProfile = async (req, res) => {
         user: viewerId, // The profile being viewed (from params)
         unlockedUser: userId, // The viewer (from req.user.id)
       })) > 0;
-
-    console.log("Checking unlock status:", {
-      viewerId,
-      userId,
-      isViewerUnlockedByUser,
-      isViewerUnlockedUser,
-      query: {
-        user: userId,
-        unlockedUser: viewerId,
-      },
-    });
 
     // Prepare profile data
     let profileData = {

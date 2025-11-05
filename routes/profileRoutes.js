@@ -3,10 +3,12 @@ import express from "express";
 import {
   createUpdateProfile,
   deleteAccount,
+  findNearbyUsers,
   getProfile,
   getUserPrefrence,
   updateFieldVisibility,
   updateProfilePicture,
+  updateUserLocation,
   updateUserPreference,
 } from "../controllers/profileController.js";
 import { protect } from "../middleware/authMiddleware.js";
@@ -166,6 +168,14 @@ router
   .patch(protect, userControl, createUpdateProfile)
   .get(protect, getProfile)
   .delete(protect, userControl, deleteAccount);
+
+router.post(
+  "/:userId/update-location",
+  protect,
+  userControl,
+  updateUserLocation
+);
+router.get("/:userId/nearby", findNearbyUsers);
 
 /**
  * @swagger

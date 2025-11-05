@@ -131,13 +131,11 @@ export const googleLogin = async (req, res) => {
           emailVerified: email_verified,
           profilePicture: picture,
         });
-        console.log("created user...");
         isNewUser = true;
       }
     }
     await user.updateLastActive();
     const { accessToken, refreshToken } = generateToken(user?._id);
-    console.log({ accessToken, refreshToken });
     res.status(200).json({
       isNewUser,
       user,
@@ -150,16 +148,13 @@ export const googleLogin = async (req, res) => {
 };
 export const googleLoginWeb = async (req, res) => {
   const { code } = req.body;
-  console.log("code", code);
   try {
     const { tokens } = await client.getToken(code); // exchange code for tokens
-    console.log("tokens", tokens);
     const tickit = await client.verifyIdToken({
       idToken: tokens.id_token,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
     const payload = await tickit.getPayload();
-    console.log("payload", payload);
     const { email, sub: googleId, name, picture, email_verified } = payload;
     if (!email_verified) {
       return res.status(400).json("email not verified by google");
@@ -167,11 +162,9 @@ export const googleLoginWeb = async (req, res) => {
     const uniqueUsername = await generateUniqueUsername(name);
     let isNewUser = false;
     let user = await User.findOne({ googleId });
-    console.log("user 1", user);
     if (!user) {
       const existingUser = await User.findOne({ email });
       if (existingUser) {
-        console.log("existingUser", existingUser);
         existingUser.googleId = googleId;
         existingUser.emailVerified = email_verified;
         await existingUser.save();
@@ -184,15 +177,11 @@ export const googleLoginWeb = async (req, res) => {
           emailVerified: email_verified,
           profilePicture: picture,
         });
-        console.log("user created");
         isNewUser = true;
       }
     }
-    console.log("updating last active");
     await user.updateLastActive();
-    console.log("generating tokens");
     const { accessToken, refreshToken } = generateToken(user?._id);
-    console.log("tokens :", { accessToken, refreshToken });
     res.status(200).json({
       isNewUser,
       user,
@@ -209,7 +198,6 @@ export const tma_login = async (req, res) => {
   try {
     // const init_data = parse(initData);
     const { user } = initData;
-    console.log("===> user", user);
     // validate(initData, bot_token);
     const uniqueUsername = await generateUniqueUsername(user?.username);
     let isNewUser = false;
@@ -221,11 +209,9 @@ export const tma_login = async (req, res) => {
         username: uniqueUsername,
         profilePicture: user?.photo_url,
       });
-      console.log("user created through tma");
       isNewUser = true;
     }
     await _user.updateLastActive();
-    console.log("generating tokens");
     const { accessToken, refreshToken } = generateToken(_user?._id);
     res.status(200).json({
       isNewUser,

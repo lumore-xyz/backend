@@ -34,12 +34,6 @@ const findPotentialMatches = async (userId) => {
 
 const createMatch = async (userId1, userId2) => {
   try {
-    console.log(
-      "[createMatch] Creating match between users:",
-      userId1,
-      userId2
-    );
-
     // First verify both users exist and are available
     const [existingUser1, existingUser2] = await Promise.all([
       User.findById(userId1),
@@ -59,7 +53,7 @@ const createMatch = async (userId1, userId2) => {
           isActive: true,
           isMatching: false,
           matchmakingTimestamp: null,
-          matchchedUserId: userId2,
+          matchedUserId: userId2,
           lastActive: new Date(),
         },
         { new: true }
@@ -73,7 +67,7 @@ const createMatch = async (userId1, userId2) => {
           isActive: true,
           isMatching: false,
           matchmakingTimestamp: null,
-          matchchedUserId: userId1,
+          matchedUserId: userId1,
           lastActive: new Date(),
         },
         { new: true }

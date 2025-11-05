@@ -37,8 +37,6 @@ const authenticateSocket = async (socket, next) => {
       isActive: user.isActive,
       lastActive: user.lastActive,
     };
-
-    console.log("[authenticateSocket] Authenticated user:", socket.user);
     next();
   } catch (error) {
     console.error("Socket Authentication Error:", error);
@@ -65,7 +63,6 @@ const initialize = (server) => {
   chatNamespace.use(authenticateSocket);
 
   chatNamespace.on("connection", (socket) => {
-    console.log("New client connected:", socket.id);
     handleConnection(socket);
   });
 };
@@ -88,21 +85,26 @@ const initialize = (server) => {
  * @returns The best match object containing the user data, preferences, and socket (if available), or null if none found.
  */
 const findBestMatch = async (userId, userPreferences) => {
-  const currentUser = await User.findById(userId).lean();
+  const currentUser = await User.findById(userId);
+  const maxDistance = (userPreferences?.distance || 10) * 1000;
   if (!currentUser?.location?.coordinates) {
-    console.log(`[findBestMatch] User ${userId} has no location data`);
     return null;
   }
 
-  // Get all potential candidates that meet base filters
-  const candidates = await User.find({
-    isMatching: true,
-    isActive: true,
-    _id: { $ne: userId },
-    // gender:  // use current user prefered gender and check in candidates
-  }).lean();
+  const [lng, lat] = currentUser.location.coordinates;
 
-  console.log(`[findBestMatch] Found ${candidates.length} potential matches`);
+  // Get potential candidates
+  const candidates = await User.findNearby(
+    lng,
+    lat,
+    maxDistance,
+    {
+      isActive: true,
+      isMatching: true,
+      gender: userPreferences?.interestedIn,
+    }, // additional filters
+    userId
+  );
 
   let bestMatch = null;
   let bestScore = -1;
@@ -110,92 +112,97 @@ const findBestMatch = async (userId, userPreferences) => {
   for (const candidate of candidates) {
     if (!candidate?.location?.coordinates) continue;
 
-    const isCloseEnough = isWithinDistance(
-      currentUser.location,
-      candidate.location,
-      userPreferences?.distance || 10 * 1000 // default to 10km
-    );
-
-    console.log(
-      `[findBestMatch] Checking candidate ${candidate._id} - Close enough: ${isCloseEnough}`
-    );
-
-    if (!isCloseEnough) {
-      continue;
-    }
-
     const candidatePreferences = await UserPreference.findOne({
       user: candidate._id,
     }).lean();
 
-    // if (!candidatePreferences) continue;
+    if (
+      !checkMutualInterest(
+        userPreferences,
+        candidatePreferences,
+        currentUser,
+        candidate
+      )
+    ) {
+      continue;
+    }
 
     const score = calculateMatchScore(
       userPreferences,
       candidatePreferences,
       candidate
     );
-
     if (score > bestScore) {
       bestScore = score;
       bestMatch = {
         uid: candidate._id.toString(),
         user: candidate,
         preferences: candidatePreferences,
-        socket: candidate.socketId,
+        score: score,
       };
     }
-  }
-
-  if (bestMatch) {
-    console.log(
-      `[findBestMatch] Best match found for user ${userId} with score ${bestScore}`
-    );
-  } else {
-    console.log(
-      `[findBestMatch] No compatible matches found for user ${userId}`
-    );
   }
 
   return bestMatch;
 };
 
+/**
+ * Check if two users are mutually interested
+ */
+const checkMutualInterest = (userPrefs, candidatePrefs, user, candidate) => {
+  // Check if candidate is interested in user's gender
+  if (
+    candidatePrefs?.interestedIn &&
+    !candidatePrefs.interestedIn.includes(user.gender)
+  ) {
+    return false;
+  }
+
+  // Check age compatibility both ways
+  const userAge = getAge(user.dob);
+  const candidateAge = getAge(candidate.dob);
+
+  const userAgeMatch =
+    candidateAge >= Math.min(...(userPrefs?.ageRange || [])) &&
+    candidateAge <= Math.max(...(userPrefs?.ageRange || []));
+
+  const candidateAgeMatch =
+    userAge >= Math.min(...(candidatePrefs?.ageRange || [])) &&
+    userAge <= Math.max(...(candidatePrefs?.ageRange || []));
+  return userAgeMatch && candidateAgeMatch;
+};
+
 const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
   let score = 0;
 
-  // 1. Gender match
-  if (
-    userPrefs?.interestedIn &&
-    candidateUser?.gender &&
-    userPrefs?.interestedIn?.includes(candidateUser.gender)
-  ) {
+  // 1. Gender match (15 points)
+  if (userPrefs?.interestedIn?.includes(candidateUser.gender)) {
     score += 15;
   }
 
-  // 2. Age range match
+  // 2. Age range match (15 points)
   const age = getAge(candidateUser?.dob);
-  if (age >= userPrefs?.ageRange.min && age <= userPrefs?.ageRange.max) {
+  if (age >= userPrefs?.ageRange?.min && age <= userPrefs?.ageRange?.max) {
     score += 15;
   }
 
-  // 3. Goals match
+  // 3. Goals match (up to 30 points)
   const userGoals = [
     userPrefs?.goal?.primary,
     userPrefs?.goal?.secondary,
     userPrefs?.goal?.tertiary,
-  ]?.filter(Boolean);
+  ].filter(Boolean);
 
   const candidateGoals = [
     candidatePrefs?.goal?.primary,
     candidatePrefs?.goal?.secondary,
     candidatePrefs?.goal?.tertiary,
-  ]?.filter(Boolean);
+  ].filter(Boolean);
 
   const goalOverlap = userGoals.filter((goal) => candidateGoals.includes(goal));
+  score += goalOverlap.length * 10;
 
-  score += goalOverlap?.length * 10;
-
-  // 4. Interests match
+  // 4. Interests match (up to 15 points)
   const sharedHobbies = intersection(
     userPrefs?.interests?.hobbies || [],
     candidatePrefs?.interests?.hobbies || []
@@ -205,9 +212,9 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
     candidatePrefs?.interests?.professional || []
   );
 
-  score += Math.min(sharedHobbies.length + sharedProfessional.length, 10); // cap at 10 pts
+  score += Math.min((sharedHobbies.length + sharedProfessional.length) * 2, 15);
 
-  // 5. Diet match
+  // 5. Diet match (5 points)
   if (
     hasOverlap(userPrefs?.dietPreference, candidateUser?.diet) ||
     hasOverlap(userPrefs?.dietPreference, ["Any"])
@@ -215,7 +222,7 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
     score += 5;
   }
 
-  // 6. Zodiac match
+  // 6. Zodiac match (5 points)
   if (
     hasOverlap(userPrefs?.zodiacPreference, candidateUser.zodiacSign) ||
     hasOverlap(userPrefs?.zodiacPreference, ["Any"])
@@ -223,7 +230,7 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
     score += 5;
   }
 
-  // 7. Personality type match
+  // 7. Personality type match (5 points)
   if (
     hasOverlap(
       userPrefs?.personalityTypePreference,
@@ -234,7 +241,7 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
     score += 5;
   }
 
-  // 8. Language match
+  // 8. Language match (5 points)
   if (
     intersection(
       userPrefs?.preferredLanguages || [],
@@ -244,7 +251,7 @@ const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
     score += 5;
   }
 
-  // 9. Relationship type match
+  // 9. Relationship type match (10 points)
   if (
     userPrefs?.relationshipType &&
     candidatePrefs?.relationshipType &&
@@ -273,10 +280,16 @@ const createAndNotifyMatch = async (userId1, userId2) => {
 
     // Join both users to the match room
     socket1.join(matchId);
-    socket1.emit("matchFound", { matchId, matchedUser: matchedUser2?._id });
+    socket1.emit("matchFound", {
+      roomId: matchId,
+      matchedUser: matchedUser2?._id,
+    });
     if (socket2) {
       socket2.join(matchId);
-      socket2.emit("matchFound", { matchId, matchedUser: matchedUser1?._id });
+      socket2.emit("matchFound", {
+        roomId: matchId,
+        matchedUser: matchedUser1?._id,
+      });
     }
 
     // Notify both users
@@ -293,7 +306,6 @@ const createAndNotifyMatch = async (userId1, userId2) => {
 const handleConnection = (socket) => {
   // Store user connection
   const userId = socket.user._id.toString();
-  console.log("[handleConnection] New socket connection for user:", userId);
   userSockets.set(userId, socket);
 
   // Update user's active status and refresh socket.user object
@@ -316,18 +328,13 @@ const handleConnection = (socket) => {
           isActive: updatedUser.isActive,
           lastActive: updatedUser.lastActive,
         };
-        console.log("[handleConnection] Updated socket.user:", socket.user);
       }
       if (updatedUser?.activeMatchRoom) {
-        console.log("user?.activeMatchRoom", updatedUser?.activeMatchRoom);
         socket.join(updatedUser.activeMatchRoom);
-        socket.emit("matchFound", {
-          matchId: updatedUser?.activeMatchRoom,
-          matchedUser: updatedUser?.matchchedUserId,
+        socket.emit("reconnected", {
+          roomId: updatedUser?.activeMatchRoom,
+          matchedUserId: updatedUser?.matchedUserId,
         });
-        console.log(
-          `[handleConnection] User ${userId} joined room ${updatedUser.activeMatchRoom}`
-        );
       }
     })
     .catch((error) => console.error("Error updating user status:", error));
@@ -336,22 +343,19 @@ const handleConnection = (socket) => {
   socket.on("startMatchmaking", async () => {
     try {
       const user = await User.findById(userId).select("-password").lean();
-      console.log("[startMatchmaking] User");
+
       // if (matchmakingUsers.has(userId)) return;
       // if (user.isMatching) return;
 
       // Fetch user preferences
       const preferences = await UserPreference.findOne({ user: userId }).lean();
-      console.log("[startMatchmaking] preferences");
 
       await User.findByIdAndUpdate(userId, {
         isMatching: true,
         matchmakingTimestamp: Date.now(),
       });
-      console.log("[startMatchmaking] User added to matchmaking pool");
       // Find best match
       const bestMatch = await findBestMatch(userId, preferences);
-      console.log("[startMatchmaking] bestMatch", bestMatch);
       if (bestMatch) {
         await createAndNotifyMatch(userId, bestMatch.uid);
       }
@@ -369,7 +373,10 @@ const handleConnection = (socket) => {
 
   // Handle joining chat room
   socket.on("joinChat", ({ matchId }) => {
-    console.log(`[joinChat] User ${userId} joined room ${matchId}`);
+    socket.join(matchId);
+  });
+  // Handle joining chat room
+  socket.on("joinChat", ({ matchId }) => {
     socket.join(matchId);
   });
 
@@ -377,27 +384,17 @@ const handleConnection = (socket) => {
   socket.on("init_key_exchange", async (data) => {
     try {
       const { matchId } = data;
-      console.log(
-        `[init_key_exchange] User ${userId} initiated key exchange in room ${matchId}`
-      );
 
       // Generate a consistent key for this match using the matchId
       const sessionKey = crypto
         .createHash("sha256")
         .update(matchId)
         .digest("hex");
-      console.log(
-        `[init_key_exchange] Generated session key for match ${matchId}`
-      );
 
       // Store the key temporarily
       keyExchangeService.storeTempKeys(userId, { sessionKey });
-      console.log(`[init_key_exchange] Stored session key for user ${userId}`);
 
       // Send the key to the room
-      console.log(
-        `[init_key_exchange] Broadcasting key exchange request to room ${matchId}`
-      );
       socket.to(matchId).emit("key_exchange_request", {
         fromUserId: userId,
         sessionKey,
@@ -419,9 +416,6 @@ const handleConnection = (socket) => {
   socket.on("key_exchange_response", async (data) => {
     try {
       const { fromUserId, sessionKey, timestamp } = data;
-      console.log(
-        `[key_exchange_response] User ${userId} received key from ${fromUserId}`
-      );
 
       // Store the received key
       keyExchangeService.storeTempKeys(userId, {
@@ -429,7 +423,6 @@ const handleConnection = (socket) => {
         timestamp,
         fromUserId,
       });
-      console.log(`[key_exchange_response] Stored key from user ${fromUserId}`);
     } catch (error) {
       console.error("[key_exchange_response] Error:", error);
       socket.emit("error", { message: error.message });
@@ -473,8 +466,6 @@ const handleConnection = (socket) => {
         encryptedData: encryptedContent,
         iv: iv,
       });
-
-      console.log("[send_message] Message created:", message);
 
       // Confirm message sent
       socket.emit("message_sent", {
@@ -532,7 +523,6 @@ const handleConnection = (socket) => {
 
   // Handle chat cancellation
   socket.on("cancelChat", async () => {
-    console.log("[cancelChat] Received cancel chat request");
     const userId = socket.user._id.toString();
     try {
       // Check if the user is in a match
@@ -542,18 +532,14 @@ const handleConnection = (socket) => {
         return;
       }
       const matchId = user.activeMatchRoom;
-      console.log("[cancelChat] User is in match:", matchId);
       const inUserSlot = await Slot.findOne({
         user: userId,
         roomId: matchId,
       }).lean();
       const inPartnerSlot = await Slot.findOne({
-        user: user?.matchchedUserId,
+        user: user?.matchedUserId,
         roomId: matchId,
       }).lean();
-
-      console.log("[inUserSlot]", inUserSlot);
-      console.log("[inPartnerSlot]", inPartnerSlot);
 
       if (inUserSlot) {
         await Slot.findOneAndDelete({
@@ -563,32 +549,30 @@ const handleConnection = (socket) => {
       }
       if (inPartnerSlot) {
         await Slot.findOneAndDelete({
-          user: user?.matchchedUserId,
+          user: user?.matchedUserId,
           roomId: matchId,
         });
       }
 
       // Notify the other user in the match
-      await User.findByIdAndUpdate(user.matchchedUserId, {
+      await User.findByIdAndUpdate(user.matchedUserId, {
         isMatching: false,
         matchmakingTimestamp: Date.now(),
         activeMatchRoom: null,
-        matchchedUserId: null,
+        matchedUserId: null,
       });
       await User.findByIdAndUpdate(userId, {
         isMatching: false,
         matchmakingTimestamp: Date.now(),
         activeMatchRoom: null,
-        matchchedUserId: null,
+        matchedUserId: null,
       });
 
       // Notify the room
-      socket.to(matchId).emit("chatCancelled", { matchId });
+      socket.to(matchId).emit("chatCancelled", { roomId: matchId });
 
       // Leave the chat room
       socket.leave(matchId);
-
-      console.log(`[cancelChat] User ${userId} left room ${matchId}`);
     } catch (error) {
       console.error("[cancelChat] Error:", error);
       socket.emit("error", { message: error.message });
@@ -597,13 +581,10 @@ const handleConnection = (socket) => {
 
   // Handle disconnection
   socket.on("disconnect", async () => {
-    console.log("[disconnect] Socket disconnected for user:", userId);
-
     if (userId) {
       try {
         const user = await User.findById(userId).select("-password").lean();
         if (!user) {
-          console.log("[disconnect] User not found:", userId);
           return;
         }
 
@@ -616,7 +597,7 @@ const handleConnection = (socket) => {
           matchmakingTimestamp: null,
           socketId: null,
           isActive: false,
-          // matchchedUserId: null,
+          // matchedUserId: null,
           // activeMatchRoom: null,
           lastActive: new Date(),
         });

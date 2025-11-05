@@ -21,7 +21,6 @@ export const protect = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
-    console.log("[authMiddleware] Decoded:", decoded);
     const user = await User.findById(decoded.id).select("-password");
 
     if (!user) {
@@ -30,7 +29,6 @@ export const protect = async (req, res, next) => {
     }
 
     req.user = user; // Attach user to request object
-    console.log("[authMiddleware] Authenticated user:", user._id);
     next();
   } catch (error) {
     console.error("JWT Authentication Error:", error);
