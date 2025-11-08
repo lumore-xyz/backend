@@ -11,6 +11,7 @@ import { errorHandler, notFound } from "./middleware/errorMiddleware.js";
 import authRoutes from "./routes/authRoutes.js";
 import messagesRoutes from "./routes/messagesRoutes.js";
 import profileRoutes from "./routes/profileRoutes.js";
+import pushRoutes from "./routes/pushRoutes.js";
 import slotRoutes from "./routes/slotRoutes.js";
 import statusRoutes from "./routes/statusRoutes.js";
 import { initializeCronJobs } from "./services/cronService.js";
@@ -57,6 +58,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/status", statusRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/slots", slotRoutes);
+app.use("/api/push", pushRoutes);
 app.use("/api/messages", messagesRoutes);
 
 // Error handling middleware
