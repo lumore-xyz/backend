@@ -593,8 +593,8 @@ const handleConnection = (socket) => {
         userSockets.delete(userId);
         // matchmakingUsers.delete(userId);
         await User.findByIdAndUpdate(userId, {
-          isMatching: false,
-          matchmakingTimestamp: null,
+          // isMatching: false,
+          // matchmakingTimestamp: null,
           socketId: null,
           isActive: false,
           // matchedUserId: null,
