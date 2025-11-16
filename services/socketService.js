@@ -86,7 +86,7 @@ const initialize = (server) => {
  */
 const findBestMatch = async (userId, userPreferences) => {
   const currentUser = await User.findById(userId);
-  const maxDistance = (userPreferences?.distance || 10) * 1000;
+  const maxDistance = (userPreferences?.distance || 10) * 1000 * 100000;
   if (!currentUser?.location?.coordinates) {
     return null;
   }
@@ -99,7 +99,7 @@ const findBestMatch = async (userId, userPreferences) => {
     lat,
     maxDistance,
     {
-      isActive: true,
+      // isActive: true,
       isMatching: true,
       gender: userPreferences?.interestedIn,
     }, // additional filters
