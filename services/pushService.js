@@ -26,7 +26,7 @@ export const sendNotificationToUser = async (userId, payload) => {
     const notificationPayload = JSON.stringify({
       title: payload.title,
       body: payload.body,
-      icon: payload.icon || "/icons/icon-192x192.png.png",
+      icon: payload.icon || "/icons/icon-192x192.png",
       badge: payload.badge || "/badge.png",
       image: payload.image,
       data: payload.data || {},

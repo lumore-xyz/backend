@@ -430,7 +430,8 @@ userSchema.statics.findNearby = async function (
   latitude,
   maxDistanceMeters = 10000,
   additionalQuery = {},
-  userId
+  userId,
+  limit = 100
 ) {
   return await this.aggregate([
     {
@@ -443,12 +444,18 @@ userSchema.statics.findNearby = async function (
         maxDistance: maxDistanceMeters,
         spherical: true,
         query: {
-          _id: { $ne: new mongoose.Types.ObjectId(userId) }, // ✅ FIX
+          _id: { $ne: new mongoose.Types.ObjectId(userId) }, // exclude self
           "location.coordinates": { $exists: true, $ne: [0, 0] },
           ...additionalQuery,
         },
       },
     },
+
+    // 🚀 Sort nearest first (optional but recommended)
+    { $sort: { distance: 1 } },
+
+    // 🚀 Apply limit to 100 candidates
+    { $limit: limit },
   ]);
 };
 
