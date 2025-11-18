@@ -9,7 +9,7 @@ import { protect } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-router.post("/subscribe", subscribe);
+router.post("/subscribe", protect, subscribe);
 router.post("/unsubscribe", protect, unsubscribe);
 router.post("/send", protect, sendNotification);
 

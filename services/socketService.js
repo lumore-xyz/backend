@@ -9,6 +9,7 @@ import UserPreference from "../models/UserPreference.js";
 import { keyExchangeService } from "./keyExchangeService.js";
 import { isWithinDistance } from "./locationService.js";
 import matchingService from "./matchingService.js";
+import { sendNotificationToUser } from "./pushService.js";
 
 // Shared state
 let io = null;
@@ -284,11 +285,19 @@ const createAndNotifyMatch = async (userId1, userId2) => {
       roomId: matchId,
       matchedUser: matchedUser2?._id,
     });
+    sendNotificationToUser(userId1, {
+      title: `Hey, we found you a match!!`,
+      body: "Good luck <3",
+    });
     if (socket2) {
       socket2.join(matchId);
       socket2.emit("matchFound", {
         roomId: matchId,
         matchedUser: matchedUser1?._id,
+      });
+      sendNotificationToUser(userId2, {
+        title: `Hey, we found you a match!!`,
+        body: "Good luck <3",
       });
     }
 
