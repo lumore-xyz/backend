@@ -2,11 +2,9 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
 import Message from "../models/Message.js";
-import Slot from "../models/Slot.js";
 import UnlockHistory from "../models/UnlockHistory.js";
 import User from "../models/User.js";
 import UserPreference from "../models/UserPreference.js";
-import { isWithinDistance } from "./locationService.js";
 import matchingService from "./matchingService.js";
 
 // Shared state
