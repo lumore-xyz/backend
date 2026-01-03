@@ -442,8 +442,13 @@ userSchema.statics.findNearby = async function (
       },
     },
 
-    // 🚀 Sort nearest first (optional but recommended)
-    { $sort: { distance: 1 } },
+    // 🧠 FAIRNESS: oldest matchmakingTimestamp first
+    {
+      $sort: {
+        matchmakingTimestamp: 1, // oldest first
+        distance: 1, // tie-breaker
+      },
+    },
 
     // 🚀 Apply limit to 100 candidates
     { $limit: limit },

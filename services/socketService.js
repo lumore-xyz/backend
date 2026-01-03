@@ -14,12 +14,14 @@
  * - For horizontal scaling, replace with Redis adapter
  * - Matchmaking can be moved to a worker/queue later
  */
-
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
+import MatchRoom from "../models/MatchRoom.js";
 import Message from "../models/Message.js";
 import User from "../models/User.js";
 import UserPreference from "../models/UserPreference.js";
+import { keyExchangeService } from "./keyExchangeService.js";
 import { getOrCreateMatchRoom } from "./matchingService.js";
 import { sendNotificationToUser } from "./pushService.js";
 
@@ -141,64 +143,41 @@ const initialize = (server) => {
  * - Time-based relaxation of strict rules
  */
 const findBestMatch = async (userId, userPrefs) => {
-  /** ------------------------------------------------------------
-   * 1. Load current user
-   * ------------------------------------------------------------ */
   const currentUser = await User.findById(userId).lean();
   if (!currentUser?.location?.coordinates) return null;
 
   const [lng, lat] = currentUser.location.coordinates;
-
-  // Distance is stored in km → converted to meters
   const maxDistance = (userPrefs?.distance || 10) * 1000;
 
-  /** ------------------------------------------------------------
-   * 2. Find nearby candidate users
-   * ------------------------------------------------------------ */
   const candidates = await User.findNearby(
     lng,
     lat,
     maxDistance,
     {
       isMatching: true,
-      gender: userPrefs?.interestedIn,
       dailyConversations: { $gt: 0 },
     },
-    userId // exclude self
+    userId
   );
-
-  console.log("candidates", candidates);
 
   if (!candidates.length) return null;
 
-  /** ------------------------------------------------------------
-   * 3. Batch-load preferences (avoid N+1)
-   * ------------------------------------------------------------ */
   const prefs = await UserPreference.find({
     user: { $in: candidates.map((c) => c._id) },
   }).lean();
 
   const prefMap = new Map(prefs.map((p) => [p.user.toString(), p]));
-  console.log("prefMap", prefMap);
 
-  /** ------------------------------------------------------------
-   * 4. Prepare scoring
-   * ------------------------------------------------------------ */
   let bestStrict = null;
   let bestStrictScore = -1;
 
   let bestFallback = null;
   let bestFallbackScore = -1;
 
-  // Normalize user prefs ONCE
-  const safeUserPrefs = normalizePrefs(userPrefs);
+  const safeUserPrefs = normalizePrefs(userPrefs || {});
 
-  /** ------------------------------------------------------------
-   * 5. Evaluate candidates
-   * ------------------------------------------------------------ */
   for (const candidate of candidates) {
-    const candidatePrefs = prefMap.get(candidate._id.toString());
-    if (!candidatePrefs) continue;
+    const candidatePrefs = prefMap.get(candidate._id.toString()) || {};
 
     const safeCandidatePrefs = normalizePrefs(candidatePrefs);
 
@@ -208,9 +187,7 @@ const findBestMatch = async (userId, userPrefs) => {
       candidate
     );
 
-    // Hard reject completely incompatible matches
-    if (score <= 0) continue;
-
+    // Allow zero-score matches ONLY if prefs are missing
     const isStrict = checkMutualInterest(
       safeUserPrefs,
       safeCandidatePrefs,
@@ -218,7 +195,6 @@ const findBestMatch = async (userId, userPrefs) => {
       candidate
     );
 
-    // STRICT MATCH (mutual interest satisfied)
     if (isStrict && score > bestStrictScore) {
       bestStrictScore = score;
       bestStrict = {
@@ -228,7 +204,6 @@ const findBestMatch = async (userId, userPrefs) => {
       };
     }
 
-    // FALLBACK MATCH (best available option)
     if (score > bestFallbackScore) {
       bestFallbackScore = score;
       bestFallback = {
@@ -239,10 +214,17 @@ const findBestMatch = async (userId, userPrefs) => {
     }
   }
 
-  /** ------------------------------------------------------------
-   * 6. Decision hierarchy
-   * ------------------------------------------------------------ */
-  return bestStrict || bestFallback || null;
+  // 🧊 COLD START GUARANTEE
+  if (!bestStrict && !bestFallback) {
+    const first = candidates[0];
+    return {
+      uid: first._id.toString(),
+      user: first,
+      mode: "COLD_START",
+    };
+  }
+
+  return bestStrict || bestFallback;
 };
 
 /* ============================================================
@@ -386,6 +368,55 @@ const handleConnection = (socket) => {
     await MatchRoom.findByIdAndUpdate(roomId, {
       lastMessageAt: new Date(),
     });
+  });
+
+  // Handle key exchange
+  socket.on("init_key_exchange", async (data) => {
+    try {
+      const { roomId } = data;
+
+      // Generate a consistent key for this match using the matchId
+      const sessionKey = crypto
+        .createHash("sha256")
+        .update(roomId)
+        .digest("hex");
+
+      // Store the key temporarily
+      keyExchangeService.storeTempKeys(userId, { sessionKey });
+
+      // Send the key to the room
+      socket.to(roomId).emit("key_exchange_request", {
+        fromUserId: userId,
+        sessionKey,
+        timestamp: Date.now(),
+      });
+
+      // Also send to the sender to ensure they have the key
+      socket.emit("key_exchange_request", {
+        fromUserId: userId,
+        sessionKey,
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      console.error("[init_key_exchange] Error:", error);
+      socket.emit("error", { message: error.message });
+    }
+  });
+
+  socket.on("key_exchange_response", async (data) => {
+    try {
+      const { fromUserId, sessionKey, timestamp } = data;
+
+      // Store the received key
+      keyExchangeService.storeTempKeys(userId, {
+        sessionKey,
+        timestamp,
+        fromUserId,
+      });
+    } catch (error) {
+      console.error("[key_exchange_response] Error:", error);
+      socket.emit("error", { message: error.message });
+    }
   });
 
   // ==================== PROFILE UNLOCK ====================
