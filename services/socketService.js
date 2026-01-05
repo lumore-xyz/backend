@@ -19,6 +19,7 @@ import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
 import MatchRoom from "../models/MatchRoom.js";
 import Message from "../models/Message.js";
+import UnlockHistory from "../models/UnlockHistory.js";
 import User from "../models/User.js";
 import UserPreference from "../models/UserPreference.js";
 import { keyExchangeService } from "./keyExchangeService.js";
