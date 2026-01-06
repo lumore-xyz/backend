@@ -2,10 +2,10 @@ import MatchRoom from "../models/MatchRoom.js";
 
 export const getInbox = async (req, res) => {
   const userId = req.user._id;
-
+  const status = req.query.status;
   const rooms = await MatchRoom.find({
     participants: userId,
-    status: { $ne: "cancelled" },
+    status: status || "",
   })
     .sort({ lastMessageAt: -1 })
     .populate("participants", "_id username nickname profilePicture")
