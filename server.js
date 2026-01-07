@@ -9,6 +9,7 @@ import connectDB from "./config/db.js";
 import { specs } from "./config/swagger.js";
 import { errorHandler, notFound } from "./middleware/errorMiddleware.js";
 import authRoutes from "./routes/authRoutes.js";
+import matchRoomRoutes from "./routes/matchRoom.routes.js";
 import messagesRoutes from "./routes/messagesRoutes.js";
 import profileRoutes from "./routes/profileRoutes.js";
 import pushRoutes from "./routes/pushRoutes.js";
@@ -60,6 +61,7 @@ app.use("/api/profile", profileRoutes);
 app.use("/api/slots", slotRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/messages", messagesRoutes);
+app.use("/api/inbox", matchRoomRoutes);
 
 // Error handling middleware
 app.use(notFound);

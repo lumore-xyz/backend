@@ -13,7 +13,7 @@ const MatchRoomSchema = new mongoose.Schema(
     // optional metadata
     status: {
       type: String,
-      enum: ["active", "ended", "cancelled"],
+      enum: ["active", "archive"],
       default: "active",
     },
 
