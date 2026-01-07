@@ -333,7 +333,7 @@ const handleConnection = (socket) => {
 
     if (!room.participants.includes(userId)) return;
 
-    room.status = "ended";
+    room.status = "archive";
     room.endedBy = userId;
     await room.save();
 
