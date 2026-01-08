@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import User from "../models/User.js";
+import User from "../models/user.model.js";
 
 /**
  * Initialize all cron jobs

@@ -7,16 +7,17 @@ import { createServer } from "http";
 import swaggerUi from "swagger-ui-express";
 import connectDB from "./config/db.js";
 import { specs } from "./config/swagger.js";
-import { errorHandler, notFound } from "./middleware/errorMiddleware.js";
-import authRoutes from "./routes/authRoutes.js";
+import { errorHandler, notFound } from "./middleware/error.middleware.js";
+import authRoutes from "./routes/auth.routes.js";
 import matchRoomRoutes from "./routes/matchRoom.routes.js";
-import messagesRoutes from "./routes/messagesRoutes.js";
-import profileRoutes from "./routes/profileRoutes.js";
-import pushRoutes from "./routes/pushRoutes.js";
-import slotRoutes from "./routes/slotRoutes.js";
-import statusRoutes from "./routes/statusRoutes.js";
-import { initializeCronJobs } from "./services/cronService.js";
-import socketService from "./services/socketService.js";
+import messagesRoutes from "./routes/message.routes.js";
+import postRoutes from "./routes/post.routes.js";
+import profileRoutes from "./routes/profile.routes.js";
+import promptRoutes from "./routes/prompt.routes.js";
+import pushRoutes from "./routes/push.routes.js";
+import statusRoutes from "./routes/status.routes.js";
+import { initializeCronJobs } from "./services/cron.service.js";
+import socketService from "./services/socket.service.js";
 
 // Connect to MongoDB
 connectDB();
@@ -58,7 +59,8 @@ app.get("/", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/status", statusRoutes);
 app.use("/api/profile", profileRoutes);
-app.use("/api/slots", slotRoutes);
+app.use("/api/post", postRoutes);
+app.use("/api/prompt", promptRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/messages", messagesRoutes);
 app.use("/api/inbox", matchRoomRoutes);

@@ -10,10 +10,10 @@ import {
   updateProfilePicture,
   updateUserLocation,
   updateUserPreference,
-} from "../controllers/profileController.js";
-import { protect } from "../middleware/authMiddleware.js";
-import { upload } from "../middleware/upload.js";
-import { userControl } from "../middleware/userActionMiddleware.js";
+} from "../controllers/profile.controller.js";
+import { protect } from "../middleware/auth.middleware.js";
+import { upload } from "../middleware/upload.middleware.js";
+import { userControl } from "../middleware/userAction.middleware.js";
 
 const router = express.Router();
 

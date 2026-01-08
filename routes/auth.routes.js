@@ -10,8 +10,8 @@ import {
   setPassword,
   signup,
   tma_login,
-} from "../controllers/authController.js";
-import { protect } from "../middleware/authMiddleware.js";
+} from "../controllers/auth.controller.js";
+import { protect } from "../middleware/auth.middleware.js";
 
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5 });
 const router = express.Router();

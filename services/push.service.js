@@ -1,6 +1,6 @@
 // services/pushNotificationService.js
 import webpush from "web-push";
-import Push from "../models/PushSubscription.js";
+import Push from "../models/push.model.js";
 
 // Configure web-push with VAPID keys
 webpush.setVapidDetails(

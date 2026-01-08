@@ -1,4 +1,4 @@
-// /models/User.js
+// /models/user.model.js
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 

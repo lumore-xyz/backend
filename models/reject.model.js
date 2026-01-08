@@ -12,26 +12,34 @@ const rejectedProfileSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    roomId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "MatchRoom",
+      required: true,
+    },
     reason: {
       type: String,
-      enum: ["not_interested", "inappropriate", "spam", "other"],
-      required: true,
     },
     feedback: {
       type: String,
-      maxLength: 500,
+      maxLength: 5000,
+    },
+    rating: {
+      type: Number,
+      min: 1,
+      max: 10,
     },
     timestamp: {
       type: Date,
       default: Date.now,
-      expires: "7d", // Automatically delete after 7 days
+      expires: "30d", // Automatically delete after 30 days
     },
   },
   { timestamps: true }
 );
 
 // Compound index to prevent duplicate rejections
-rejectedProfileSchema.index({ user: 1, rejectedUser: 1 }, { unique: true });
+rejectedProfileSchema.index({ user: 1, rejectedUser: 1, roomId: 1 });
 
 const RejectedProfile = mongoose.model(
   "RejectedProfile",

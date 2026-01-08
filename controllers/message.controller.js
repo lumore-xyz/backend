@@ -1,11 +1,13 @@
-import Message from "../models/Message.js";
+import Message from "../models/message.model.js";
 
 export const getRoomMessages = async (req, res) => {
   try {
     const { roomId } = req.params;
 
     if (!roomId) {
-      return res.status(400).json({ message: "Invalid request: roomId required" });
+      return res
+        .status(400)
+        .json({ message: "Invalid request: roomId required" });
     }
 
     // Fetch messages in the room, sorted by creation time (ascending)

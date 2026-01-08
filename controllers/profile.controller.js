@@ -1,10 +1,10 @@
-// /controllers/profileController.js
-import RejectedProfile from "../models/RejectedProfile.js";
-import Slot from "../models/Slot.js";
-import UnlockHistory from "../models/UnlockHistory.js";
-import User from "../models/User.js";
+// /controllers/profile.controller.js
+
+import UserPreference from "../models/preference.model.js";
+import RejectedProfile from "../models/reject.model.js";
+import UnlockHistory from "../models/unlock.model.js";
+import User from "../models/user.model.js";
 import UserPhotos from "../models/UserPhotos.js";
-import UserPreference from "../models/UserPreference.js";
 import cloudinary from "../utils/cloudinary.js";
 
 // Create or Update Profile
@@ -40,7 +40,6 @@ export const createUpdateProfile = async (req, res) => {
       "verificationStatus",
       "isActive",
       "lastActive",
-      "maxSlots",
       "location",
       "location.coordinates",
       "location.formattedAddress",
@@ -450,7 +449,6 @@ export const deleteAccount = async (req, res) => {
     // Delete user's data
     await Promise.all([
       User.findByIdAndDelete(userId),
-      Slot.deleteMany({ user: userId }),
       UnlockHistory.deleteMany({ user: userId }),
       UserPhotos.deleteMany({ user: userId }),
       UserPreference.deleteOne({ user: userId }),

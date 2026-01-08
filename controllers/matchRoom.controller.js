@@ -1,4 +1,4 @@
-import MatchRoom from "../models/MatchRoom.js";
+import MatchRoom from "../models/room.model.js";
 
 export const getInbox = async (req, res) => {
   const userId = req.user._id;
