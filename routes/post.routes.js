@@ -11,7 +11,7 @@ import { protect } from "../middleware/auth.middleware.js";
 const router = Router();
 
 router.post("/", protect, createPost);
-router.get("/user/:userId", protect, getUserPosts);
+router.get("/:userId", protect, getUserPosts);
 router.get("/:id", protect, getPostById);
 router.put("/:id", protect, updatePost);
 router.delete("/:id", protect, deletePost);

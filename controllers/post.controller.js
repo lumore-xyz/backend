@@ -60,7 +60,7 @@ export const getUserPosts = async (req, res) => {
     const allowedVisibilities = ["public"];
 
     if (isViewerUnlockedByUser) {
-      allowedVisibilities.push("unlock");
+      allowedVisibilities.push("unlocked");
     }
 
     const posts = await Post.find({
@@ -103,7 +103,7 @@ export const updatePost = async (req, res) => {
   const post = await Post.findOneAndUpdate(
     { _id: id, userId },
     { content: req.body.content, visibility: req.body.visibility },
-    { new: true }
+    { new: true },
   );
 
   if (!post) {

@@ -14,12 +14,11 @@ const PromptSchema = new Schema(
       type: String,
       required: true,
       trim: true,
-      maxlength: 200,
+      maxlength: 500,
     },
 
     category: {
       type: String,
-      enum: ["fun", "deep", "flirty", "thoughtful", "quirky", "values"],
       index: true,
       required: true,
     },

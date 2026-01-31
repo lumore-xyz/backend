@@ -27,39 +27,31 @@ const PostSchema = new Schema(
 
       promptAnswer: {
         type: String,
-        trim: true,
-        maxlength: 500,
       },
 
-      imageUrls: [
-        {
-          type: String,
-        },
-      ],
+      imageUrls: {
+        type: String,
+      },
 
       caption: {
         type: String,
-        trim: true,
-        maxlength: 300,
       },
 
       text: {
         type: String,
-        trim: true,
-        maxlength: 500,
       },
     },
 
     visibility: {
       type: String,
-      enum: ["public", "unlock", "private"],
+      enum: ["public", "unlocked", "private"],
       default: "public",
       index: true,
     },
   },
   {
     timestamps: true, // createdAt, updatedAt
-  }
+  },
 );
 
 export const Post = model("Post", PostSchema);
