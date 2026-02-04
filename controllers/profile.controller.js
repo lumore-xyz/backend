@@ -5,7 +5,11 @@ import RejectedProfile from "../models/reject.model.js";
 import UnlockHistory from "../models/unlock.model.js";
 import User from "../models/user.model.js";
 import UserPhotos from "../models/UserPhotos.js";
-import cloudinary from "../utils/cloudinary.js";
+import {
+  deleteFile,
+  extractPublicIdFromUrl,
+  uploadImage,
+} from "../services/file.service.js";
 
 // Create or Update Profile
 export const createUpdateProfile = async (req, res) => {
@@ -127,7 +131,7 @@ export const updateUserLocation = async (req, res) => {
 export const findNearbyUsers = async (req, res) => {
   try {
     const { userId } = req.params;
-    let preferences = await UserPreference.findOne({ user: userId });
+    let preferences = await UserPreference.findOne({ user: userId }).lean();
     const maxDistance = (preferences?.distance || 10) * 1000;
 
     const user = await User.findById(userId);
@@ -182,38 +186,38 @@ export const updateProfilePicture = async (req, res) => {
 
     if (!userId) return res.status(401).json({ message: "Unauthorized" });
     if (!file) return res.status(400).json({ message: "No file uploaded" });
+    if (!file.buffer)
+      return res.status(400).json({ message: "Invalid file buffer" });
 
-    const uploadStream = cloudinary.uploader.upload_stream(
-      {
-        resource_type: "image",
-        folder: "profile_pictures",
-        format: "webp", // force WebP output
-        transformation: [
-          { fetch_format: "auto" }, // best format (webp/avif/etc.)
-          { quality: "auto" }, // optimized quality
-          { crop: "limit", width: 600, height: 600 }, // optional size limit
-        ],
-      },
-      async (error, result) => {
-        if (error) {
-          console.error("Cloudinary Upload Error:", error);
-          return res.status(500).json({ message: "Upload failed" });
-        }
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
 
-        const user = await User.findById(userId);
-        if (!user) return res.status(404).json({ message: "User not found" });
+    const oldPublicId = extractPublicIdFromUrl(user.profilePicture);
 
-        user.profilePicture = result.secure_url;
-        await user.save();
+    const result = await uploadImage({
+      buffer: file.buffer,
+      folder: "profile_pictures",
+      format: "webp",
+      maxWidth: 600,
+      maxHeight: 600,
+      optimize: true,
+    });
 
-        return res.status(200).json({
-          message: "Profile picture updated successfully",
-          profilePicture: result.secure_url,
-        });
+    user.profilePicture = result.secure_url;
+    await user.save();
+
+    if (oldPublicId && oldPublicId !== result.public_id) {
+      try {
+        await deleteFile(oldPublicId, "image");
+      } catch (error) {
+        console.warn("Cloudinary delete failed:", error?.message || error);
       }
-    );
+    }
 
-    uploadStream.end(file.buffer);
+    return res.status(200).json({
+      message: "Profile picture updated successfully",
+      profilePicture: result.secure_url,
+    });
   } catch (error) {
     console.error("Error updating profile picture:", error);
     return res.status(500).json({ message: "Internal server error" });
@@ -298,35 +302,40 @@ export const getProfile = async (req, res) => {
       return res.status(400).json({ message: "Invalid request" });
     }
 
-    // Fetch user profile without password
-    const user = await User.findById(userId).lean().select("-password");
+    const [user, viewer] = await Promise.all([
+      User.findById(userId).lean().select("-password"),
+      User.findById(viewerId).lean().select("location"),
+    ]);
+
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Fetch viewer's profile to access location
-    const viewer = await User.findById(viewerId).lean().select("location");
     if (!viewer || !viewer.location || !user.location) {
       return res.status(400).json({ message: "Location data missing" });
     }
 
-    // Calculate distance between viewer and user
-    const distance = calculateDistance(viewer.location, user.location);
-
-    // Fetch user's photos
-    const photos = await UserPhotos.find({ user: userId }).select("photoUrl");
-
-    // Check if profile is unlocked by viewer
-    const isViewerUnlockedByUser =
-      (await UnlockHistory.countDocuments({
+    const [viewerUnlockedByUserDoc, viewerUnlockedUserDoc] = await Promise.all([
+      UnlockHistory.exists({
         user: userId, // The viewer (from req.user.id)
         unlockedUser: viewerId, // The profile being viewed (from params)
-      })) > 0;
-    const isViewerUnlockedUser =
-      (await UnlockHistory.countDocuments({
+      }),
+      UnlockHistory.exists({
         user: viewerId, // The profile being viewed (from params)
         unlockedUser: userId, // The viewer (from req.user.id)
-      })) > 0;
+      }),
+    ]);
+
+    const isViewerUnlockedByUser = Boolean(viewerUnlockedByUserDoc);
+    const isViewerUnlockedUser = Boolean(viewerUnlockedUserDoc);
+
+    const shouldIncludePhotos = userId === viewerId || isViewerUnlockedByUser;
+    const photos = shouldIncludePhotos
+      ? await UserPhotos.find({ user: userId }).select("photoUrl").lean()
+      : null;
+
+    // Calculate distance between viewer and user
+    const distance = calculateDistance(viewer.location, user.location);
 
     // Prepare profile data
     let profileData = {
@@ -446,16 +455,28 @@ export const deleteAccount = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Delete user's data
-    await Promise.all([
-      User.findByIdAndDelete(userId),
-      UnlockHistory.deleteMany({ user: userId }),
-      UserPhotos.deleteMany({ user: userId }),
-      UserPreference.deleteOne({ user: userId }),
-      RejectedProfile.deleteMany({ user: userId }),
-    ]);
+    const deletionDate = new Date();
+    deletionDate.setDate(deletionDate.getDate() + 30);
 
-    res.status(200).json({ message: "Account deleted successfully" });
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      {
+        isArchived: true,
+        archivedAt: new Date(),
+        scheduledDeletionAt: deletionDate,
+        isActive: false,
+      },
+      { new: true }
+    );
+
+    if (!updatedUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.status(200).json({
+      message: "Account archived. It will be deleted in 30 days.",
+      scheduledDeletionAt: deletionDate,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

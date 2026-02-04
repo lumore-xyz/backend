@@ -54,4 +54,6 @@ const PostSchema = new Schema(
   },
 );
 
+PostSchema.index({ userId: 1, visibility: 1, createdAt: -1 });
+
 export const Post = model("Post", PostSchema);
