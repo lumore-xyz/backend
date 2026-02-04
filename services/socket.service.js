@@ -17,14 +17,14 @@
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
-import MatchRoom from "../models/MatchRoom.js";
-import Message from "../models/Message.js";
-import UnlockHistory from "../models/UnlockHistory.js";
-import User from "../models/User.js";
-import UserPreference from "../models/UserPreference.js";
-import { keyExchangeService } from "./keyExchangeService.js";
-import { getOrCreateMatchRoom } from "./matchingService.js";
-import { sendNotificationToUser } from "./pushService.js";
+import Message from "../models/message.model.js";
+import UserPreference from "../models/preference.model.js";
+import MatchRoom from "../models/room.model.js";
+import UnlockHistory from "../models/unlock.model.js";
+import User from "../models/user.model.js";
+import { keyExchangeService } from "./key.service.js";
+import { getOrCreateMatchRoom } from "./matching.service.js";
+import { sendNotificationToUser } from "./push.service.js";
 
 /**
  * ============================================================

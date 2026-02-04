@@ -1,6 +1,6 @@
-import Push from "../models/PushSubscription.js";
-import User from "../models/User.js";
-import { sendNotificationToUser } from "../services/pushService.js";
+import Push from "../models/push.model.js";
+import User from "../models/user.model.js";
+import { sendNotificationToUser } from "../services/push.service.js";
 
 // Subscribe to push notifications
 export const subscribe = async (req, res, next) => {

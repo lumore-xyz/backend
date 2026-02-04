@@ -2,8 +2,7 @@
 // new push
 import { OAuth2Client } from "google-auth-library";
 import jwt from "jsonwebtoken";
-import Slot from "../models/Slot.js";
-import User from "../models/User.js";
+import User from "../models/user.model.js";
 
 const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
@@ -48,9 +47,6 @@ export const signup = async (req, res) => {
       email,
       password,
     });
-
-    // Create a free slot for the new user
-    await Slot.create({ user: user._id, profile: null });
 
     await user.updateLastActive();
 
@@ -120,10 +116,6 @@ export const googleLogin = async (req, res) => {
         await existingUser.save();
         user = existingUser;
       } else {
-        // if (!location || !Array.isArray(location.coordinates)) {
-        //   console.log("location");
-        //   delete userData.location;
-        // }
         user = await User.create({
           googleId,
           email,

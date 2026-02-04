@@ -1,4 +1,4 @@
-import MatchRoom from "../models/MatchRoom.js";
+import MatchRoom from "../models/room.model.js";
 
 export const getOrCreateMatchRoom = async (userId1, userId2) => {
   const participants = [userId1, userId2].sort(); // IMPORTANT

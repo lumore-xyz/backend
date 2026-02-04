@@ -1,10 +1,10 @@
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
-import Message from "../models/Message.js";
+import Message from "../models/message.model.js";
+import UserPreference from "../models/preference.model.js";
 import UnlockHistory from "../models/UnlockHistory.js";
-import User from "../models/User.js";
-import UserPreference from "../models/UserPreference.js";
+import User from "../models/user.model.js";
 import matchingService from "./matchingService.js";
 
 // Shared state

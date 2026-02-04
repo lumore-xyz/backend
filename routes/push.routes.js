@@ -3,9 +3,9 @@ import {
   sendNotification,
   subscribe,
   unsubscribe,
-} from "../controllers/pushController.js";
+} from "../controllers/push.controller.js";
 
-import { protect } from "../middleware/authMiddleware.js";
+import { protect } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 

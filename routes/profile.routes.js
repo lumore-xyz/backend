@@ -10,10 +10,18 @@ import {
   updateProfilePicture,
   updateUserLocation,
   updateUserPreference,
-} from "../controllers/profileController.js";
-import { protect } from "../middleware/authMiddleware.js";
-import { upload } from "../middleware/upload.js";
-import { userControl } from "../middleware/userActionMiddleware.js";
+} from "../controllers/profile.controller.js";
+import { protect } from "../middleware/auth.middleware.js";
+import { upload } from "../middleware/upload.middleware.js";
+import { userControl } from "../middleware/userAction.middleware.js";
+import {
+  profilePictureLimiter,
+  profileUpdateLimiter,
+} from "../middleware/rateLimit.middleware.js";
+import {
+  validateObjectIdParam,
+  validateUpdateLocation,
+} from "../middleware/validate.middleware.js";
 
 const router = express.Router();
 
@@ -164,18 +172,42 @@ const router = express.Router();
  */
 router
   .route("/:userId")
-  .post(protect, userControl, createUpdateProfile)
-  .patch(protect, userControl, createUpdateProfile)
-  .get(protect, getProfile)
-  .delete(protect, userControl, deleteAccount);
+  .post(
+    protect,
+    validateObjectIdParam("userId"),
+    profileUpdateLimiter,
+    userControl,
+    createUpdateProfile
+  )
+  .patch(
+    protect,
+    validateObjectIdParam("userId"),
+    profileUpdateLimiter,
+    userControl,
+    createUpdateProfile
+  )
+  .get(protect, validateObjectIdParam("userId"), getProfile)
+  .delete(
+    protect,
+    validateObjectIdParam("userId"),
+    userControl,
+    deleteAccount
+  );
 
 router.post(
   "/:userId/update-location",
   protect,
+  validateObjectIdParam("userId"),
+  validateUpdateLocation,
   userControl,
   updateUserLocation
 );
-router.get("/:userId/nearby", findNearbyUsers);
+router.get(
+  "/:userId/nearby",
+  protect,
+  validateObjectIdParam("userId"),
+  findNearbyUsers
+);
 
 /**
  * @swagger
@@ -214,7 +246,12 @@ router.get("/:userId/nearby", findNearbyUsers);
  *       404:
  *         description: User not found
  */
-router.patch("/:userId/visibility", protect, updateFieldVisibility);
+router.patch(
+  "/:userId/visibility",
+  protect,
+  validateObjectIdParam("userId"),
+  updateFieldVisibility
+);
 
 /**
  * @swagger
@@ -309,12 +346,19 @@ router.patch("/:userId/visibility", protect, updateFieldVisibility);
  */
 router
   .route("/:userId/preferences")
-  .get(protect, getUserPrefrence)
-  .patch(protect, userControl, updateUserPreference);
+  .get(protect, validateObjectIdParam("userId"), getUserPrefrence)
+  .patch(
+    protect,
+    validateObjectIdParam("userId"),
+    userControl,
+    updateUserPreference
+  );
 
 router.patch(
   "/:userId/update-profile-picture",
   protect,
+  validateObjectIdParam("userId"),
+  profilePictureLimiter,
   upload.single("profilePic"),
   updateProfilePicture
 );
