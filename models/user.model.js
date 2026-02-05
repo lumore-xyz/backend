@@ -197,6 +197,16 @@ userSchema.index({ googleId: 1 }, { sparse: true, unique: true });
 userSchema.index({ telegramId: 1 }, { sparse: true, unique: true });
 userSchema.index({ lastActive: -1 });
 userSchema.index({ matchmakingTimestamp: 1 }, { sparse: true });
+userSchema.index({ gender: 1 });
+userSchema.index({ dob: 1 });
+userSchema.index({ height: 1 });
+userSchema.index({ religion: 1 });
+userSchema.index({ zodiacSign: 1 });
+userSchema.index({ personalityType: 1 });
+userSchema.index({ diet: 1 });
+userSchema.index({ "lifestyle.drinking": 1 });
+userSchema.index({ "lifestyle.smoking": 1 });
+userSchema.index({ "lifestyle.pets": 1 });
 
 // ==================== VIRTUALS ====================
 

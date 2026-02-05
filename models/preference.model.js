@@ -4,7 +4,7 @@ const userPreferenceSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   interestedIn: {
     type: String,
-    default: "all",
+    default: "everyone",
   },
   ageRange: {
     type: [Number],
@@ -48,6 +48,32 @@ const userPreferenceSchema = new mongoose.Schema({
   },
   dietPreference: {
     type: [String],
+  },
+  heightRange: {
+    type: [Number],
+    default: [150, 200],
+    validate: {
+      validator: function (v) {
+        return Array.isArray(v) && v.length === 2;
+      },
+      message: "heightRange must contain exactly two numbers (min and max)",
+    },
+  },
+  religionPreference: {
+    type: [String],
+    default: [],
+  },
+  drinkingPreference: {
+    type: [String],
+    default: [],
+  },
+  smokingPreference: {
+    type: [String],
+    default: [],
+  },
+  petPreference: {
+    type: [String],
+    default: [],
   },
 });
 

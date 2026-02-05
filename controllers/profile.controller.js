@@ -144,6 +144,107 @@ export const findNearbyUsers = async (req, res) => {
 
     const [lng, lat] = user.location.coordinates;
 
+    const preferenceFilters = {};
+
+    if (
+      preferences?.interestedIn &&
+      !["everyone", "all"].includes(preferences.interestedIn)
+    ) {
+      if (preferences.interestedIn === "women") {
+        preferenceFilters.gender = "woman";
+      } else if (preferences.interestedIn === "men") {
+        preferenceFilters.gender = "man";
+      }
+    }
+
+    if (Array.isArray(preferences?.ageRange) && preferences.ageRange.length) {
+      const [minAge, maxAge] = preferences.ageRange;
+      if (minAge && maxAge) {
+        const today = new Date();
+        const maxDob = new Date(
+          today.getFullYear() - minAge,
+          today.getMonth(),
+          today.getDate()
+        );
+        const minDob = new Date(
+          today.getFullYear() - maxAge,
+          today.getMonth(),
+          today.getDate()
+        );
+        preferenceFilters.dob = { $gte: minDob, $lte: maxDob };
+      }
+    }
+
+    if (
+      Array.isArray(preferences?.heightRange) &&
+      preferences.heightRange.length
+    ) {
+      const [minHeight, maxHeight] = preferences.heightRange;
+      if (minHeight && maxHeight) {
+        preferenceFilters.height = { $gte: minHeight, $lte: maxHeight };
+      }
+    }
+
+    if (Array.isArray(preferences?.dietPreference) && preferences.dietPreference.length) {
+      preferenceFilters.diet = { $in: preferences.dietPreference };
+    }
+
+    if (
+      Array.isArray(preferences?.religionPreference) &&
+      preferences.religionPreference.length
+    ) {
+      preferenceFilters.religion = { $in: preferences.religionPreference };
+    }
+
+    if (
+      Array.isArray(preferences?.zodiacPreference) &&
+      preferences.zodiacPreference.length
+    ) {
+      preferenceFilters.zodiacSign = { $in: preferences.zodiacPreference };
+    }
+
+    if (
+      Array.isArray(preferences?.personalityTypePreference) &&
+      preferences.personalityTypePreference.length
+    ) {
+      preferenceFilters.personalityType = {
+        $in: preferences.personalityTypePreference,
+      };
+    }
+
+    if (Array.isArray(preferences?.interests) && preferences.interests.length) {
+      preferenceFilters.interests = { $in: preferences.interests };
+    }
+
+    if (Array.isArray(preferences?.languages) && preferences.languages.length) {
+      preferenceFilters.languages = { $in: preferences.languages };
+    }
+
+    if (
+      Array.isArray(preferences?.drinkingPreference) &&
+      preferences.drinkingPreference.length
+    ) {
+      preferenceFilters["lifestyle.drinking"] = {
+        $in: preferences.drinkingPreference,
+      };
+    }
+
+    if (
+      Array.isArray(preferences?.smokingPreference) &&
+      preferences.smokingPreference.length
+    ) {
+      preferenceFilters["lifestyle.smoking"] = {
+        $in: preferences.smokingPreference,
+      };
+    }
+
+    if (
+      Array.isArray(preferences?.petPreference) &&
+      preferences.petPreference.length
+    ) {
+      preferenceFilters["lifestyle.pets"] = { $in: preferences.petPreference };
+    }
+
     // Use the static method for finding nearby users
     const nearbyUsers = await User.findNearby(
       lng,
@@ -151,6 +252,7 @@ export const findNearbyUsers = async (req, res) => {
       maxDistance,
       {
         // isActive: true
+        ...preferenceFilters,
       }, // additional filters
       userId
     );
@@ -239,6 +341,11 @@ export const updateUserPreference = async (req, res) => {
       zodiacPreference,
       personalityTypePreference,
       dietPreference,
+      heightRange,
+      religionPreference,
+      drinkingPreference,
+      smokingPreference,
+      petPreference,
     } = req.body;
 
     let preferences = await UserPreference.findOne({ user: userId });
@@ -260,6 +367,11 @@ export const updateUserPreference = async (req, res) => {
     if (personalityTypePreference)
       preferences.personalityTypePreference = personalityTypePreference;
     if (dietPreference) preferences.dietPreference = dietPreference;
+    if (heightRange) preferences.heightRange = heightRange;
+    if (religionPreference) preferences.religionPreference = religionPreference;
+    if (drinkingPreference) preferences.drinkingPreference = drinkingPreference;
+    if (smokingPreference) preferences.smokingPreference = smokingPreference;
+    if (petPreference) preferences.petPreference = petPreference;
 
     await preferences.save();
 
