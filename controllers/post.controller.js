@@ -105,10 +105,7 @@ export const getUserPosts = async (req, res) => {
       .populate("content.promptId")
       .lean();
 
-    return res.json({
-      isViewerUnlockedByUser,
-      posts,
-    });
+    return res.json(posts);
   } catch (error) {
     console.error("Error fetching user posts:", error);
     return res.status(500).json({ message: "Server error" });
