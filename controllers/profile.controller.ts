@@ -59,7 +59,7 @@ export const createUpdateProfile = async (req, res) => {
       .reduce((obj, key) => {
         obj[key] = req.body[key];
         return obj;
-      }, {});
+      }, {} as Record<string, any>);
 
     // Update the user profile and return updated data
     const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
@@ -144,7 +144,7 @@ export const findNearbyUsers = async (req, res) => {
 
     const [lng, lat] = user.location.coordinates;
 
-    const preferenceFilters = {};
+    const preferenceFilters: Record<string, any> = {};
 
     if (
       preferences?.interestedIn &&
@@ -414,10 +414,10 @@ export const getProfile = async (req, res) => {
       return res.status(400).json({ message: "Invalid request" });
     }
 
-    const [user, viewer] = await Promise.all([
+    const [user, viewer] = (await Promise.all([
       User.findById(userId).lean().select("-password"),
       User.findById(viewerId).lean().select("location"),
-    ]);
+    ])) as any[];
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -450,7 +450,7 @@ export const getProfile = async (req, res) => {
     const distance = calculateDistance(viewer.location, user.location);
 
     // Prepare profile data
-    let profileData = {
+    let profileData: Record<string, any> = {
       _id: user._id,
       distance,
       isViewerUnlockedByUser,
@@ -468,7 +468,8 @@ export const getProfile = async (req, res) => {
       };
     } else {
       // Ensure fieldVisibility is an object
-      const fieldVisibility = user.fieldVisibility || {};
+      const fieldVisibility: Record<string, string> = (user.fieldVisibility ??
+        {}) as Record<string, string>;
 
       // Add fields based on visibility settings
       Object.entries(user).forEach(([field, value]) => {
@@ -528,7 +529,7 @@ export const updateFieldVisibility = async (req, res) => {
 
     const validVisibilities = ["public", "unlocked", "private"];
     const invalidFields = Object.entries(fields).filter(
-      ([_, visibility]) => !validVisibilities.includes(visibility)
+      ([_, visibility]) => !validVisibilities.includes(String(visibility))
     );
 
     if (invalidFields.length > 0) {

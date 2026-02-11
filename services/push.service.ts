@@ -1,5 +1,5 @@
 // services/pushNotificationService.js
-import webpush from "web-push";
+import webpush, { PushSubscription } from "web-push";
 import Push from "../models/push.model.js";
 
 // Configure web-push with VAPID keys
@@ -37,10 +37,15 @@ export const sendNotificationToUser = async (userId, payload) => {
     // Send to all user's subscriptions
     const sendPromises = subscriptions.map(async (sub) => {
       try {
-        await webpush.sendNotification(sub.subscription, notificationPayload);
-        return { success: true, endpoint: sub.subscription.endpoint };
+        const subscription = sub.subscription as PushSubscription;
+        await webpush.sendNotification(subscription, notificationPayload);
+        return { success: true, endpoint: subscription.endpoint };
       } catch (error) {
-        console.error("Failed to send to:", sub.subscription.endpoint, error);
+        console.error(
+          "Failed to send to:",
+          (sub.subscription as PushSubscription).endpoint,
+          error
+        );
 
         // Remove invalid subscriptions (410 Gone or 404 Not Found)
         if (error.statusCode === 410 || error.statusCode === 404) {
@@ -48,7 +53,11 @@ export const sendNotificationToUser = async (userId, payload) => {
           console.log("Removed invalid subscription");
         }
 
-        return { success: false, endpoint: sub.subscription.endpoint, error };
+        return {
+          success: false,
+          endpoint: (sub.subscription as PushSubscription).endpoint,
+          error,
+        };
       }
     });
 
@@ -96,7 +105,8 @@ export const sendNotificationToAll = async (payload) => {
 
     const sendPromises = subscriptions.map(async (sub) => {
       try {
-        await webpush.sendNotification(sub.subscription, notificationPayload);
+        const subscription = sub.subscription as PushSubscription;
+        await webpush.sendNotification(subscription, notificationPayload);
         return { success: true };
       } catch (error) {
         if (error.statusCode === 410 || error.statusCode === 404) {

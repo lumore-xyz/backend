@@ -52,7 +52,14 @@ export const submitChatFeedback = async (req, res) => {
     return res.status(400).json({ message: "Invalid room participants" });
   }
 
-  const payload = {
+  const payload: {
+    user: any;
+    rejectedUser: any;
+    roomId: any;
+    feedback: string;
+    reason: string;
+    rating?: number;
+  } = {
     user: userId,
     rejectedUser,
     roomId,

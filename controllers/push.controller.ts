@@ -1,6 +1,7 @@
 import Push from "../models/push.model.js";
 import User from "../models/user.model.js";
 import { sendNotificationToUser } from "../services/push.service.js";
+import { HttpError } from "../utils/httpError.js";
 
 // Subscribe to push notifications
 export const subscribe = async (req, res, next) => {
@@ -12,13 +13,13 @@ export const subscribe = async (req, res, next) => {
 
     // Validate subscription object
     if (!subscription || !subscription.endpoint || !subscription.keys) {
-      return next(new Error("Invalid subscription object", 400));
+      return next(new HttpError("Invalid subscription object", 400));
     }
 
     // Check if user exists
     const user = await User.findById(userId);
     if (!user) {
-      return next(new Error("User not found", 404));
+      return next(new HttpError("User not found", 404));
     }
 
     // Check if subscription already exists for this endpoint
@@ -70,13 +71,13 @@ export const unsubscribe = async (req, res, next) => {
 
     // Validate endpoint
     if (!endpoint) {
-      return next(new Error("Endpoint is required", 400));
+      return next(new HttpError("Endpoint is required", 400));
     }
 
     // Check if user exists
     const user = await User.findById(userId);
     if (!user) {
-      return next(new Error("User not found", 404));
+      return next(new HttpError("User not found", 404));
     }
 
     // Find and delete the subscription
@@ -106,7 +107,9 @@ export const sendNotification = async (req, res, next) => {
     const { userId, title, body, icon, image, data, tag } = req.body;
 
     if (!userId || !title || !body) {
-      return next(new Error("userId, title, and body are required", 400));
+      return next(
+        new HttpError("userId, title, and body are required", 400)
+      );
     }
 
     const result = await sendNotificationToUser(userId, {

@@ -1,8 +1,52 @@
 // /models/user.model.js
 import bcrypt from "bcryptjs";
-import mongoose from "mongoose";
+import mongoose, { Model } from "mongoose";
 
-const userSchema = new mongoose.Schema(
+type FieldVisibility = Record<string, "public" | "unlocked" | "private">;
+
+export interface UserDocument extends mongoose.Document {
+  [key: string]: any;
+  password?: string;
+  location?: {
+    type?: string;
+    coordinates?: [number, number];
+    formattedAddress?: string;
+  };
+  fieldVisibility?: FieldVisibility;
+  lastActive?: Date;
+  lastLocationUpdate?: Date | null;
+  updateLastActive(): Promise<UserDocument>;
+  updateLocation(
+    latitude: number,
+    longitude: number,
+    formattedAddress?: string
+  ): Promise<UserDocument>;
+  comparePassword(enteredPassword: string): Promise<boolean>;
+  hasValidLocation(): boolean;
+}
+
+export interface UserModel extends Model<UserDocument> {
+  findNearby(
+    longitude: number,
+    latitude: number,
+    maxDistanceMeters?: number,
+    additionalQuery?: Record<string, any>,
+    userId?: string,
+    limit?: number
+  ): Promise<any[]>;
+  findMatchmakingCandidates(
+    userId: string,
+    userLocation: { coordinates: [number, number] },
+    userGenderPreference?: string | string[],
+    maxDistanceMeters?: number
+  ): Promise<any[]>;
+  getUserDistributionStats(
+    longitude: number,
+    latitude: number
+  ): Promise<any[]>;
+}
+
+const userSchema = new mongoose.Schema<UserDocument, UserModel>(
   {
     googleId: { type: String },
     telegramId: { type: String },
@@ -159,7 +203,10 @@ const userSchema = new mongoose.Schema(
       validate: {
         validator: function (v) {
           const validValues = ["public", "unlocked", "private"];
-          return Object.values(v).every((value) => validValues.includes(value));
+          const values = Object.values(
+            (v ?? {}) as Record<string, string>
+          ) as string[];
+          return values.every((value) => validValues.includes(value));
         },
         message:
           "Invalid visibility value. Must be one of: public, unlocked, private",
@@ -288,7 +335,7 @@ userSchema.pre("save", function (next) {
 
 // Password Comparison Method
 userSchema.methods.comparePassword = async function (enteredPassword) {
-  return await bcrypt.compare(enteredPassword, this.password);
+  return await bcrypt.compare(enteredPassword, this.password ?? "");
 };
 
 // Update last active timestamp
@@ -405,8 +452,8 @@ userSchema.methods.isFieldVisible = function (field, isUnlocked = false) {
 
 // Modify toJSON to filter fields based on visibility
 userSchema.methods.toJSON = function (isUnlocked = false) {
-  const obj = this.toObject();
-  const visibleObj = {};
+  const obj = this.toObject() as Record<string, any>;
+  const visibleObj: Record<string, any> = {};
 
   // Process each field based on visibility settings
   Object.keys(obj).forEach((field) => {
@@ -478,7 +525,7 @@ userSchema.statics.findMatchmakingCandidates = async function (
   const [longitude, latitude] = userLocation.coordinates;
 
   // Build gender filter (case-insensitive)
-  const genderFilter = {};
+  const genderFilter: Record<string, any> = {};
   if (userGenderPreference) {
     if (Array.isArray(userGenderPreference)) {
       genderFilter.gender = {
@@ -548,4 +595,6 @@ userSchema.statics.getUserDistributionStats = async function (
   ]);
 };
 
-export default mongoose.model("User", userSchema);
+const User = mongoose.model<UserDocument, UserModel>("User", userSchema);
+
+export default User;

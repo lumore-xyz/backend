@@ -1,5 +1,5 @@
 /// /middleware/authMiddleware.js
-import jwt from "jsonwebtoken";
+import jwt, { JwtPayload } from "jsonwebtoken";
 import User from "../models/user.model.js";
 
 export const protect = async (req, res, next) => {
@@ -20,7 +20,10 @@ export const protect = async (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+    const decoded = jwt.verify(
+      token,
+      process.env.ACCESS_TOKEN_SECRET as string
+    ) as JwtPayload & { id: string };
     const user = await User.findById(decoded.id).select("-password");
 
     if (!user) {

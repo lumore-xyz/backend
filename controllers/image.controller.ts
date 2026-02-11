@@ -9,7 +9,7 @@ dotenv.config();
 // Configure Multer-S3 Storage
 const upload = multer({
   storage: multerS3({
-    s3: s3,
+    s3: s3 as any,
     bucket: process.env.AWS_S3_BUCKET_NAME,
     acl: "public-read",
     metadata: (req, file, cb) => {

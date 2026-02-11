@@ -1,5 +1,29 @@
 import cloudinary from "../utils/cloudinary.js";
 
+type ResourceType = "raw" | "auto" | "image" | "video";
+
+type UploadResult = {
+  secure_url: string;
+  public_id: string;
+  [key: string]: any;
+};
+
+type OptimizeOptions = {
+  maxWidth?: number;
+  maxHeight?: number;
+  quality?: number;
+  format?: string;
+};
+
+type UploadImageOptions = OptimizeOptions & {
+  buffer: Buffer;
+  folder?: string;
+  publicId?: string;
+  resourceType?: ResourceType;
+  transformation?: any;
+  optimize?: boolean;
+};
+
 const DEFAULT_MAX_WIDTH = 1200;
 const DEFAULT_MAX_HEIGHT = 1200;
 
@@ -13,17 +37,18 @@ const getSharp = async () => {
 };
 
 export const optimizeImageBuffer = async (
-  buffer,
+  buffer: Buffer,
   {
     maxWidth = DEFAULT_MAX_WIDTH,
     maxHeight = DEFAULT_MAX_HEIGHT,
     quality = 80,
     format = "webp",
-  } = {}
+  }: OptimizeOptions = {},
 ) => {
   const sharp = await getSharp();
   if (!sharp) return { buffer, optimized: false };
 
+  // @ts-ignore
   const optimizedBuffer = await sharp(buffer)
     .rotate()
     .resize({
@@ -49,11 +74,16 @@ export const uploadImage = async ({
   maxWidth = DEFAULT_MAX_WIDTH,
   maxHeight = DEFAULT_MAX_HEIGHT,
   quality = 80,
-} = {}) => {
+}: UploadImageOptions) => {
   if (!buffer) throw new Error("Missing file buffer");
 
   const { buffer: uploadBuffer } = optimize
-    ? await optimizeImageBuffer(buffer, { maxWidth, maxHeight, quality, format })
+    ? await optimizeImageBuffer(buffer, {
+        maxWidth,
+        maxHeight,
+        quality,
+        format,
+      })
     : { buffer };
 
   const defaultTransform = [
@@ -62,7 +92,7 @@ export const uploadImage = async ({
     { crop: "limit", width: maxWidth, height: maxHeight },
   ];
 
-  return new Promise((resolve, reject) => {
+  return new Promise<UploadResult>((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
         resource_type: resourceType,
@@ -74,14 +104,17 @@ export const uploadImage = async ({
       (error, result) => {
         if (error) return reject(error);
         return resolve(result);
-      }
+      },
     );
 
     stream.end(uploadBuffer);
   });
 };
 
-export const deleteFile = async (publicId, resourceType = "image") => {
+export const deleteFile = async (
+  publicId: string,
+  resourceType: ResourceType = "image"
+) => {
   if (!publicId) return null;
   return cloudinary.uploader.destroy(publicId, {
     resource_type: resourceType,

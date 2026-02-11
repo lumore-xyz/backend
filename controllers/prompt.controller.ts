@@ -16,7 +16,7 @@ export const createPrompt = async (req, res) => {
 export const getAllPrompts = async (req, res) => {
   const { category } = req.query;
 
-  const filter = { isActive: true };
+  const filter: Record<string, any> = { isActive: true };
 
   if (category) {
     filter.category = {

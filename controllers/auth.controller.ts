@@ -1,7 +1,7 @@
 // import { parse, validate } from "@tma.js/init-data-node";
 // new push
 import { OAuth2Client } from "google-auth-library";
-import jwt from "jsonwebtoken";
+import jwt, { JwtPayload, Secret, SignOptions } from "jsonwebtoken";
 import User from "../models/user.model.js";
 
 const client = new OAuth2Client(
@@ -11,13 +11,30 @@ const client = new OAuth2Client(
 );
 
 // Generate JWT Token (id = userId)
+type JwtPayloadWithId = JwtPayload & { id: string };
+
 const generateToken = (id) => {
-  const accessToken = jwt.sign({ id }, process.env.ACCESS_TOKEN_SECRET, {
-    expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
-  });
-  const refreshToken = jwt.sign({ id }, process.env.REFRESH_TOKEN_SECRET, {
-    expiresIn: process.env.REFRESH_TOKEN_EXPIRY,
-  });
+  const accessSecret = process.env.ACCESS_TOKEN_SECRET as Secret;
+  const refreshSecret = process.env.REFRESH_TOKEN_SECRET as Secret;
+  const accessExpiry =
+    process.env.ACCESS_TOKEN_EXPIRY as SignOptions["expiresIn"];
+  const refreshExpiry =
+    process.env.REFRESH_TOKEN_EXPIRY as SignOptions["expiresIn"];
+
+  const accessToken = jwt.sign(
+    { id },
+    accessSecret,
+    {
+      expiresIn: accessExpiry,
+    }
+  );
+  const refreshToken = jwt.sign(
+    { id },
+    refreshSecret,
+    {
+      expiresIn: refreshExpiry,
+    }
+  );
 
   return { accessToken, refreshToken };
 };
@@ -25,6 +42,7 @@ const generateToken = (id) => {
 // Signup user
 export const signup = async (req, res) => {
   const { username, email, password } = req.body;
+  const userData = req.body;
 
   try {
     // Check for existing user
@@ -100,6 +118,9 @@ export const googleLogin = async (req, res) => {
       audience: process.env.GOOGLE_CLIENT_ID,
     });
     const payload = tickit.getPayload();
+    if (!payload) {
+      return res.status(400).json({ message: "Invalid Google token" });
+    }
     const { email, sub: googleId, name, picture, email_verified } = payload;
     if (!email_verified) {
       return res.status(400).json("email not verified by google");
@@ -147,6 +168,9 @@ export const googleLoginWeb = async (req, res) => {
       audience: process.env.GOOGLE_CLIENT_ID,
     });
     const payload = await tickit.getPayload();
+    if (!payload) {
+      return res.status(400).json({ message: "Invalid Google token" });
+    }
     const { email, sub: googleId, name, picture, email_verified } = payload;
     if (!email_verified) {
       return res.status(400).json("email not verified by google");
@@ -218,7 +242,7 @@ export const tma_login = async (req, res) => {
 
 export const refreshToken = async (req, res) => {
   const { refreshToken: reqRefreshToken } = req.body;
-  if (!refreshToken) {
+  if (!reqRefreshToken) {
     return res.status(401).json({
       error: "No refresh token provided",
     });
@@ -226,17 +250,18 @@ export const refreshToken = async (req, res) => {
   try {
     const decoded = jwt.verify(
       reqRefreshToken,
-      process.env.REFRESH_TOKEN_SECRET
-    );
+      process.env.REFRESH_TOKEN_SECRET as string
+    ) as JwtPayloadWithId;
     const user = await User.findById(decoded.id);
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
     const newAccessToken = jwt.sign(
       { id: user._id },
-      process.env.ACCESS_TOKEN_SECRET,
+      process.env.ACCESS_TOKEN_SECRET as Secret,
       {
-        expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
+        expiresIn:
+          process.env.ACCESS_TOKEN_EXPIRY as SignOptions["expiresIn"],
       }
     );
     res.status(200).json({ accessToken: newAccessToken });

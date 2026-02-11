@@ -15,7 +15,7 @@
  * - Matchmaking can be moved to a worker/queue later
  */
 import crypto from "crypto";
-import jwt from "jsonwebtoken";
+import jwt, { JwtPayload } from "jsonwebtoken";
 import { Server } from "socket.io";
 import Message from "../models/message.model.js";
 import UserPreference from "../models/preference.model.js";
@@ -54,7 +54,10 @@ const authenticateSocket = async (socket, next) => {
     const token = socket.handshake.auth.token;
     if (!token) throw new Error("No token");
 
-    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+    const decoded = jwt.verify(
+      token,
+      process.env.ACCESS_TOKEN_SECRET as string
+    ) as JwtPayload & { id: string };
 
     const user = await User.findById(decoded.id)
       .select("_id isActive lastActive")

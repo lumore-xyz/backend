@@ -1,6 +1,8 @@
 import crypto from "crypto";
 
 class KeyExchangeService {
+  private tempKeys: Map<string, any>;
+
   constructor() {
     this.tempKeys = new Map(); // Store temporary keys during exchange process
   }
@@ -19,7 +21,12 @@ class KeyExchangeService {
   }
 
   // Generate shared secret from public and private keys
-  computeSharedSecret(myPrivateKey, theirPublicKey, prime, generator) {
+  computeSharedSecret(
+    myPrivateKey: string,
+    theirPublicKey: string,
+    prime: string,
+    generator: string
+  ) {
     const dh = crypto.createDiffieHellman(
       Buffer.from(prime, "base64"),
       Buffer.from(generator, "base64")
@@ -40,12 +47,12 @@ class KeyExchangeService {
   }
 
   // Store temporary keys during exchange
-  storeTempKeys(userId, keys) {
+  storeTempKeys(userId: string, keys: any) {
     this.tempKeys.set(userId, keys);
   }
 
   // Get and remove temporary keys
-  getTempKeys(userId) {
+  getTempKeys(userId: string) {
     const keys = this.tempKeys.get(userId);
     this.tempKeys.delete(userId);
     return keys;

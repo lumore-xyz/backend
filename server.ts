@@ -1,4 +1,4 @@
-// server.js
+// server.ts
 import cors from "cors";
 import "dotenv/config";
 import express from "express";
@@ -78,3 +78,6 @@ httpServer.listen(PORT, () => {
     `API Documentation available at http://localhost:${PORT}/api-docs`
   );
 });
+
+
+
