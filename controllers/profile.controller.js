@@ -150,9 +150,9 @@ export const findNearbyUsers = async (req, res) => {
       preferences?.interestedIn &&
       !["everyone", "all"].includes(preferences.interestedIn)
     ) {
-      if (preferences.interestedIn === "women") {
+      if (preferences.interestedIn === "woman") {
         preferenceFilters.gender = "woman";
-      } else if (preferences.interestedIn === "men") {
+      } else if (preferences.interestedIn === "man") {
         preferenceFilters.gender = "man";
       }
     }
@@ -164,12 +164,12 @@ export const findNearbyUsers = async (req, res) => {
         const maxDob = new Date(
           today.getFullYear() - minAge,
           today.getMonth(),
-          today.getDate()
+          today.getDate(),
         );
         const minDob = new Date(
           today.getFullYear() - maxAge,
           today.getMonth(),
-          today.getDate()
+          today.getDate(),
         );
         preferenceFilters.dob = { $gte: minDob, $lte: maxDob };
       }
@@ -185,7 +185,10 @@ export const findNearbyUsers = async (req, res) => {
       }
     }
 
-    if (Array.isArray(preferences?.dietPreference) && preferences.dietPreference.length) {
+    if (
+      Array.isArray(preferences?.dietPreference) &&
+      preferences.dietPreference.length
+    ) {
       preferenceFilters.diet = { $in: preferences.dietPreference };
     }
 
@@ -254,7 +257,7 @@ export const findNearbyUsers = async (req, res) => {
         // isActive: true
         ...preferenceFilters,
       }, // additional filters
-      userId
+      userId,
     );
 
     res.json({
@@ -528,7 +531,7 @@ export const updateFieldVisibility = async (req, res) => {
 
     const validVisibilities = ["public", "unlocked", "private"];
     const invalidFields = Object.entries(fields).filter(
-      ([_, visibility]) => !validVisibilities.includes(visibility)
+      ([_, visibility]) => !validVisibilities.includes(visibility),
     );
 
     if (invalidFields.length > 0) {
@@ -578,7 +581,7 @@ export const deleteAccount = async (req, res) => {
         scheduledDeletionAt: deletionDate,
         isActive: false,
       },
-      { new: true }
+      { new: true },
     );
 
     if (!updatedUser) {

@@ -12,12 +12,12 @@ import {
   updateUserPreference,
 } from "../controllers/profile.controller.js";
 import { protect } from "../middleware/auth.middleware.js";
-import { upload } from "../middleware/upload.middleware.js";
-import { userControl } from "../middleware/userAction.middleware.js";
 import {
   profilePictureLimiter,
   profileUpdateLimiter,
 } from "../middleware/rateLimit.middleware.js";
+import { upload } from "../middleware/upload.middleware.js";
+import { userControl } from "../middleware/userAction.middleware.js";
 import {
   validateObjectIdParam,
   validateUpdateLocation,
@@ -177,22 +177,17 @@ router
     validateObjectIdParam("userId"),
     profileUpdateLimiter,
     userControl,
-    createUpdateProfile
+    createUpdateProfile,
   )
   .patch(
     protect,
     validateObjectIdParam("userId"),
     profileUpdateLimiter,
     userControl,
-    createUpdateProfile
+    createUpdateProfile,
   )
   .get(protect, validateObjectIdParam("userId"), getProfile)
-  .delete(
-    protect,
-    validateObjectIdParam("userId"),
-    userControl,
-    deleteAccount
-  );
+  .delete(protect, validateObjectIdParam("userId"), userControl, deleteAccount);
 
 router.post(
   "/:userId/update-location",
@@ -200,13 +195,13 @@ router.post(
   validateObjectIdParam("userId"),
   validateUpdateLocation,
   userControl,
-  updateUserLocation
+  updateUserLocation,
 );
 router.get(
   "/:userId/nearby",
   protect,
   validateObjectIdParam("userId"),
-  findNearbyUsers
+  findNearbyUsers,
 );
 
 /**
@@ -250,7 +245,7 @@ router.patch(
   "/:userId/visibility",
   protect,
   validateObjectIdParam("userId"),
-  updateFieldVisibility
+  updateFieldVisibility,
 );
 
 /**
@@ -277,7 +272,7 @@ router.patch(
  *             properties:
  *               interestedIn:
  *                 type: string
- *                 enum: [Men, Women, Non-Binary, Any]
+ *                 enum: [Man, woman, Non-Binary, Any]
  *               ageRange:
  *                 type: object
  *                 properties:
@@ -351,7 +346,7 @@ router
     protect,
     validateObjectIdParam("userId"),
     userControl,
-    updateUserPreference
+    updateUserPreference,
   );
 
 router.patch(
@@ -360,7 +355,7 @@ router.patch(
   validateObjectIdParam("userId"),
   profilePictureLimiter,
   upload.single("profilePic"),
-  updateProfilePicture
+  updateProfilePicture,
 );
 
 export default router;

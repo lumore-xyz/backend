@@ -10,7 +10,7 @@ export const appStatus = async (req, res) => {
     const isMatching = await User.countDocuments({ isMatching: true });
 
     // Gender counts (case-insensitive)
-    const womenCount = await User.countDocuments({
+    const womanCount = await User.countDocuments({
       gender: { $regex: /^woman$/i },
     });
 
@@ -27,9 +27,9 @@ export const appStatus = async (req, res) => {
         isMatching,
         inactiveUsers: totalUsers - activeUsers,
         genderDistribution: {
-          women: womenCount,
-          men: menCount,
-          others: totalUsers - womenCount - menCount,
+          woman: womanCount,
+          man: menCount,
+          others: totalUsers - womanCount - menCount,
         },
       },
     });
