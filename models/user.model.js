@@ -35,6 +35,20 @@ const userSchema = new mongoose.Schema(
     },
     emailVerified: { type: Boolean, default: false },
     phoneVerified: { type: Boolean, default: false },
+    isVerified: { type: Boolean, default: false },
+    verificationMethod: {
+      type: String,
+      default: null,
+    },
+    verificationStatus: {
+      type: String,
+      enum: ["not_started", "pending", "approved", "rejected", "failed"],
+      default: "not_started",
+    },
+    verificationSessionId: {
+      type: String,
+      default: null,
+    },
     password: {
       type: String,
       minlength: 8,
