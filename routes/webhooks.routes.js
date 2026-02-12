@@ -20,6 +20,12 @@ const mapVerificationStatus = (eventType, rawStatus) => {
   const normalizedEvent = String(eventType || "").toLowerCase();
 
   if (
+    ["in review", "in_review", "review", "pending"].includes(normalizedStatus)
+  ) {
+    return { isVerified: false, verificationStatus: "pending" };
+  }
+
+  if (
     ["approved", "verified", "completed", "success"].includes(normalizedStatus)
   ) {
     return { isVerified: true, verificationStatus: "approved" };
@@ -49,6 +55,33 @@ const mapVerificationStatus = (eventType, rawStatus) => {
 
   return { isVerified: false, verificationStatus: "pending" };
 };
+
+const frontendBaseUrl = () =>
+  (process.env.FRONTEND_URL || "https://lumore.xyz").replace(/\/+$/, "");
+
+// Browser callback from Didit. Update state using query params and redirect user.
+router.get("/didit/callback", async (req, res) => {
+  try {
+    const verificationSessionId = req.query?.verificationSessionId;
+    const status = req.query?.status;
+
+    if (verificationSessionId) {
+      const statusPatch = mapVerificationStatus("", status);
+      await User.findOneAndUpdate(
+        { verificationSessionId: String(verificationSessionId) },
+        {
+          verificationMethod: "didit",
+          ...statusPatch,
+        },
+      );
+    }
+
+    return res.redirect(302, `${frontendBaseUrl()}/app/profile`);
+  } catch (error) {
+    console.error("Didit browser callback error:", error);
+    return res.redirect(302, `${frontendBaseUrl()}/app/profile`);
+  }
+});
 
 router.post("/didit/callback", async (req, res) => {
   const signature = req.headers["x-signature"];
