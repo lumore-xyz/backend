@@ -16,6 +16,8 @@ import profileRoutes from "./routes/profile.routes.js";
 import promptRoutes from "./routes/prompt.routes.js";
 import pushRoutes from "./routes/push.routes.js";
 import statusRoutes from "./routes/status.routes.js";
+import diditRoutes from "./routes/didit.routes.js";
+import webhooksRoutes from "./routes/webhooks.routes.js";
 import { initializeCronJobs } from "./services/cron.service.js";
 import socketService from "./services/socket.service.js";
 
@@ -44,6 +46,7 @@ app.use(
   })
 );
 app.use(cors());
+app.use("/api", webhooksRoutes);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -64,6 +67,7 @@ app.use("/api/prompt", promptRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/messages", messagesRoutes);
 app.use("/api/inbox", matchRoomRoutes);
+app.use("/api/didit", diditRoutes);
 
 // Error handling middleware
 app.use(notFound);

@@ -15,6 +15,7 @@
   "dependencies": {
     "@tma.js/init-data-node": "^2.0.3",
     "aws-sdk": "^2.1693.0",
+    "axios": "^1.13.5",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^2.6.1",
     "cors": "^2.8.5",
