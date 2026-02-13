@@ -16,6 +16,7 @@ import profileRoutes from "./routes/profile.routes.js";
 import promptRoutes from "./routes/prompt.routes.js";
 import pushRoutes from "./routes/push.routes.js";
 import statusRoutes from "./routes/status.routes.js";
+import thisOrThatRoutes from "./routes/thisOrThat.routes.js";
 import diditRoutes from "./routes/didit.routes.js";
 import webhooksRoutes from "./routes/webhooks.routes.js";
 import { initializeCronJobs } from "./services/cron.service.js";
@@ -68,6 +69,7 @@ app.use("/api/push", pushRoutes);
 app.use("/api/messages", messagesRoutes);
 app.use("/api/inbox", matchRoomRoutes);
 app.use("/api/didit", diditRoutes);
+app.use("/api/games/this-or-that", thisOrThatRoutes);
 
 // Error handling middleware
 app.use(notFound);
