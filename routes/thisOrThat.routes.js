@@ -4,7 +4,9 @@ import {
   getUserThisOrThatAnswers,
   submitThisOrThatAnswer,
   submitThisOrThatQuestion,
+  updateThisOrThatQuestionStatus,
 } from "../controllers/thisOrThat.controller.js";
+import { requireAdmin } from "../middleware/admin.middleware.js";
 import { protect } from "../middleware/auth.middleware.js";
 import { upload } from "../middleware/upload.middleware.js";
 import { validateObjectIdParam } from "../middleware/validate.middleware.js";
@@ -19,6 +21,13 @@ router.get(
   getUserThisOrThatAnswers,
 );
 router.post("/answers", protect, submitThisOrThatAnswer);
+router.patch(
+  "/questions/:questionId/status",
+  protect,
+  requireAdmin,
+  validateObjectIdParam("questionId"),
+  updateThisOrThatQuestionStatus,
+);
 router.post(
   "/questions",
   protect,

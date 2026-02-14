@@ -475,7 +475,18 @@ export const getProfile = async (req, res) => {
 
       // Add fields based on visibility settings
       Object.entries(user).forEach(([field, value]) => {
-        if (["fieldVisibility", "password", "__v"].includes(field)) return;
+        if (
+          [
+            "fieldVisibility",
+            "password",
+            "__v",
+            "credits",
+            "lastDailyCreditAt",
+            "dailyConversations",
+            "lastConversationReset",
+          ].includes(field)
+        )
+          return;
 
         const visibility = fieldVisibility[field] || "public";
 

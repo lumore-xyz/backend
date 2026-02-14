@@ -22,6 +22,10 @@ import UserPreference from "../models/preference.model.js";
 import MatchRoom from "../models/room.model.js";
 import UnlockHistory from "../models/unlock.model.js";
 import User from "../models/user.model.js";
+import {
+  CREDIT_RULES,
+  spendCreditsForConversationStart,
+} from "./credits.service.js";
 import { keyExchangeService } from "./key.service.js";
 import { getOrCreateMatchRoom } from "./matching.service.js";
 import { sendNotificationToUser } from "./push.service.js";
@@ -156,7 +160,7 @@ const findBestMatch = async (userId, userPrefs) => {
     maxDistance,
     {
       isMatching: true,
-      dailyConversations: { $gt: 0 },
+      credits: { $gt: 0 },
     },
     userId
   );
@@ -239,15 +243,17 @@ const findBestMatch = async (userId, userPrefs) => {
  * - Push notifications are sent regardless of socket state
  */
 const createAndNotifyMatch = async (userId1, userId2) => {
+  const creditSpend = await spendCreditsForConversationStart(userId1, userId2);
+  if (!creditSpend.success) {
+    return { success: false, reason: creditSpend.reason };
+  }
+
   const room = await getOrCreateMatchRoom(userId1, userId2);
   await User.updateMany(
     { _id: { $in: [userId1, userId2] } },
     {
       $set: {
         isMatching: false,
-      },
-      $inc: {
-        dailyConversations: -1,
       },
     }
   );
@@ -257,23 +263,58 @@ const createAndNotifyMatch = async (userId1, userId2) => {
   const s1 = userSockets.get(userId1);
   const s2 = userSockets.get(userId2);
 
-  if (s1) {
-    s1.join(roomId);
-    s1.emit("matchFound", {
+  const matchNotificationForUser1 = sendNotificationToUser(userId1, {
+    title: "Match found!",
+    body: "You have a new match on Lumore.",
+    tag: `match-${roomId}`,
+    data: {
+      type: "match",
       roomId,
       matchedUserId: userId2,
+      url: `/app/chat/${roomId}`,
+    },
+  });
+
+  const matchNotificationForUser2 = sendNotificationToUser(userId2, {
+    title: "Match found!",
+    body: "You have a new match on Lumore.",
+    tag: `match-${roomId}`,
+    data: {
+      type: "match",
+      roomId,
+      matchedUserId: userId1,
+      url: `/app/chat/${roomId}`,
+    },
+  });
+
+  if (s1) {
+    s1.join(roomId);
+    s1.emit("creditsUpdated", {
+      credits: creditSpend.balances[userId1],
+      reason: "conversation_start",
     });
-    sendNotificationToUser(userId1, { title: "Match found!", body: "💙" });
+    s1.emit("matchFound", {
+      roomId,
+      matchedUser: userId2,
+      matchedUserId: userId2,
+    });
   }
 
   if (s2) {
     s2.join(roomId);
+    s2.emit("creditsUpdated", {
+      credits: creditSpend.balances[userId2],
+      reason: "conversation_start",
+    });
     s2.emit("matchFound", {
       roomId,
+      matchedUser: userId1,
       matchedUserId: userId1,
     });
-    sendNotificationToUser(userId2, { title: "Match found!", body: "💙" });
   }
+
+  await Promise.allSettled([matchNotificationForUser1, matchNotificationForUser2]);
+  return { success: true, roomId, balances: creditSpend.balances };
 };
 
 /* ============================================================
@@ -300,6 +341,19 @@ const handleConnection = (socket) => {
   /* -------- Matchmaking -------- */
   socket.on("startMatchmaking", async () => {
     try {
+      const currentUser = await User.findById(userId).select("credits").lean();
+      if (!currentUser || currentUser.credits < CREDIT_RULES.CONVERSATION_COST) {
+        socket.emit("insufficientCredits", {
+          message: "You need at least 1 credit to start matchmaking.",
+          credits: currentUser?.credits || 0,
+          required: CREDIT_RULES.CONVERSATION_COST,
+        });
+        socket.emit("matchmakingError", {
+          message: "Not enough credits to start matchmaking.",
+        });
+        return;
+      }
+
       const prefs = await UserPreference.findOne({ user: userId }).lean();
       await User.findByIdAndUpdate(userId, {
         isMatching: true,
@@ -308,7 +362,15 @@ const handleConnection = (socket) => {
 
       const match = await findBestMatch(userId, prefs);
       console.log("match", match);
-      if (match) await createAndNotifyMatch(userId, match.uid);
+      if (match) {
+        const created = await createAndNotifyMatch(userId, match.uid);
+        if (!created?.success) {
+          await User.findByIdAndUpdate(userId, { isMatching: false });
+          socket.emit("matchmakingError", {
+            message: "Unable to start conversation due to insufficient credits.",
+          });
+        }
+      }
     } catch (e) {
       socket.emit("matchmakingError", { message: e.message });
     }
@@ -373,6 +435,20 @@ const handleConnection = (socket) => {
     await MatchRoom.findByIdAndUpdate(roomId, {
       lastMessageAt: new Date(),
     });
+
+    if (receiverId && receiverId !== userId) {
+      await sendNotificationToUser(receiverId, {
+        title: "New message",
+        body: "You received a new message on Lumore.",
+        tag: `message-${roomId}`,
+        data: {
+          type: "message",
+          roomId,
+          senderId: userId,
+          url: `/app/chat/${roomId}`,
+        },
+      });
+    }
   });
 
   // Handle key exchange
@@ -637,3 +713,6 @@ const lockProfile = async (socket, userId, profileId, roomId) => {
 };
 
 export default { initialize };
+
+
+

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "cross-env NODE_ENV=development nodemon server.js",
-    "rundb": "sudo mongod --dbpath=/Users/rebel/data/db"
+    "rundb": "sudo mongod --dbpath=/Users/rebel/data/db",
+    "test": "node --test"
   },
   "keywords": [],
   "author": "",

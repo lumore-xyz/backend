@@ -1,6 +1,7 @@
 import { Types } from "mongoose";
 import ThisOrThatAnswer from "../models/thisOrThatAnswer.model.js";
 import ThisOrThatQuestion from "../models/thisOrThatQuestion.model.js";
+import { awardCreditsForThisOrThatApproval } from "../services/credits.service.js";
 import { uploadImage } from "../services/file.service.js";
 
 const DEFAULT_QUESTIONS = [
@@ -316,6 +317,56 @@ export const getUserThisOrThatAnswers = async (req, res) => {
     });
   } catch (error) {
     console.error("[this-or-that] Failed to fetch user answers:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const updateThisOrThatQuestionStatus = async (req, res) => {
+  try {
+    const { questionId } = req.params;
+    const { status } = req.body;
+
+    if (!Types.ObjectId.isValid(questionId)) {
+      return res.status(400).json({ success: false, message: "Invalid questionId" });
+    }
+
+    if (!["approved", "rejected", "pending"].includes(status)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "status must be approved, rejected or pending" });
+    }
+
+    const question = await ThisOrThatQuestion.findById(questionId);
+    if (!question) {
+      return res.status(404).json({ success: false, message: "Question not found" });
+    }
+
+    const previousStatus = question.status;
+    question.status = status;
+    await question.save();
+
+    let creditResult = { granted: false };
+    if (
+      status === "approved" &&
+      previousStatus !== "approved" &&
+      question.submittedBy
+    ) {
+      creditResult = await awardCreditsForThisOrThatApproval({
+        userId: question.submittedBy,
+        questionId: question._id,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Question status updated",
+      data: {
+        question,
+        creditAwarded: creditResult.granted,
+      },
+    });
+  } catch (error) {
+    console.error("[this-or-that] Failed to update status:", error);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };

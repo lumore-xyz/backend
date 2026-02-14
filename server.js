@@ -18,6 +18,9 @@ import pushRoutes from "./routes/push.routes.js";
 import statusRoutes from "./routes/status.routes.js";
 import thisOrThatRoutes from "./routes/thisOrThat.routes.js";
 import diditRoutes from "./routes/didit.routes.js";
+import creditsRoutes from "./routes/credits.routes.js";
+import adminRoutes from "./routes/admin.routes.js";
+import adminAuthRoutes from "./routes/adminAuth.routes.js";
 import webhooksRoutes from "./routes/webhooks.routes.js";
 import { initializeCronJobs } from "./services/cron.service.js";
 import socketService from "./services/socket.service.js";
@@ -70,6 +73,9 @@ app.use("/api/messages", messagesRoutes);
 app.use("/api/inbox", matchRoomRoutes);
 app.use("/api/didit", diditRoutes);
 app.use("/api/games/this-or-that", thisOrThatRoutes);
+app.use("/api/credits", creditsRoutes);
+app.use("/api/admin/auth", adminAuthRoutes);
+app.use("/api/admin", adminRoutes);
 
 // Error handling middleware
 app.use(notFound);

@@ -3,6 +3,7 @@
 import { OAuth2Client } from "google-auth-library";
 import jwt from "jsonwebtoken";
 import User from "../models/user.model.js";
+import { grantSignupBonusIfMissing } from "../services/credits.service.js";
 
 const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
@@ -48,6 +49,7 @@ export const signup = async (req, res) => {
       password,
     });
 
+    await grantSignupBonusIfMissing(user._id);
     await user.updateLastActive();
 
     res.status(201).json({
@@ -123,6 +125,7 @@ export const googleLogin = async (req, res) => {
           emailVerified: email_verified,
           profilePicture: picture,
         });
+        await grantSignupBonusIfMissing(user._id);
         isNewUser = true;
       }
     }
@@ -169,6 +172,7 @@ export const googleLoginWeb = async (req, res) => {
           emailVerified: email_verified,
           profilePicture: picture,
         });
+        await grantSignupBonusIfMissing(user._id);
         isNewUser = true;
       }
     }
@@ -201,6 +205,7 @@ export const tma_login = async (req, res) => {
         username: uniqueUsername,
         profilePicture: user?.photo_url,
       });
+      await grantSignupBonusIfMissing(_user._id);
       isNewUser = true;
     }
     await _user.updateLastActive();

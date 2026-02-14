@@ -1,6 +1,7 @@
 /// /middleware/authMiddleware.js
 import jwt from "jsonwebtoken";
 import User from "../models/user.model.js";
+import { grantDailyActiveBonus } from "../services/credits.service.js";
 
 export const protect = async (req, res, next) => {
   let token;
@@ -29,6 +30,9 @@ export const protect = async (req, res, next) => {
     }
 
     req.user = user; // Attach user to request object
+    grantDailyActiveBonus(user._id, new Date()).catch((err) => {
+      console.error("[credits] Failed to grant daily active bonus:", err?.message || err);
+    });
     next();
   } catch (error) {
     console.error("JWT Authentication Error:", error);

@@ -96,6 +96,7 @@ const userSchema = new mongoose.Schema(
     ],
     personalityType: String,
     isActive: { type: Boolean, default: false },
+    isAdmin: { type: Boolean, default: false, index: true },
     isArchived: { type: Boolean, default: false },
     archivedAt: { type: Date, default: null },
     scheduledDeletionAt: { type: Date, default: null },
@@ -142,6 +143,16 @@ const userSchema = new mongoose.Schema(
     dailyConversations: {
       type: Number,
       default: 10,
+    },
+    credits: {
+      type: Number,
+      default: 10,
+      min: 0,
+      index: true,
+    },
+    lastDailyCreditAt: {
+      type: Date,
+      default: null,
     },
     lastConversationReset: {
       type: Date,
