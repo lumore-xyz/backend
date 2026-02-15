@@ -18,7 +18,6 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
 import Message from "../models/message.model.js";
-import UserPreference from "../models/preference.model.js";
 import MatchRoom from "../models/room.model.js";
 import UnlockHistory from "../models/unlock.model.js";
 import User from "../models/user.model.js";
@@ -28,6 +27,7 @@ import {
 } from "./credits.service.js";
 import { keyExchangeService } from "./key.service.js";
 import { getOrCreateMatchRoom } from "./matching.service.js";
+import { findBestMatchV2 } from "./matchmaking.service.js";
 import { sendNotificationToUser } from "./push.service.js";
 
 /**
@@ -147,91 +147,6 @@ const initialize = (server) => {
  * - Explainable match reasons ("Matched because...")
  * - Time-based relaxation of strict rules
  */
-const findBestMatch = async (userId, userPrefs) => {
-  const currentUser = await User.findById(userId).lean();
-  if (!currentUser?.location?.coordinates) return null;
-
-  const [lng, lat] = currentUser.location.coordinates;
-  const maxDistance = (userPrefs?.distance || 10) * 1000;
-
-  const candidates = await User.findNearby(
-    lng,
-    lat,
-    maxDistance,
-    {
-      isMatching: true,
-      credits: { $gt: 0 },
-    },
-    userId
-  );
-
-  if (!candidates.length) return null;
-
-  const prefs = await UserPreference.find({
-    user: { $in: candidates.map((c) => c._id) },
-  }).lean();
-
-  const prefMap = new Map(prefs.map((p) => [p.user.toString(), p]));
-
-  let bestStrict = null;
-  let bestStrictScore = -1;
-
-  let bestFallback = null;
-  let bestFallbackScore = -1;
-
-  const safeUserPrefs = normalizePrefs(userPrefs || {});
-
-  for (const candidate of candidates) {
-    const candidatePrefs = prefMap.get(candidate._id.toString()) || {};
-
-    const safeCandidatePrefs = normalizePrefs(candidatePrefs);
-
-    const score = calculateMatchScore(
-      safeUserPrefs,
-      safeCandidatePrefs,
-      candidate
-    );
-
-    // Allow zero-score matches ONLY if prefs are missing
-    const isStrict = checkMutualInterest(
-      safeUserPrefs,
-      safeCandidatePrefs,
-      currentUser,
-      candidate
-    );
-
-    if (isStrict && score > bestStrictScore) {
-      bestStrictScore = score;
-      bestStrict = {
-        uid: candidate._id.toString(),
-        user: candidate,
-        mode: "STRICT",
-      };
-    }
-
-    if (score > bestFallbackScore) {
-      bestFallbackScore = score;
-      bestFallback = {
-        uid: candidate._id.toString(),
-        user: candidate,
-        mode: "FALLBACK",
-      };
-    }
-  }
-
-  // 🧊 COLD START GUARANTEE
-  if (!bestStrict && !bestFallback) {
-    const first = candidates[0];
-    return {
-      uid: first._id.toString(),
-      user: first,
-      mode: "COLD_START",
-    };
-  }
-
-  return bestStrict || bestFallback;
-};
-
 /* ============================================================
  * MATCH CREATION & NOTIFICATION
  * ============================================================
@@ -242,13 +157,13 @@ const findBestMatch = async (userId, userPrefs) => {
  * - Socket joins are defensive (socket may be offline)
  * - Push notifications are sent regardless of socket state
  */
-const createAndNotifyMatch = async (userId1, userId2) => {
+const createAndNotifyMatch = async (userId1, userId2, matchingNote = null) => {
   const creditSpend = await spendCreditsForConversationStart(userId1, userId2);
   if (!creditSpend.success) {
     return { success: false, reason: creditSpend.reason };
   }
 
-  const room = await getOrCreateMatchRoom(userId1, userId2);
+  const room = await getOrCreateMatchRoom(userId1, userId2, matchingNote);
   await User.updateMany(
     { _id: { $in: [userId1, userId2] } },
     {
@@ -297,6 +212,7 @@ const createAndNotifyMatch = async (userId1, userId2) => {
       roomId,
       matchedUser: userId2,
       matchedUserId: userId2,
+      matchingNote: room?.matchingNote || matchingNote || null,
     });
   }
 
@@ -310,6 +226,7 @@ const createAndNotifyMatch = async (userId1, userId2) => {
       roomId,
       matchedUser: userId1,
       matchedUserId: userId1,
+      matchingNote: room?.matchingNote || matchingNote || null,
     });
   }
 
@@ -330,6 +247,7 @@ const createAndNotifyMatch = async (userId1, userId2) => {
 const handleConnection = (socket) => {
   const userId = socket.user._id.toString();
   userSockets.set(userId, socket);
+  const logMatchStep = () => {};
 
   // Fire-and-forget presence update
   User.findByIdAndUpdate(userId, {
@@ -341,8 +259,16 @@ const handleConnection = (socket) => {
   /* -------- Matchmaking -------- */
   socket.on("startMatchmaking", async () => {
     try {
+      logMatchStep("start_requested", { socketId: socket.id });
+
       const currentUser = await User.findById(userId).select("credits").lean();
+      logMatchStep("credits_fetched", { credits: currentUser?.credits ?? null });
+
       if (!currentUser || currentUser.credits < CREDIT_RULES.CONVERSATION_COST) {
+        logMatchStep("credits_insufficient", {
+          credits: currentUser?.credits ?? 0,
+          required: CREDIT_RULES.CONVERSATION_COST,
+        });
         socket.emit("insufficientCredits", {
           message: "You need at least 1 credit to start matchmaking.",
           credits: currentUser?.credits || 0,
@@ -354,24 +280,44 @@ const handleConnection = (socket) => {
         return;
       }
 
-      const prefs = await UserPreference.findOne({ user: userId }).lean();
       await User.findByIdAndUpdate(userId, {
         isMatching: true,
         matchmakingTimestamp: Date.now(),
       });
+      logMatchStep("user_marked_matching");
 
-      const match = await findBestMatch(userId, prefs);
-      console.log("match", match);
+      const match = await findBestMatchV2({ userId, now: new Date() });
+      logMatchStep("match_lookup_completed", {
+        found: Boolean(match),
+        matchedUserId: match?.uid || null,
+        mode: match?.mode || null,
+        score: match?.score ?? null,
+      });
+
       if (match) {
-        const created = await createAndNotifyMatch(userId, match.uid);
+        const created = await createAndNotifyMatch(
+          userId,
+          match.uid,
+          match.matchingNote || null
+        );
+        logMatchStep("create_and_notify_result", {
+          success: Boolean(created?.success),
+          reason: created?.reason || null,
+          roomId: created?.roomId || null,
+        });
+
         if (!created?.success) {
           await User.findByIdAndUpdate(userId, { isMatching: false });
+          logMatchStep("user_unmarked_matching_after_failed_create");
           socket.emit("matchmakingError", {
             message: "Unable to start conversation due to insufficient credits.",
           });
         }
+      } else {
+        logMatchStep("no_match_found");
       }
     } catch (e) {
+      logMatchStep("start_failed", { error: e?.message || "Unknown error" });
       socket.emit("matchmakingError", { message: e.message });
     }
   });
@@ -530,139 +476,6 @@ const handleConnection = (socket) => {
  * - Safe to move into a shared utils module later
  */
 
-function getAge(dob) {
-  if (!dob) return 0;
-  const diff = Date.now() - new Date(dob).getTime();
-  return Math.floor(diff / 31557600000);
-}
-function hasOverlap(array, value) {
-  if (!Array.isArray(array)) return false;
-  return array.includes(value);
-}
-function intersection(a = [], b = []) {
-  return a.filter((x) => b.includes(x));
-}
-const checkMutualInterest = (userPrefs, candidatePrefs, user, candidate) => {
-  if (
-    candidatePrefs.interestedIn.length &&
-    !candidatePrefs.interestedIn.includes(user.gender)
-  ) {
-    return false;
-  }
-
-  if (!userPrefs.ageRange || !candidatePrefs.ageRange) return false;
-
-  const userAge = getAge(user.dob);
-  const candidateAge = getAge(candidate.dob);
-
-  return (
-    candidateAge >= userPrefs.ageRange.min &&
-    candidateAge <= userPrefs.ageRange.max &&
-    userAge >= candidatePrefs.ageRange.min &&
-    userAge <= candidatePrefs.ageRange.max
-  );
-};
-const calculateMatchScore = (userPrefs, candidatePrefs, candidateUser) => {
-  let score = 0;
-
-  // 1. Gender match (15 points)
-  if (userPrefs?.interestedIn?.includes(candidateUser.gender)) {
-    score += 15;
-  }
-
-  // 2. Age range match (15 points)
-  const age = getAge(candidateUser?.dob);
-  if (age >= userPrefs?.ageRange?.min && age <= userPrefs?.ageRange?.max) {
-    score += 15;
-  }
-
-  // 3. Goals match (up to 30 points)
-  const userGoals = [
-    userPrefs?.goal?.primary,
-    userPrefs?.goal?.secondary,
-    userPrefs?.goal?.tertiary,
-  ].filter(Boolean);
-
-  const candidateGoals = [
-    candidatePrefs?.goal?.primary,
-    candidatePrefs?.goal?.secondary,
-    candidatePrefs?.goal?.tertiary,
-  ].filter(Boolean);
-
-  const goalOverlap = userGoals.filter((goal) => candidateGoals.includes(goal));
-  score += goalOverlap.length * 10;
-
-  // 4. Interests match (up to 15 points)
-  const sharedHobbies = intersection(
-    userPrefs?.interests?.hobbies || [],
-    candidatePrefs?.interests?.hobbies || []
-  );
-  const sharedProfessional = intersection(
-    userPrefs?.interests?.professional || [],
-    candidatePrefs?.interests?.professional || []
-  );
-
-  score += Math.min((sharedHobbies.length + sharedProfessional.length) * 2, 15);
-
-  // 5. Diet match (5 points)
-  if (
-    hasOverlap(userPrefs?.dietPreference, candidateUser?.diet) ||
-    hasOverlap(userPrefs?.dietPreference, ["Any"])
-  ) {
-    score += 5;
-  }
-
-  // 6. Zodiac match (5 points)
-  if (
-    hasOverlap(userPrefs?.zodiacPreference, candidateUser.zodiacSign) ||
-    hasOverlap(userPrefs?.zodiacPreference, ["Any"])
-  ) {
-    score += 5;
-  }
-
-  // 7. Personality type match (5 points)
-  if (
-    hasOverlap(
-      userPrefs?.personalityTypePreference,
-      candidateUser?.personalityType
-    ) ||
-    hasOverlap(userPrefs?.personalityTypePreference, ["Any"])
-  ) {
-    score += 5;
-  }
-
-  // 8. Language match (5 points)
-  if (
-    intersection(
-      userPrefs?.preferredLanguages || [],
-      candidateUser?.languages || []
-    ).length > 0
-  ) {
-    score += 5;
-  }
-
-  // 9. Relationship type match (10 points)
-  if (
-    userPrefs?.relationshipType &&
-    candidatePrefs?.relationshipType &&
-    userPrefs?.relationshipType === candidatePrefs?.relationshipType
-  ) {
-    score += 10;
-  }
-
-  return score;
-};
-const normalizePrefs = (prefs) => ({
-  ...prefs,
-  interestedIn: Array.isArray(prefs?.interestedIn)
-    ? prefs.interestedIn
-    : prefs?.interestedIn
-    ? [prefs.interestedIn]
-    : [],
-  ageRange: Array.isArray(prefs?.ageRange)
-    ? { min: prefs.ageRange[0], max: prefs.ageRange[1] }
-    : prefs?.ageRange || null,
-});
 const unlockProfile = async (socket, userId, profileId, roomId) => {
   try {
     if (!profileId || !roomId) {
@@ -682,7 +495,6 @@ const unlockProfile = async (socket, userId, profileId, roomId) => {
       timestamp: new Date().toISOString(),
     });
 
-    console.log(`[Profile] ${userId} unlocked ${profileId}`);
   } catch (err) {
     console.error("[Profile] Unlock error:", err);
     socket.emit("error", { message: err.message });
@@ -705,7 +517,6 @@ const lockProfile = async (socket, userId, profileId, roomId) => {
       timestamp: new Date().toISOString(),
     });
 
-    console.log(`[Profile] ${userId} locked ${profileId}`);
   } catch (err) {
     console.error("[Profile] Lock error:", err);
     socket.emit("error", { message: err.message });
@@ -713,6 +524,7 @@ const lockProfile = async (socket, userId, profileId, roomId) => {
 };
 
 export default { initialize };
+
 
 
 

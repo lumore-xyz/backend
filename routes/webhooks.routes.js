@@ -111,8 +111,6 @@ router.post("/didit/callback", async (req, res) => {
     const sessionId = session?.session_id || session?.id || null;
     const rawStatus = session?.status || event?.status;
 
-    console.log("Didit webhook event:", eventType, sessionId);
-
     if (userId) {
       const statusPatch = mapVerificationStatus(eventType, rawStatus);
 

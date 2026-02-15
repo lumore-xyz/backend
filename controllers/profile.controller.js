@@ -315,7 +315,7 @@ export const updateProfilePicture = async (req, res) => {
       try {
         await deleteFile(oldPublicId, "image");
       } catch (error) {
-        console.warn("Cloudinary delete failed:", error?.message || error);
+        console.error("Cloudinary delete failed:", error?.message || error);
       }
     }
 
@@ -580,7 +580,6 @@ export const updateFieldVisibility = async (req, res) => {
 export const deleteAccount = async (req, res) => {
   try {
     const userId = req.user.id;
-
     const deletionDate = new Date();
     deletionDate.setDate(deletionDate.getDate() + 30);
 
@@ -591,6 +590,8 @@ export const deleteAccount = async (req, res) => {
         archivedAt: new Date(),
         scheduledDeletionAt: deletionDate,
         isActive: false,
+        isMatching: false,
+        matchmakingTimestamp: null,
       },
       { new: true },
     );

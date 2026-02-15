@@ -97,6 +97,60 @@ export const getCreditBalance = async (userId) => {
 };
 
 export const spendCreditsForConversationStart = async (initiatorId, partnerId) => {
+  const initiatorKey = initiatorId.toString();
+  const partnerKey = partnerId.toString();
+  const runWithoutTransaction = async () => {
+    const u1 = await User.findOneAndUpdate(
+      { _id: initiatorId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
+      { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
+      { new: true }
+    );
+    if (!u1) {
+      return { success: false, reason: "INSUFFICIENT_CREDITS" };
+    }
+
+    const u2 = await User.findOneAndUpdate(
+      { _id: partnerId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
+      { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
+      { new: true }
+    );
+    if (!u2) {
+      await User.findByIdAndUpdate(initiatorId, {
+        $inc: { credits: CREDIT_RULES.CONVERSATION_COST },
+      });
+      return { success: false, reason: "INSUFFICIENT_CREDITS" };
+    }
+
+    await CreditLedger.insertMany([
+      {
+        user: initiatorId,
+        amount: -CREDIT_RULES.CONVERSATION_COST,
+        type: "conversation_start",
+        balanceAfter: u1.credits,
+        referenceType: "user",
+        referenceId: partnerKey,
+        meta: { partnerId: partnerKey },
+      },
+      {
+        user: partnerId,
+        amount: -CREDIT_RULES.CONVERSATION_COST,
+        type: "conversation_start",
+        balanceAfter: u2.credits,
+        referenceType: "user",
+        referenceId: initiatorKey,
+        meta: { partnerId: initiatorKey },
+      },
+    ]);
+
+    return {
+      success: true,
+      balances: {
+        [initiatorKey]: u1.credits,
+        [partnerKey]: u2.credits,
+      },
+    };
+  };
+
   const session = await mongoose.startSession();
   try {
     let balances = null;
@@ -143,8 +197,8 @@ export const spendCreditsForConversationStart = async (initiatorId, partnerId) =
       );
 
       balances = {
-        [initiatorId.toString()]: u1.credits,
-        [partnerId.toString()]: u2.credits,
+        [initiatorKey]: u1.credits,
+        [partnerKey]: u2.credits,
       };
     });
 
@@ -152,6 +206,13 @@ export const spendCreditsForConversationStart = async (initiatorId, partnerId) =
   } catch (error) {
     if (error.message === "INSUFFICIENT_CREDITS") {
       return { success: false, reason: "INSUFFICIENT_CREDITS" };
+    }
+    const msg = String(error?.message || "");
+    const nonTxnMongo =
+      msg.includes("Transaction numbers are only allowed on a replica set member or mongos") ||
+      msg.includes("Transaction support is not available");
+    if (nonTxnMongo) {
+      return await runWithoutTransaction();
     }
     throw error;
   } finally {

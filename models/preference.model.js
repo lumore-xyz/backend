@@ -77,4 +77,6 @@ const userPreferenceSchema = new mongoose.Schema({
   },
 });
 
+userPreferenceSchema.index({ user: 1 }, { unique: true });
+
 export default mongoose.model("UserPreference", userPreferenceSchema);
