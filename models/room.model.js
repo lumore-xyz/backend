@@ -28,6 +28,10 @@ const MatchRoomSchema = new mongoose.Schema(
       ref: "User",
       default: null,
     },
+    matchingNote: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
   },
   { timestamps: true }
 );

@@ -275,11 +275,6 @@ userSchema.pre("save", function (next) {
   if (this.location && this.location.coordinates) {
     const [lng, lat] = this.location.coordinates;
 
-    // If coordinates are [0, 0], it's likely not set yet
-    if (lng === 0 && lat === 0) {
-      console.warn(`[User ${this._id}] Location not properly set (0,0)`);
-    }
-
     // Validate ranges
     if (lng < -180 || lng > 180) {
       return next(

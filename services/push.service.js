@@ -18,7 +18,6 @@ export const sendNotificationToUser = async (userId, payload) => {
     const subscriptions = await Push.find({ user: userId });
 
     if (subscriptions.length === 0) {
-      console.log("No subscriptions found for user:", userId);
       return { success: false, message: "No subscriptions found" };
     }
 
@@ -45,7 +44,6 @@ export const sendNotificationToUser = async (userId, payload) => {
         // Remove invalid subscriptions (410 Gone or 404 Not Found)
         if (error.statusCode === 410 || error.statusCode === 404) {
           await Push.findByIdAndDelete(sub._id);
-          console.log("Removed invalid subscription");
         }
 
         return { success: false, endpoint: sub.subscription.endpoint, error };

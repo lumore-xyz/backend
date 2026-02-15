@@ -1,6 +1,6 @@
 import MatchRoom from "../models/room.model.js";
 
-export const getOrCreateMatchRoom = async (userId1, userId2) => {
+export const getOrCreateMatchRoom = async (userId1, userId2, matchingNote = null) => {
   const participants = [userId1, userId2].sort(); // IMPORTANT
 
   let room = await MatchRoom.findOne({
@@ -12,14 +12,18 @@ export const getOrCreateMatchRoom = async (userId1, userId2) => {
     if (room.status !== "active") {
       room.status = "active";
       room.endedBy = null;
-      await room.save();
     }
+    if (matchingNote) {
+      room.matchingNote = matchingNote;
+    }
+    await room.save();
     return room;
   }
 
   room = await MatchRoom.create({
     participants,
     status: "active",
+    matchingNote,
   });
 
   return room;

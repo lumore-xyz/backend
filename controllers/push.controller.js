@@ -6,9 +6,7 @@ import { sendNotificationToUser } from "../services/push.service.js";
 export const subscribe = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    console.log("[subscribe] userId", userId);
     const { subscription } = req.body; // Changed from req.params to req.body
-    console.log("[subscribe] subscription", subscription);
 
     // Validate subscription object
     if (!subscription || !subscription.endpoint || !subscription.keys) {

@@ -116,11 +116,9 @@ export const getUserPosts = async (req, res) => {
  * GET SINGLE POST
  */
 export const getPostById = async (req, res) => {
-  console.log("Post Id :", req.params.id);
   const post = await Post.findById(req.params.id)
     .populate("content.promptId")
     .lean();
-  console.log("Post :", post);
   if (!post) {
     return res.status(404).json({ message: "Post not found" });
   }

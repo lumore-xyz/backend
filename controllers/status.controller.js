@@ -1,4 +1,5 @@
 import User from "../models/user.model.js";
+import { getPreferenceBasedAvailableCount } from "../services/matchmaking.service.js";
 
 export const appStatus = async (req, res) => {
   try {
@@ -38,6 +39,33 @@ export const appStatus = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch app status",
+      error: error.message,
+    });
+  }
+};
+
+export const preferenceMatchCount = async (req, res) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const count = await getPreferenceBasedAvailableCount({ userId });
+    return res.status(200).json({
+      success: true,
+      data: {
+        availableUsers: count,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching preference match count:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch preference match count",
       error: error.message,
     });
   }

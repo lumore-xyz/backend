@@ -14,7 +14,6 @@ export const protect = async (req, res, next) => {
   }
 
   if (!token) {
-    console.warn("[authMiddleware] No token provided");
     return res
       .status(401)
       .json({ message: "Not authorized, no token provided" });
@@ -25,7 +24,6 @@ export const protect = async (req, res, next) => {
     const user = await User.findById(decoded.id).select("-password");
 
     if (!user) {
-      console.warn("[authMiddleware] User not found for ID:", decoded.id);
       return res.status(401).json({ message: "User not found" });
     }
 
