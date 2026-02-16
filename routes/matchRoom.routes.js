@@ -1,6 +1,7 @@
 import express from "express";
 
 import {
+  getReceivedFeedbacks,
   getInbox,
   getRoomData,
   reportChatUser,
@@ -12,6 +13,7 @@ import { validateObjectIdParam } from "../middleware/validate.middleware.js";
 const router = express.Router();
 
 router.get("/", protect, getInbox);
+router.get("/feedback/received", protect, getReceivedFeedbacks);
 router.get("/:roomId", protect, validateObjectIdParam("roomId"), getRoomData);
 router.post(
   "/:roomId/feedback",

@@ -43,6 +43,48 @@ import { sendNotificationToUser } from "./push.service.js";
 let io = null;
 const userSockets = new Map();
 
+const DEFAULT_REACTION_EMOJI = "\u2764\uFE0F";
+
+const isParticipant = (room, currentUserId) =>
+  room?.participants?.some((id) => id.toString() === currentUserId.toString());
+
+const normalizeReplyMessage = (replyDoc) => {
+  if (!replyDoc) return null;
+  return {
+    _id: replyDoc._id?.toString(),
+    senderId: replyDoc.sender?._id
+      ? replyDoc.sender._id.toString()
+      : replyDoc.sender?.toString?.() || null,
+    encryptedData: replyDoc.encryptedData ? replyDoc.encryptedData.toString() : null,
+    iv: replyDoc.iv ? replyDoc.iv.toString() : null,
+    messageType: replyDoc.messageType || "text",
+    imageUrl: replyDoc.imageUrl || null,
+    editedAt: replyDoc.editedAt || null,
+    createdAt: replyDoc.createdAt || null,
+  };
+};
+
+const normalizeMessagePayload = (messageDoc, extra = {}) => ({
+  _id: messageDoc._id.toString(),
+  roomId: messageDoc.roomId,
+  senderId: messageDoc.sender?.toString?.() || null,
+  receiverId: messageDoc.receiver?.toString?.() || null,
+  messageType: messageDoc.messageType || "text",
+  encryptedData: messageDoc.encryptedData ? messageDoc.encryptedData.toString() : null,
+  iv: messageDoc.iv ? messageDoc.iv.toString() : null,
+  imageUrl: messageDoc.imageUrl || null,
+  imagePublicId: messageDoc.imagePublicId || null,
+  replyTo: normalizeReplyMessage(messageDoc.replyTo),
+  reactions: (messageDoc.reactions || []).map((reaction) => ({
+    userId: reaction.user?.toString?.() || null,
+    emoji: reaction.emoji || DEFAULT_REACTION_EMOJI,
+  })),
+  editedAt: messageDoc.editedAt || null,
+  createdAt: messageDoc.createdAt,
+  timestamp: new Date(messageDoc.createdAt).getTime(),
+  ...extra,
+});
+
 /* ============================================================
  * AUTHENTICATION MIDDLEWARE
  * ============================================================
@@ -352,48 +394,156 @@ const handleConnection = (socket) => {
   });
 
   socket.on("send_message", async (data) => {
-    const { roomId, encryptedContent, iv, receiverId } = data;
+    try {
+      const {
+        roomId,
+        encryptedContent,
+        iv,
+        receiverId,
+        replyTo,
+        messageType = "text",
+        imageUrl = null,
+        imagePublicId = null,
+        clientMessageId = null,
+      } = data || {};
 
-    const room = await MatchRoom.findById(roomId).lean();
-    if (!room) return;
+      const room = await MatchRoom.findById(roomId).lean();
+      if (!room) return;
+      if (!isParticipant(room, userId)) return;
+      if (room.status !== "active") return;
 
-    // Must be participant
-    if (!room.participants.some((id) => id.toString() === userId)) return;
+      if (messageType === "text" && (!encryptedContent || !iv)) return;
+      if (messageType === "image" && !imageUrl) return;
 
-    // Must be active
-    if (room.status !== "active") return;
+      let replyMessage = null;
+      if (replyTo) {
+        replyMessage = await Message.findOne({ _id: replyTo, roomId })
+          .select("_id sender messageType encryptedData iv imageUrl editedAt createdAt")
+          .lean();
+      }
 
-    socket.to(roomId).emit("new_message", {
-      senderId: userId,
-      encryptedData: encryptedContent,
-      iv,
-      timestamp: Date.now(),
-    });
-
-    await Message.create({
-      sender: userId,
-      receiver: receiverId,
-      roomId,
-      encryptedData: encryptedContent,
-      iv,
-    });
-
-    await MatchRoom.findByIdAndUpdate(roomId, {
-      lastMessageAt: new Date(),
-    });
-
-    if (receiverId && receiverId !== userId) {
-      await sendNotificationToUser(receiverId, {
-        title: "New message",
-        body: "You received a new message on Lumore.",
-        tag: `message-${roomId}`,
-        data: {
-          type: "message",
-          roomId,
-          senderId: userId,
-          url: `/app/chat/${roomId}`,
-        },
+      const createdMessage = await Message.create({
+        sender: userId,
+        receiver: receiverId,
+        roomId,
+        messageType,
+        encryptedData: messageType === "text" ? encryptedContent : undefined,
+        iv: messageType === "text" ? iv : undefined,
+        imageUrl: messageType === "image" ? imageUrl : null,
+        imagePublicId: messageType === "image" ? imagePublicId : null,
+        replyTo: replyMessage?._id || null,
       });
+
+      const payload = normalizeMessagePayload(
+        {
+          ...createdMessage.toObject(),
+          replyTo: replyMessage,
+        },
+        { clientMessageId }
+      );
+
+      socket.to(roomId).emit("new_message", payload);
+      socket.emit("message_sent", payload);
+
+      await MatchRoom.findByIdAndUpdate(roomId, {
+        lastMessageAt: new Date(),
+      });
+
+      if (receiverId && receiverId !== userId) {
+        await sendNotificationToUser(receiverId, {
+          title: "New message",
+          body: "You received a new message on Lumore.",
+          tag: `message-${roomId}`,
+          data: {
+            type: "message",
+            roomId,
+            senderId: userId,
+            url: `/app/chat/${roomId}`,
+          },
+        });
+      }
+    } catch (error) {
+      console.error("[send_message] Error:", error);
+      socket.emit("error", { message: "Unable to send message" });
+    }
+  });
+
+  socket.on("edit_message", async (data) => {
+    try {
+      const { roomId, messageId, encryptedContent, iv } = data || {};
+      if (!roomId || !messageId || !encryptedContent || !iv) return;
+
+      const room = await MatchRoom.findById(roomId).lean();
+      if (!room || !isParticipant(room, userId) || room.status !== "active") return;
+
+      const message = await Message.findOne({
+        _id: messageId,
+        roomId,
+        sender: userId,
+        messageType: "text",
+      });
+
+      if (!message) return;
+
+      message.encryptedData = encryptedContent;
+      message.iv = iv;
+      message.editedAt = new Date();
+      await message.save();
+
+      socket.nsp.to(roomId).emit("message_edited", {
+        roomId,
+        messageId: message._id.toString(),
+        encryptedData: message.encryptedData.toString(),
+        iv: message.iv.toString(),
+        editedAt: message.editedAt,
+      });
+    } catch (error) {
+      console.error("[edit_message] Error:", error);
+      socket.emit("error", { message: "Unable to edit message" });
+    }
+  });
+
+  socket.on("toggle_message_reaction", async (data) => {
+    try {
+      const { roomId, messageId, emoji = DEFAULT_REACTION_EMOJI } = data || {};
+      if (!roomId || !messageId) return;
+
+      const room = await MatchRoom.findById(roomId).lean();
+      if (!room || !isParticipant(room, userId)) return;
+
+      const message = await Message.findOne({ _id: messageId, roomId });
+      if (!message) return;
+
+      const existingIndex = message.reactions.findIndex(
+        (reaction) => reaction.user.toString() === userId
+      );
+
+      if (existingIndex >= 0) {
+        if (message.reactions[existingIndex].emoji === emoji) {
+          message.reactions.splice(existingIndex, 1);
+        } else {
+          message.reactions[existingIndex].emoji = emoji;
+        }
+      } else {
+        message.reactions.push({
+          user: userId,
+          emoji,
+        });
+      }
+
+      await message.save();
+
+      socket.nsp.to(roomId).emit("message_reaction_updated", {
+        roomId,
+        messageId: message._id.toString(),
+        reactions: (message.reactions || []).map((reaction) => ({
+          userId: reaction.user.toString(),
+          emoji: reaction.emoji || DEFAULT_REACTION_EMOJI,
+        })),
+      });
+    } catch (error) {
+      console.error("[toggle_message_reaction] Error:", error);
+      socket.emit("error", { message: "Unable to update reaction" });
     }
   });
 
@@ -524,6 +674,7 @@ const lockProfile = async (socket, userId, profileId, roomId) => {
 };
 
 export default { initialize };
+
 
 
 

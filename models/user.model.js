@@ -140,10 +140,6 @@ const userSchema = new mongoose.Schema(
         type: String,
       },
     ],
-    dailyConversations: {
-      type: Number,
-      default: 10,
-    },
     credits: {
       type: Number,
       default: 10,
@@ -153,10 +149,6 @@ const userSchema = new mongoose.Schema(
     lastDailyCreditAt: {
       type: Date,
       default: null,
-    },
-    lastConversationReset: {
-      type: Date,
-      default: Date.now,
     },
     fieldVisibility: {
       type: Object,
@@ -385,23 +377,6 @@ userSchema.methods.updateFieldVisibility = async function (field, visibility) {
   }
   this.fieldVisibility[field] = visibility;
   return await this.save();
-};
-
-// Reset daily conversations
-userSchema.methods.resetDailyConversations = async function () {
-  const today = new Date();
-  const lastReset = new Date(this.lastConversationReset);
-
-  // Reset if it's a new day
-  if (
-    today.getDate() !== lastReset.getDate() ||
-    today.getMonth() !== lastReset.getMonth() ||
-    today.getFullYear() !== lastReset.getFullYear()
-  ) {
-    this.dailyConversations = 0;
-    this.lastConversationReset = today;
-    await this.save();
-  }
 };
 
 // Check field visibility

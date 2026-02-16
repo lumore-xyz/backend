@@ -107,3 +107,23 @@ export const reportChatUser = async (req, res) => {
 
   res.status(201).json(report);
 };
+
+export const getReceivedFeedbacks = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    const feedbacks = await RejectedProfile.find({
+      rejectedUser: userId,
+      feedback: { $exists: true, $ne: "" },
+    })
+      .populate("user", "_id username nickname profilePicture")
+      .populate("roomId", "_id createdAt")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json(feedbacks);
+  } catch (error) {
+    console.error("[feedback] getReceivedFeedbacks failed:", error);
+    return res.status(500).json({ message: "Failed to fetch received feedbacks" });
+  }
+};

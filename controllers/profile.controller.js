@@ -48,8 +48,6 @@ export const createUpdateProfile = async (req, res) => {
       "location.coordinates",
       "location.formattedAddress",
       "fieldVisibility",
-      "dailyConversations",
-      "lastConversationReset",
       "bloodGroup",
     ];
 
@@ -482,8 +480,6 @@ export const getProfile = async (req, res) => {
             "__v",
             "credits",
             "lastDailyCreditAt",
-            "dailyConversations",
-            "lastConversationReset",
           ].includes(field)
         )
           return;

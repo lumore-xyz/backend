@@ -1,29 +1,11 @@
 import cron from "node-cron";
-import User from "../models/user.model.js";
 import { deleteUserAndActivity } from "./accountDeletion.service.js";
+import { cleanupExpiredImageMessages } from "./messageCleanup.service.js";
 
 /**
  * Initialize all cron jobs
  */
 export const initializeCronJobs = () => {
-  // Reset daily conversations count every day at midnight
-  cron.schedule("0 0 * * *", async () => {
-    try {
-      // Reset dailyConversations to 10 for all users
-      await User.updateMany(
-        {},
-        {
-          $set: {
-            dailyConversations: 10,
-            lastConversationReset: new Date(),
-          },
-        }
-      );
-    } catch (error) {
-      console.error("[Cron] Error resetting daily conversations:", error);
-    }
-  });
-
   // Delete archived accounts that passed scheduledDeletionAt
   cron.schedule("30 2 * * *", async () => {
     try {
@@ -50,6 +32,18 @@ export const initializeCronJobs = () => {
       }
     } catch (error) {
       console.error("[Cron] Error deleting archived accounts:", error);
+    }
+  });
+
+  // Clean up image messages before TTL deletion so cloud files are not orphaned.
+  cron.schedule("*/10 * * * *", async () => {
+    try {
+      const result = await cleanupExpiredImageMessages();
+      if (result.scanned > 0) {
+        console.log("[Cron] Message image cleanup:", result);
+      }
+    } catch (error) {
+      console.error("[Cron] Error cleaning up expired image messages:", error);
     }
   });
 
