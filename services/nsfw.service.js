@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { pathToFileURL } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import sharp from "sharp";
 
 const NSFW_EXPLICIT_SUM_THRESHOLD = Number(
@@ -16,9 +16,11 @@ const NSFW_NEUTRAL_SOFT_ALLOW_THRESHOLD = Number(
   process.env.NSFW_NEUTRAL_SOFT_ALLOW_THRESHOLD || 0.2,
 );
 const NSFW_MODEL_INPUT_SIZE = Number(process.env.NSFW_MODEL_INPUT_SIZE || 299);
+const NSFW_EXPOSE_SCAN_ERRORS = process.env.NSFW_EXPOSE_SCAN_ERRORS === "true";
 
 let modelPromise = null;
 let hasLoggedThresholds = false;
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 const isHttpUrl = (value) => /^https?:\/\//i.test(String(value || ""));
 
@@ -31,6 +33,8 @@ const resolveLocalModelPath = () => {
   const candidates = [
     path.resolve(process.cwd(), "nsfw_model/model.json"),
     path.resolve(process.cwd(), "public/nsfw_model/model.json"),
+    path.resolve(moduleDir, "../nsfw_model/model.json"),
+    path.resolve(moduleDir, "../public/nsfw_model/model.json"),
   ];
 
   for (const candidate of candidates) {
@@ -77,22 +81,38 @@ const getModel = async () => {
             `http://127.0.0.1:${port}/nsfw_model/model.json`;
       } else if (isHttpUrl(explicitUrl)) {
         modelSource = explicitUrl;
+      } else {
+        console.warn(
+          "[nsfw] local model not found and NSFW_MODEL_URL is missing; falling back to default remote model source",
+        );
       }
 
       console.log("[nsfw] loading model", {
         useNodeBinding,
         source: modelSource || "default-bundled",
+        localModelPath: localModelPath || null,
         inputSize: NSFW_MODEL_INPUT_SIZE,
       });
 
-      const model = modelSource
-        ? await loadModel(modelSource, { size: NSFW_MODEL_INPUT_SIZE })
-        : await loadModel(undefined, { size: NSFW_MODEL_INPUT_SIZE });
+      let model;
+      try {
+        model = modelSource
+          ? await loadModel(modelSource, { size: NSFW_MODEL_INPUT_SIZE })
+          : await loadModel(undefined, { size: NSFW_MODEL_INPUT_SIZE });
+      } catch (error) {
+        const detail = error?.message || String(error);
+        throw new Error(
+          `Failed loading NSFW model from ${modelSource || "default source"}: ${detail}`,
+        );
+      }
 
       console.log("[nsfw] model loaded successfully");
 
       return { tf, model, useNodeBinding };
-    })();
+    })().catch((error) => {
+      modelPromise = null;
+      throw error;
+    });
   }
 
   return modelPromise;
@@ -186,4 +206,12 @@ export const isSafeImageBuffer = async (buffer) => {
       ? null
       : "Image blocked by safety policy. Please choose a non-explicit image.",
   };
+};
+
+export const getScanFailureMessage = (error) => {
+  const detail = error?.message || "Unknown error";
+  if (process.env.NODE_ENV === "development" || NSFW_EXPOSE_SCAN_ERRORS) {
+    return `Image safety scan failed: ${detail}`;
+  }
+  return "Image safety scan is temporarily unavailable. Please try again.";
 };
