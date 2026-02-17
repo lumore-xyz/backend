@@ -18,6 +18,7 @@ const NSFW_NEUTRAL_SOFT_ALLOW_THRESHOLD = Number(
 const NSFW_MODEL_INPUT_SIZE = Number(process.env.NSFW_MODEL_INPUT_SIZE || 299);
 
 let modelPromise = null;
+let hasLoggedThresholds = false;
 
 const isHttpUrl = (value) => /^https?:\/\//i.test(String(value || ""));
 
@@ -78,9 +79,17 @@ const getModel = async () => {
         modelSource = explicitUrl;
       }
 
+      console.log("[nsfw] loading model", {
+        useNodeBinding,
+        source: modelSource || "default-bundled",
+        inputSize: NSFW_MODEL_INPUT_SIZE,
+      });
+
       const model = modelSource
         ? await loadModel(modelSource, { size: NSFW_MODEL_INPUT_SIZE })
         : await loadModel(undefined, { size: NSFW_MODEL_INPUT_SIZE });
+
+      console.log("[nsfw] model loaded successfully");
 
       return { tf, model, useNodeBinding };
     })();
@@ -100,6 +109,17 @@ const decodeImageWithSharp = async (buffer, tf) => {
 
 export const analyzeImageBuffer = async (buffer) => {
   if (!buffer) throw new Error("Missing image buffer for NSFW analysis");
+  if (!hasLoggedThresholds) {
+    hasLoggedThresholds = true;
+    console.log("[nsfw] thresholds", {
+      explicitSum: NSFW_EXPLICIT_SUM_THRESHOLD,
+      singleExplicit: NSFW_SINGLE_EXPLICIT_THRESHOLD,
+      sexyHard: NSFW_SEXY_HARD_THRESHOLD,
+      neutralSoftAllow: NSFW_NEUTRAL_SOFT_ALLOW_THRESHOLD,
+      inputSize: NSFW_MODEL_INPUT_SIZE,
+    });
+  }
+  console.log("[nsfw] analyzing image buffer", { bytes: buffer.length });
 
   const { tf, model, useNodeBinding } = await getModel();
 
@@ -108,6 +128,13 @@ export const analyzeImageBuffer = async (buffer) => {
     : await decodeImageWithSharp(buffer, tf);
   try {
     const predictions = await model.classify(decoded);
+    console.log(
+      "[nsfw] predictions",
+      predictions.map((item) => ({
+        className: item.className,
+        probability: Number(item.probability || 0).toFixed(4),
+      })),
+    );
     return predictions;
   } finally {
     decoded.dispose();
@@ -141,6 +168,17 @@ export const isSafeImageBuffer = async (buffer) => {
     drawingScore < NSFW_NEUTRAL_SOFT_ALLOW_THRESHOLD;
 
   const safe = !(blockedByExplicit || blockedByExtremeSexy);
+  console.log("[nsfw] decision", {
+    safe,
+    pornScore: Number(pornScore.toFixed(4)),
+    hentaiScore: Number(hentaiScore.toFixed(4)),
+    sexyScore: Number(sexyScore.toFixed(4)),
+    neutralScore: Number(neutralScore.toFixed(4)),
+    drawingScore: Number(drawingScore.toFixed(4)),
+    explicitScore: Number(explicitScore.toFixed(4)),
+    blockedByExplicit,
+    blockedByExtremeSexy,
+  });
   return {
     safe,
     predictions,

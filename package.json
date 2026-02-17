@@ -15,6 +15,7 @@
   "description": "",
   "dependencies": {
     "@tensorflow/tfjs": "^3.21.0",
+    "@tensorflow/tfjs-node": "^4.22.0",
     "@tma.js/init-data-node": "^2.0.3",
     "aws-sdk": "^2.1693.0",
     "axios": "^1.13.5",
