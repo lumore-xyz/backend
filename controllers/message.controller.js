@@ -1,7 +1,6 @@
 import MatchRoom from "../models/room.model.js";
 import Message from "../models/message.model.js";
 import { deleteFile, uploadImage } from "../services/file.service.js";
-import { getScanFailureMessage, isSafeImageBuffer } from "../services/nsfw.service.js";
 
 const isRoomParticipant = (room, userId) =>
   room?.participants?.some((id) => id.toString() === userId.toString());
@@ -98,26 +97,6 @@ export const uploadRoomImage = async (req, res) => {
     }
     if (room === "inactive") {
       return res.status(400).json({ message: "Room is not active" });
-    }
-
-    const safety = await isSafeImageBuffer(req.file.buffer).catch((error) => {
-      console.error("Error scanning room image:", error);
-      const failOpen = process.env.NSFW_FAIL_OPEN_ON_ERROR === "true";
-      if (failOpen) {
-        console.warn("[nsfw] scan failed; allowing upload due to NSFW_FAIL_OPEN_ON_ERROR=true");
-        return { safe: true, reason: null };
-      }
-      return {
-        safe: false,
-        statusCode: 503,
-        reason: getScanFailureMessage(error),
-      };
-    });
-
-    if (!safety?.safe) {
-      return res
-        .status(safety?.statusCode || 422)
-        .json({ message: safety?.reason || "Image blocked by safety policy." });
     }
 
     const uploaded = await uploadImage({

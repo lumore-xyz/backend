@@ -4,8 +4,6 @@ import "dotenv/config";
 import express from "express";
 import helmet from "helmet";
 import { createServer } from "http";
-import path from "path";
-import { fileURLToPath } from "url";
 import swaggerUi from "swagger-ui-express";
 import connectDB from "./config/db.js";
 import { specs } from "./config/swagger.js";
@@ -32,7 +30,6 @@ connectDB();
 
 const app = express();
 const httpServer = createServer(app);
-const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 const defaultAllowedOrigins = [
   "http://localhost:3000",
@@ -112,10 +109,6 @@ app.use(
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 app.use("/api", webhooksRoutes);
-app.use(
-  "/nsfw_model",
-  express.static(path.resolve(rootDir, "nsfw_model")),
-);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
