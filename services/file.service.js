@@ -19,7 +19,7 @@ export const optimizeImageBuffer = async (
     maxHeight = DEFAULT_MAX_HEIGHT,
     quality = 80,
     format = "webp",
-  } = {}
+  } = {},
 ) => {
   const sharp = await getSharp();
   if (!sharp) return { buffer, optimized: false };
@@ -53,7 +53,12 @@ export const uploadImage = async ({
   if (!buffer) throw new Error("Missing file buffer");
 
   const { buffer: uploadBuffer } = optimize
-    ? await optimizeImageBuffer(buffer, { maxWidth, maxHeight, quality, format })
+    ? await optimizeImageBuffer(buffer, {
+        maxWidth,
+        maxHeight,
+        quality,
+        format,
+      })
     : { buffer };
 
   const defaultTransform = [
@@ -73,8 +78,8 @@ export const uploadImage = async ({
       },
       (error, result) => {
         if (error) return reject(error);
-        return resolve(result);
-      }
+        resolve(result);
+      },
     );
 
     stream.end(uploadBuffer);
