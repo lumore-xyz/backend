@@ -19,6 +19,7 @@ import postRoutes from "./routes/post.routes.js";
 import profileRoutes from "./routes/profile.routes.js";
 import promptRoutes from "./routes/prompt.routes.js";
 import pushRoutes from "./routes/push.routes.js";
+import referralRoutes from "./routes/referral.routes.js";
 import statusRoutes from "./routes/status.routes.js";
 import thisOrThatRoutes from "./routes/thisOrThat.routes.js";
 import webhooksRoutes from "./routes/webhooks.routes.js";
@@ -132,6 +133,7 @@ app.use("/api/inbox", matchRoomRoutes);
 app.use("/api/didit", diditRoutes);
 app.use("/api/games/this-or-that", thisOrThatRoutes);
 app.use("/api/credits", creditsRoutes);
+app.use("/api/referral", referralRoutes);
 app.use("/api/admin/auth", adminAuthRoutes);
 app.use("/api/admin", adminRoutes);
 

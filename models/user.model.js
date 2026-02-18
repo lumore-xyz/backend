@@ -146,6 +146,12 @@ const userSchema = new mongoose.Schema(
       min: 0,
       index: true,
     },
+    referredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
     lastDailyCreditAt: {
       type: Date,
       default: null,

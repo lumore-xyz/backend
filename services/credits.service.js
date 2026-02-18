@@ -4,10 +4,24 @@ import User from "../models/user.model.js";
 
 export const CREDIT_RULES = {
   SIGNUP_BONUS: 10,
-  DAILY_ACTIVE_BONUS: 3,
+  DAILY_ACTIVE_BONUS_VERIFIED: 3,
+  DAILY_ACTIVE_BONUS_UNVERIFIED: 1,
   CONVERSATION_COST: 1,
   THIS_OR_THAT_APPROVAL_BONUS: 5,
+  REFERRAL_VERIFICATION_BONUS: 10,
 };
+
+const getDailyActiveBonusForUser = (user) => {
+  const isVerified = Boolean(
+    user?.isVerified || user?.verificationStatus === "approved"
+  );
+  return isVerified
+    ? CREDIT_RULES.DAILY_ACTIVE_BONUS_VERIFIED
+    : CREDIT_RULES.DAILY_ACTIVE_BONUS_UNVERIFIED;
+};
+
+const isUserVerified = (user) =>
+  Boolean(user?.isVerified || user?.verificationStatus === "approved");
 
 export const getUtcDayStart = (date = new Date()) =>
   new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -46,41 +60,71 @@ export const grantDailyActiveBonus = async (userId, now = new Date()) => {
   const dayStart = getUtcDayStart(now);
   const nextDayStart = getNextUtcDayStart(now);
 
+  const candidate = await User.findOne({
+    _id: userId,
+    $or: [{ lastDailyCreditAt: { $lt: dayStart } }, { lastDailyCreditAt: null }],
+  })
+    .select("isVerified verificationStatus")
+    .lean();
+
+  if (!candidate) {
+    const current = await User.findById(userId)
+      .select("credits lastDailyCreditAt isVerified verificationStatus")
+      .lean();
+    return {
+      granted: false,
+      credits: current?.credits ?? 0,
+      nextDailyRewardAt: nextDayStart,
+      dailyRewardAmount: current ? getDailyActiveBonusForUser(current) : 0,
+    };
+  }
+
+  const bonus = getDailyActiveBonusForUser(candidate);
   const user = await User.findOneAndUpdate(
     {
       _id: userId,
       $or: [{ lastDailyCreditAt: { $lt: dayStart } }, { lastDailyCreditAt: null }],
     },
     {
-      $inc: { credits: CREDIT_RULES.DAILY_ACTIVE_BONUS },
+      $inc: { credits: bonus },
       $set: { lastDailyCreditAt: now },
     },
     { new: true }
   );
 
   if (!user) {
-    const current = await User.findById(userId).select("credits lastDailyCreditAt").lean();
+    const current = await User.findById(userId)
+      .select("credits lastDailyCreditAt isVerified verificationStatus")
+      .lean();
     return {
       granted: false,
       credits: current?.credits ?? 0,
       nextDailyRewardAt: nextDayStart,
+      dailyRewardAmount: current ? getDailyActiveBonusForUser(current) : 0,
     };
   }
 
   await CreditLedger.create({
     user: userId,
-    amount: CREDIT_RULES.DAILY_ACTIVE_BONUS,
+    amount: bonus,
     type: "daily_active",
     balanceAfter: user.credits,
     referenceType: "daily_active",
     referenceId: dayStart.toISOString(),
   });
 
-  return { granted: true, credits: user.credits, nextDailyRewardAt: nextDayStart };
+  return {
+    granted: true,
+    credits: user.credits,
+    nextDailyRewardAt: nextDayStart,
+    dailyRewardAmount: bonus,
+  };
 };
 
 export const getCreditBalance = async (userId) => {
-  const user = await User.findById(userId).select("credits lastDailyCreditAt").lean();
+  const user = await User.findById(userId)
+    .select("credits lastDailyCreditAt isVerified verificationStatus")
+    .lean();
   if (!user) return null;
 
   const dayStart = getUtcDayStart(new Date());
@@ -93,6 +137,7 @@ export const getCreditBalance = async (userId) => {
     lastDailyCreditAt: user.lastDailyCreditAt,
     rewardGrantedToday,
     nextDailyRewardAt: getNextUtcDayStart(new Date()),
+    dailyRewardAmount: getDailyActiveBonusForUser(user),
   };
 };
 
@@ -252,6 +297,78 @@ export const awardCreditsForThisOrThatApproval = async ({
   });
 
   return { granted: true, credits: user.credits };
+};
+
+export const awardReferralBonusForVerifiedUser = async ({
+  referredUserId,
+  now = new Date(),
+}) => {
+  const referredUser = await User.findById(referredUserId)
+    .select("_id username isVerified verificationStatus referredBy")
+    .lean();
+
+  if (!referredUser?.referredBy) {
+    return { granted: false, reason: "NO_REFERRER" };
+  }
+
+  if (!isUserVerified(referredUser)) {
+    return { granted: false, reason: "REFERRED_USER_NOT_VERIFIED" };
+  }
+
+  const referrer = await User.findById(referredUser.referredBy)
+    .select("_id username isVerified verificationStatus")
+    .lean();
+
+  if (!referrer) {
+    return { granted: false, reason: "REFERRER_NOT_FOUND" };
+  }
+
+  if (!isUserVerified(referrer)) {
+    return { granted: false, reason: "REFERRER_NOT_VERIFIED" };
+  }
+
+  const existing = await CreditLedger.findOne({
+    user: referrer._id,
+    type: "referral_bonus",
+    referenceType: "user",
+    referenceId: referredUser._id.toString(),
+  }).lean();
+
+  if (existing) {
+    return { granted: false, reason: "ALREADY_GRANTED" };
+  }
+
+  const updatedReferrer = await User.findByIdAndUpdate(
+    referrer._id,
+    { $inc: { credits: CREDIT_RULES.REFERRAL_VERIFICATION_BONUS } },
+    { new: true }
+  );
+
+  if (!updatedReferrer) {
+    return { granted: false, reason: "REFERRER_NOT_FOUND" };
+  }
+
+  await CreditLedger.create({
+    user: referrer._id,
+    amount: CREDIT_RULES.REFERRAL_VERIFICATION_BONUS,
+    type: "referral_bonus",
+    balanceAfter: updatedReferrer.credits,
+    referenceType: "user",
+    referenceId: referredUser._id.toString(),
+    meta: {
+      referralCode: referrer.username,
+      referredUserId: referredUser._id.toString(),
+      referredUsername: referredUser.username,
+      awardedAt: now.toISOString(),
+    },
+  });
+
+  return {
+    granted: true,
+    credits: updatedReferrer.credits,
+    referrerId: referrer._id.toString(),
+    referredUserId: referredUser._id.toString(),
+  };
 };
 
 export const getCreditHistory = async (userId, page = 1, limit = 20) => {

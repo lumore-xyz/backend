@@ -2,6 +2,7 @@
 import crypto from "crypto";
 import express from "express";
 import User from "../models/user.model.js";
+import { awardReferralBonusForVerifiedUser } from "../services/credits.service.js";
 
 const router = express.Router();
 
@@ -67,13 +68,21 @@ router.get("/didit/callback", async (req, res) => {
 
     if (verificationSessionId) {
       const statusPatch = mapVerificationStatus("", status);
-      await User.findOneAndUpdate(
+      const updatedUser = await User.findOneAndUpdate(
         { verificationSessionId: String(verificationSessionId) },
         {
           verificationMethod: "didit",
           ...statusPatch,
         },
+        { new: true }
       );
+
+      if (updatedUser?.isVerified || updatedUser?.verificationStatus === "approved") {
+        await awardReferralBonusForVerifiedUser({
+          referredUserId: updatedUser._id,
+          now: new Date(),
+        });
+      }
     }
 
     return res.redirect(302, `${frontendBaseUrl()}/app/profile`);
@@ -114,11 +123,18 @@ router.post("/didit/callback", async (req, res) => {
     if (userId) {
       const statusPatch = mapVerificationStatus(eventType, rawStatus);
 
-      await User.findByIdAndUpdate(userId, {
+      const updatedUser = await User.findByIdAndUpdate(userId, {
         verificationMethod: "didit",
         verificationSessionId: sessionId,
         ...statusPatch,
-      });
+      }, { new: true });
+
+      if (updatedUser?.isVerified || updatedUser?.verificationStatus === "approved") {
+        await awardReferralBonusForVerifiedUser({
+          referredUserId: updatedUser._id,
+          now: new Date(),
+        });
+      }
     }
 
     return res.sendStatus(200);

@@ -20,6 +20,7 @@ const creditLedgerSchema = new mongoose.Schema(
         "daily_active",
         "conversation_start",
         "this_or_that_approved",
+        "referral_bonus",
         "admin_adjustment",
       ],
       index: true,
@@ -49,4 +50,3 @@ const creditLedgerSchema = new mongoose.Schema(
 creditLedgerSchema.index({ user: 1, createdAt: -1 });
 
 export default mongoose.model("CreditLedger", creditLedgerSchema);
-
