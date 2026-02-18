@@ -80,6 +80,8 @@ const normalizeMessagePayload = (messageDoc, extra = {}) => ({
     emoji: reaction.emoji || DEFAULT_REACTION_EMOJI,
   })),
   editedAt: messageDoc.editedAt || null,
+  deliveredAt: messageDoc.deliveredAt || null,
+  readAt: messageDoc.readAt || null,
   createdAt: messageDoc.createdAt,
   timestamp: new Date(messageDoc.createdAt).getTime(),
   ...extra,
@@ -291,6 +293,45 @@ const handleConnection = (socket) => {
   userSockets.set(userId, socket);
   const logMatchStep = () => {};
 
+  const markRoomMessagesReadAndDelivered = async (roomId) => {
+    const now = new Date();
+    const deliveredFilter = {
+      roomId,
+      receiver: userId,
+      deliveredAt: null,
+    };
+    const readFilter = {
+      roomId,
+      receiver: userId,
+      readAt: null,
+    };
+
+    const deliveredMessages = await Message.find(deliveredFilter).select("_id").lean();
+    const readMessages = await Message.find(readFilter).select("_id").lean();
+
+    if (deliveredMessages.length > 0) {
+      await Message.updateMany(deliveredFilter, { $set: { deliveredAt: now } });
+      const deliveredMessageIds = deliveredMessages.map((m) => m._id.toString());
+      socket.nsp.to(roomId).emit("message_delivered", {
+        roomId,
+        messageIds: deliveredMessageIds,
+        deliveredAt: now.toISOString(),
+      });
+    }
+
+    if (readMessages.length > 0) {
+      await Message.updateMany(readFilter, {
+        $set: { readAt: now, deliveredAt: now },
+      });
+      const readMessageIds = readMessages.map((m) => m._id.toString());
+      socket.nsp.to(roomId).emit("message_read", {
+        roomId,
+        messageIds: readMessageIds,
+        readAt: now.toISOString(),
+      });
+    }
+  };
+
   // Fire-and-forget presence update
   User.findByIdAndUpdate(userId, {
     isActive: true,
@@ -373,7 +414,18 @@ const handleConnection = (socket) => {
   });
 
   /* -------- Chat -------- */
-  socket.on("joinChat", ({ roomId }) => socket.join(roomId));
+  socket.on("joinChat", async ({ roomId }) => {
+    if (!roomId) return;
+    socket.join(roomId);
+
+    try {
+      const room = await MatchRoom.findById(roomId).lean();
+      if (!room || !isParticipant(room, userId)) return;
+      await markRoomMessagesReadAndDelivered(roomId);
+    } catch (error) {
+      console.error("[joinChat] Error:", error);
+    }
+  });
 
   // ==================== CHAT CANCELLATION ====================
 
@@ -422,6 +474,10 @@ const handleConnection = (socket) => {
           .lean();
       }
 
+      const receiverSocket = receiverId ? userSockets.get(receiverId.toString()) : null;
+      const receiverInRoom = Boolean(receiverSocket?.rooms?.has(roomId));
+      const now = new Date();
+
       const createdMessage = await Message.create({
         sender: userId,
         receiver: receiverId,
@@ -432,6 +488,8 @@ const handleConnection = (socket) => {
         imageUrl: messageType === "image" ? imageUrl : null,
         imagePublicId: messageType === "image" ? imagePublicId : null,
         replyTo: replyMessage?._id || null,
+        deliveredAt: receiverInRoom ? now : null,
+        readAt: receiverInRoom ? now : null,
       });
 
       const payload = normalizeMessagePayload(
@@ -445,9 +503,60 @@ const handleConnection = (socket) => {
       socket.to(roomId).emit("new_message", payload);
       socket.emit("message_sent", payload);
 
+      if (receiverInRoom) {
+        socket.emit("message_delivered", {
+          roomId,
+          messageIds: [createdMessage._id.toString()],
+          deliveredAt: now.toISOString(),
+        });
+        socket.emit("message_read", {
+          roomId,
+          messageIds: [createdMessage._id.toString()],
+          readAt: now.toISOString(),
+        });
+      }
+
+      const unreadIncrements = {};
+      for (const participantId of room.participants || []) {
+        const pid = participantId.toString();
+        if (
+          pid !== userId &&
+          !(receiverInRoom && receiverId && pid === receiverId.toString())
+        ) {
+          unreadIncrements[`unreadCounts.${pid}`] = 1;
+        }
+      }
+
       await MatchRoom.findByIdAndUpdate(roomId, {
-        lastMessageAt: new Date(),
+        $set: {
+          lastMessageAt: new Date(),
+          lastMessage: {
+            sender: userId,
+            messageType,
+            encryptedData: messageType === "text" ? encryptedContent : null,
+            iv: messageType === "text" ? iv : null,
+            imageUrl: messageType === "image" ? imageUrl : null,
+            createdAt: new Date(),
+          },
+        },
+        ...(Object.keys(unreadIncrements).length
+          ? { $inc: unreadIncrements }
+          : {}),
       });
+
+      socket.emit("inbox_updated", {
+        roomId,
+        status: room.status,
+      });
+
+      if (receiverId && receiverId !== userId) {
+        if (receiverSocket) {
+          receiverSocket.emit("inbox_updated", {
+            roomId,
+            status: room.status,
+          });
+        }
+      }
 
       if (receiverId && receiverId !== userId) {
         await sendNotificationToUser(receiverId, {
@@ -466,6 +575,12 @@ const handleConnection = (socket) => {
       console.error("[send_message] Error:", error);
       socket.emit("error", { message: "Unable to send message" });
     }
+  });
+
+  socket.on("typing", (data) => {
+    const { roomId, isTyping } = data || {};
+    if (!roomId) return;
+    socket.to(roomId).emit("typing", { roomId, userId, isTyping: Boolean(isTyping) });
   });
 
   socket.on("edit_message", async (data) => {

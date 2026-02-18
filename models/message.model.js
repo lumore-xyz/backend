@@ -72,6 +72,14 @@ const messageSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    deliveredAt: {
+      type: Date,
+      default: null,
+    },
+    readAt: {
+      type: Date,
+      default: null,
+    },
     timestamp: { type: Date, default: Date.now, expires: "24h" },
   },
   { timestamps: true }

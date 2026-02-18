@@ -21,6 +21,39 @@ const MatchRoomSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    lastMessage: {
+      sender: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null,
+      },
+      messageType: {
+        type: String,
+        enum: ["text", "image"],
+        default: "text",
+      },
+      encryptedData: {
+        type: String,
+        default: null,
+      },
+      iv: {
+        type: String,
+        default: null,
+      },
+      imageUrl: {
+        type: String,
+        default: null,
+      },
+      createdAt: {
+        type: Date,
+        default: null,
+      },
+    },
+    unreadCounts: {
+      type: Map,
+      of: Number,
+      default: {},
+    },
 
     // to track who ended match, if any
     endedBy: {

@@ -36,6 +36,8 @@ const normalizeMessageForResponse = (msg) => {
     encryptedData,
     iv,
     editedAt: msg?.editedAt || null,
+    deliveredAt: msg?.deliveredAt || null,
+    readAt: msg?.readAt || null,
     createdAt: msg?.createdAt,
     updatedAt: msg?.updatedAt,
   };
@@ -57,6 +59,10 @@ export const getRoomMessages = async (req, res) => {
     if (!room || !isRoomParticipant(room, userId)) {
       return res.status(403).json({ message: "Not authorized for this room" });
     }
+
+    await MatchRoom.findByIdAndUpdate(roomId, {
+      $set: { [`unreadCounts.${userId}`]: 0 },
+    });
 
     const messages = await Message.find({ roomId })
       .populate("sender", "_id name avatar")

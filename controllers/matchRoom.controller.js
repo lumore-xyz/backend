@@ -13,6 +13,7 @@ const getOtherParticipantId = (room, userId) => {
 
 export const getInbox = async (req, res) => {
   const userId = req.user._id;
+  const currentUserId = userId.toString();
   const status = req.query.status;
   const rooms = await MatchRoom.find({
     participants: userId,
@@ -22,7 +23,19 @@ export const getInbox = async (req, res) => {
     .populate("participants", "_id username nickname profilePicture")
     .lean();
 
-  res.status(200).json(rooms);
+  const normalized = rooms.map((room) => {
+    const unreadFromMap =
+      room?.unreadCounts instanceof Map
+        ? room.unreadCounts.get(currentUserId)
+        : room?.unreadCounts?.[currentUserId];
+
+    return {
+      ...room,
+      unreadCount: Number(unreadFromMap || 0),
+    };
+  });
+
+  res.status(200).json(normalized);
 };
 
 export const getRoomData = async (req, res) => {
