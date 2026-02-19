@@ -1,7 +1,16 @@
 import CreditLedger from "../models/creditLedger.model.js";
+import UserPreference from "../models/preference.model.js";
 import Report from "../models/report.model.js";
 import ThisOrThatQuestion from "../models/thisOrThatQuestion.model.js";
 import User from "../models/user.model.js";
+import {
+  buildPreferenceFilter,
+  buildUserFilterClauses,
+  hasAnySupportedFilters,
+  hasPreferenceFilters,
+  sanitizeUserFilters,
+  splitUserAndPreferenceFilters,
+} from "../utils/userFilters.js";
 
 export const getAdminStats = async (req, res) => {
   try {
@@ -399,14 +408,58 @@ export const getAdminUsers = async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
     const skip = (page - 1) * limit;
     const search = String(req.query.search || "").trim();
+    const rawFilters = { ...req.query };
+    delete rawFilters.page;
+    delete rawFilters.limit;
+    delete rawFilters.search;
+    const { filters, error } = sanitizeUserFilters(rawFilters);
 
-    const filter = {};
+    if (error) {
+      return res.status(400).json({ success: false, message: error });
+    }
+
+    const clauses = [];
     if (search) {
-      filter.$or = [
+      clauses.push({
+        $or: [
         { username: { $regex: search, $options: "i" } },
         { email: { $regex: search, $options: "i" } },
-      ];
+        ],
+      });
     }
+    const { userFilters, preferenceFilters } = splitUserAndPreferenceFilters(filters);
+    clauses.push(...buildUserFilterClauses(userFilters));
+
+    if (hasPreferenceFilters(preferenceFilters)) {
+      const preferenceMatch = buildPreferenceFilter(preferenceFilters);
+      const preferenceRows = await UserPreference.find(preferenceMatch)
+        .select("user")
+        .lean();
+      const preferenceUserIds = Array.from(
+        new Set(
+          preferenceRows
+            .map((row) => row.user?.toString())
+            .filter(Boolean),
+        ),
+      );
+
+      if (!preferenceUserIds.length && hasAnySupportedFilters(filters)) {
+        return res.status(200).json({
+          success: true,
+          data: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            hasMore: false,
+          },
+        });
+      }
+
+      clauses.push({ _id: { $in: preferenceUserIds } });
+    }
+
+    const filter = clauses.length ? { $and: clauses } : {};
 
     const [users, total] = await Promise.all([
       User.find(filter)
