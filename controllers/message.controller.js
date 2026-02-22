@@ -15,10 +15,29 @@ const getAuthorizedRoom = async (roomId, userId, { requireActive = false } = {})
 };
 
 const normalizeMessageForResponse = (msg) => {
-  const encryptedData = msg?.encryptedData
-    ? msg.encryptedData.toString()
-    : null;
-  const iv = msg?.iv ? msg.iv.toString() : null;
+  const hasEncryptedText = Boolean(
+    msg?.encryptedContent?.ciphertext && msg?.encryptedContent?.alg
+  );
+
+  const normalizeReply = (reply) => {
+    if (!reply) return null;
+    const replyEncrypted = Boolean(
+      reply?.encryptedContent?.ciphertext && reply?.encryptedContent?.alg
+    );
+    return {
+      _id: reply._id,
+      sender: reply.sender,
+      messageType: reply.messageType || "text",
+      message:
+        reply?.messageType === "text" && replyEncrypted
+          ? ""
+          : reply?.message || "",
+      encryptedContent: replyEncrypted ? reply.encryptedContent : null,
+      imageUrl: reply.imageUrl || null,
+      editedAt: reply.editedAt || null,
+      createdAt: reply.createdAt || null,
+    };
+  };
 
   return {
     _id: msg?._id,
@@ -26,15 +45,16 @@ const normalizeMessageForResponse = (msg) => {
     receiver: msg?.receiver,
     roomId: msg?.roomId,
     messageType: msg?.messageType || "text",
+    message:
+      msg?.messageType === "text" && hasEncryptedText ? "" : msg?.message || "",
+    encryptedContent: hasEncryptedText ? msg?.encryptedContent : null,
     imageUrl: msg?.imageUrl || null,
     imagePublicId: msg?.imagePublicId || null,
     reactions: (msg?.reactions || []).map((reaction) => ({
       user: reaction.user,
       emoji: reaction.emoji || "\u2764\uFE0F",
     })),
-    replyTo: msg?.replyTo || null,
-    encryptedData,
-    iv,
+    replyTo: normalizeReply(msg?.replyTo),
     editedAt: msg?.editedAt || null,
     deliveredAt: msg?.deliveredAt || null,
     readAt: msg?.readAt || null,
@@ -69,7 +89,8 @@ export const getRoomMessages = async (req, res) => {
       .populate("receiver", "_id name avatar")
       .populate({
         path: "replyTo",
-        select: "_id sender messageType encryptedData iv imageUrl editedAt createdAt",
+        select:
+          "_id sender messageType message encryptedContent imageUrl editedAt createdAt",
         populate: {
           path: "sender",
           select: "_id name avatar",

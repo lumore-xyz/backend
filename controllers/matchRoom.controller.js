@@ -11,6 +11,28 @@ const getOtherParticipantId = (room, userId) => {
   );
 };
 
+const getUnreadCountForUser = (unreadCounts, userId) => {
+  if (!unreadCounts) return 0;
+
+  if (unreadCounts instanceof Map) {
+    return Number(unreadCounts.get(userId) || 0);
+  }
+
+  if (typeof unreadCounts.get === "function") {
+    return Number(unreadCounts.get(userId) || 0);
+  }
+
+  if (typeof unreadCounts === "object") {
+    for (const [key, value] of Object.entries(unreadCounts)) {
+      if (String(key) === String(userId)) {
+        return Number(value || 0);
+      }
+    }
+  }
+
+  return 0;
+};
+
 export const getInbox = async (req, res) => {
   const userId = req.user._id;
   const currentUserId = userId.toString();
@@ -24,14 +46,23 @@ export const getInbox = async (req, res) => {
     .lean();
 
   const normalized = rooms.map((room) => {
-    const unreadFromMap =
-      room?.unreadCounts instanceof Map
-        ? room.unreadCounts.get(currentUserId)
-        : room?.unreadCounts?.[currentUserId];
+    const previewType =
+      room?.lastMessage?.previewType ||
+      (room?.lastMessage?.messageType === "image" ? "image" : "none");
+    const safeLastMessage = room?.lastMessage
+      ? {
+          ...room.lastMessage,
+          message:
+            previewType === "text" || room?.encryption?.enabled
+              ? null
+              : room?.lastMessage?.message || null,
+        }
+      : null;
 
     return {
       ...room,
-      unreadCount: Number(unreadFromMap || 0),
+      lastMessage: safeLastMessage,
+      unreadCount: getUnreadCountForUser(room?.unreadCounts, currentUserId),
     };
   });
 
@@ -39,15 +70,32 @@ export const getInbox = async (req, res) => {
 };
 
 export const getRoomData = async (req, res) => {
-  // const userId = req.user._id;
+  const userId = req.user._id;
   const { roomId } = req.params;
 
-  const rooms = await MatchRoom.findById(roomId)
-    .sort({ lastMessageAt: -1 })
+  const room = await MatchRoom.findById(roomId)
     .populate("participants", "_id username nickname profilePicture")
     .lean();
 
-  res.status(200).json(rooms);
+  if (!room) {
+    return res.status(404).json({ message: "Room not found" });
+  }
+  if (
+    !room.participants?.some(
+      (participant) => participant?._id?.toString() === userId.toString()
+    )
+  ) {
+    return res.status(403).json({ message: "Not authorized for this room" });
+  }
+
+  const previewType =
+    room?.lastMessage?.previewType ||
+    (room?.lastMessage?.messageType === "image" ? "image" : "none");
+  if (room.lastMessage && (previewType === "text" || room?.encryption?.enabled)) {
+    room.lastMessage.message = null;
+  }
+
+  res.status(200).json(room);
 };
 
 export const submitChatFeedback = async (req, res) => {

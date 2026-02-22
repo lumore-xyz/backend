@@ -56,17 +56,43 @@ const messageSchema = new mongoose.Schema(
       ref: "Message",
       default: null,
     },
-    encryptedData: {
-      type: Buffer,
-      required: function requiredEncryptedData() {
-        return this.messageType === "text";
+    encryptedContent: {
+      alg: {
+        type: String,
+        default: null,
+      },
+      keyEpoch: {
+        type: Number,
+        default: null,
+      },
+      ciphertext: {
+        type: String,
+        default: null,
+      },
+      iv: {
+        type: String,
+        default: null,
+      },
+      tag: {
+        type: String,
+        default: null,
+      },
+      aadHash: {
+        type: String,
+        default: null,
       },
     },
-    iv: {
-      type: Buffer,
-      required: function requiredIv() {
-        return this.messageType === "text";
+    message: {
+      type: String,
+      required: function requiredMessage() {
+        return (
+          this.messageType === "text" &&
+          !this.encryptedContent?.ciphertext &&
+          !this.encryptedContent?.alg
+        );
       },
+      trim: true,
+      default: null,
     },
     editedAt: {
       type: Date,
@@ -84,6 +110,8 @@ const messageSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+messageSchema.index({ roomId: 1, createdAt: 1 });
 
 export default mongoose.model("Message", messageSchema);
 

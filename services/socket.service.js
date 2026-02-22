@@ -6,7 +6,7 @@
  * Dev Philosophy:
  * - No swipe culture → intentional, system-driven matching
  * - One active match at a time per user
- * - Privacy-first (encrypted messages, minimal data exposure)
+ * - Privacy-first (minimal data exposure)
  * - Optimize DB access for scale (no N+1 queries)
  *
  * Scaling Notes:
@@ -14,7 +14,6 @@
  * - For horizontal scaling, replace with Redis adapter
  * - Matchmaking can be moved to a worker/queue later
  */
-import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
 import Message from "../models/message.model.js";
@@ -25,7 +24,6 @@ import {
   CREDIT_RULES,
   spendCreditsForConversationStart,
 } from "./credits.service.js";
-import { keyExchangeService } from "./key.service.js";
 import { getOrCreateMatchRoom } from "./matching.service.js";
 import { findBestMatchV2 } from "./matchmaking.service.js";
 import { sendNotificationToUser } from "./push.service.js";
@@ -44,20 +42,25 @@ let io = null;
 const userSockets = new Map();
 
 const DEFAULT_REACTION_EMOJI = "\u2764\uFE0F";
+const CHAT_E2EE_ENABLED = String(process.env.CHAT_E2EE_ENABLED || "false") === "true";
 
 const isParticipant = (room, currentUserId) =>
   room?.participants?.some((id) => id.toString() === currentUserId.toString());
 
 const normalizeReplyMessage = (replyDoc) => {
   if (!replyDoc) return null;
+  const hasEncryptedText = Boolean(
+    replyDoc?.encryptedContent?.ciphertext && replyDoc?.encryptedContent?.alg
+  );
   return {
     _id: replyDoc._id?.toString(),
     senderId: replyDoc.sender?._id
       ? replyDoc.sender._id.toString()
       : replyDoc.sender?.toString?.() || null,
-    encryptedData: replyDoc.encryptedData ? replyDoc.encryptedData.toString() : null,
-    iv: replyDoc.iv ? replyDoc.iv.toString() : null,
+    message:
+      replyDoc.messageType === "text" && hasEncryptedText ? "" : replyDoc.message || "",
     messageType: replyDoc.messageType || "text",
+    encryptedContent: hasEncryptedText ? replyDoc.encryptedContent : null,
     imageUrl: replyDoc.imageUrl || null,
     editedAt: replyDoc.editedAt || null,
     createdAt: replyDoc.createdAt || null,
@@ -70,8 +73,18 @@ const normalizeMessagePayload = (messageDoc, extra = {}) => ({
   senderId: messageDoc.sender?.toString?.() || null,
   receiverId: messageDoc.receiver?.toString?.() || null,
   messageType: messageDoc.messageType || "text",
-  encryptedData: messageDoc.encryptedData ? messageDoc.encryptedData.toString() : null,
-  iv: messageDoc.iv ? messageDoc.iv.toString() : null,
+  message:
+    messageDoc?.messageType === "text" &&
+    messageDoc?.encryptedContent?.ciphertext &&
+    messageDoc?.encryptedContent?.alg
+      ? ""
+      : messageDoc.message || "",
+  encryptedContent:
+    messageDoc?.messageType === "text" &&
+    messageDoc?.encryptedContent?.ciphertext &&
+    messageDoc?.encryptedContent?.alg
+      ? messageDoc.encryptedContent
+      : null,
   imageUrl: messageDoc.imageUrl || null,
   imagePublicId: messageDoc.imagePublicId || null,
   replyTo: normalizeReplyMessage(messageDoc.replyTo),
@@ -86,6 +99,20 @@ const normalizeMessagePayload = (messageDoc, extra = {}) => ({
   timestamp: new Date(messageDoc.createdAt).getTime(),
   ...extra,
 });
+
+const isValidEncryptedContent = (encryptedContent) => {
+  if (!encryptedContent || typeof encryptedContent !== "object") return false;
+  const { alg, keyEpoch, ciphertext, iv, tag, aadHash } = encryptedContent;
+  return Boolean(
+    alg &&
+      Number.isInteger(Number(keyEpoch)) &&
+      Number(keyEpoch) > 0 &&
+      ciphertext &&
+      iv &&
+      tag &&
+      aadHash
+  );
+};
 
 /* ============================================================
  * AUTHENTICATION MIDDLEWARE
@@ -422,9 +449,21 @@ const handleConnection = (socket) => {
       const room = await MatchRoom.findById(roomId).lean();
       if (!room || !isParticipant(room, userId)) return;
       await markRoomMessagesReadAndDelivered(roomId);
+      await MatchRoom.findByIdAndUpdate(roomId, {
+        $set: { [`unreadCounts.${userId}`]: 0 },
+      });
+      socket.emit("inbox_updated", {
+        roomId,
+        status: room.status,
+      });
     } catch (error) {
       console.error("[joinChat] Error:", error);
     }
+  });
+
+  socket.on("leaveChat", ({ roomId }) => {
+    if (!roomId) return;
+    socket.leave(roomId);
   });
 
   // ==================== CHAT CANCELLATION ====================
@@ -449,8 +488,8 @@ const handleConnection = (socket) => {
     try {
       const {
         roomId,
-        encryptedContent,
-        iv,
+        message: messageText,
+        encryptedContent = null,
         receiverId,
         replyTo,
         messageType = "text",
@@ -464,13 +503,29 @@ const handleConnection = (socket) => {
       if (!isParticipant(room, userId)) return;
       if (room.status !== "active") return;
 
-      if (messageType === "text" && (!encryptedContent || !iv)) return;
+      if (messageType === "text" && !messageText && !encryptedContent) return;
       if (messageType === "image" && !imageUrl) return;
+      const roomEncryptionEnabled = Boolean(room?.encryption?.enabled);
+      const shouldUseEncryptedText = CHAT_E2EE_ENABLED || roomEncryptionEnabled;
+      if (
+        messageType === "text" &&
+        shouldUseEncryptedText &&
+        !isValidEncryptedContent(encryptedContent)
+      ) {
+        socket.emit("error", { message: "Invalid encrypted payload" });
+        return;
+      }
+      if (messageType === "text" && shouldUseEncryptedText && messageText) {
+        socket.emit("error", { message: "Plaintext text payload is not allowed" });
+        return;
+      }
 
       let replyMessage = null;
       if (replyTo) {
         replyMessage = await Message.findOne({ _id: replyTo, roomId })
-          .select("_id sender messageType encryptedData iv imageUrl editedAt createdAt")
+          .select(
+            "_id sender messageType message encryptedContent imageUrl editedAt createdAt"
+          )
           .lean();
       }
 
@@ -483,8 +538,10 @@ const handleConnection = (socket) => {
         receiver: receiverId,
         roomId,
         messageType,
-        encryptedData: messageType === "text" ? encryptedContent : undefined,
-        iv: messageType === "text" ? iv : undefined,
+        message:
+          messageType === "text" && !shouldUseEncryptedText ? messageText : null,
+        encryptedContent:
+          messageType === "text" && shouldUseEncryptedText ? encryptedContent : null,
         imageUrl: messageType === "image" ? imageUrl : null,
         imagePublicId: messageType === "image" ? imagePublicId : null,
         replyTo: replyMessage?._id || null,
@@ -533,11 +590,23 @@ const handleConnection = (socket) => {
           lastMessage: {
             sender: userId,
             messageType,
-            encryptedData: messageType === "text" ? encryptedContent : null,
-            iv: messageType === "text" ? iv : null,
+            message:
+              messageType === "text" && !shouldUseEncryptedText ? messageText : null,
+            previewType:
+              messageType === "image"
+                ? "image"
+                : messageType === "text"
+                  ? "text"
+                  : "none",
+            hasEncryptedText: Boolean(messageType === "text" && shouldUseEncryptedText),
+            encryptedContent:
+              messageType === "text" && shouldUseEncryptedText
+                ? encryptedContent
+                : null,
             imageUrl: messageType === "image" ? imageUrl : null,
             createdAt: new Date(),
           },
+          ...(shouldUseEncryptedText ? { "encryption.enabled": true } : {}),
         },
         ...(Object.keys(unreadIncrements).length
           ? { $inc: unreadIncrements }
@@ -585,32 +654,40 @@ const handleConnection = (socket) => {
 
   socket.on("edit_message", async (data) => {
     try {
-      const { roomId, messageId, encryptedContent, iv } = data || {};
-      if (!roomId || !messageId || !encryptedContent || !iv) return;
+      const { roomId, messageId, message: messageText, encryptedContent } = data || {};
+      if (!roomId || !messageId) return;
 
       const room = await MatchRoom.findById(roomId).lean();
       if (!room || !isParticipant(room, userId) || room.status !== "active") return;
 
-      const message = await Message.findOne({
+      const messageDoc = await Message.findOne({
         _id: messageId,
         roomId,
         sender: userId,
         messageType: "text",
       });
 
-      if (!message) return;
+      if (!messageDoc) return;
 
-      message.encryptedData = encryptedContent;
-      message.iv = iv;
-      message.editedAt = new Date();
-      await message.save();
+      const shouldUseEncryptedText = CHAT_E2EE_ENABLED || Boolean(room?.encryption?.enabled);
+      if (shouldUseEncryptedText) {
+        if (!isValidEncryptedContent(encryptedContent)) return;
+        messageDoc.message = null;
+        messageDoc.encryptedContent = encryptedContent;
+      } else if (messageText) {
+        messageDoc.message = messageText;
+      } else {
+        return;
+      }
+      messageDoc.editedAt = new Date();
+      await messageDoc.save();
 
       socket.nsp.to(roomId).emit("message_edited", {
         roomId,
-        messageId: message._id.toString(),
-        encryptedData: message.encryptedData.toString(),
-        iv: message.iv.toString(),
-        editedAt: message.editedAt,
+        messageId: messageDoc._id.toString(),
+        message: shouldUseEncryptedText ? "" : messageDoc.message,
+        encryptedContent: shouldUseEncryptedText ? messageDoc.encryptedContent : null,
+        editedAt: messageDoc.editedAt,
       });
     } catch (error) {
       console.error("[edit_message] Error:", error);
@@ -659,55 +736,6 @@ const handleConnection = (socket) => {
     } catch (error) {
       console.error("[toggle_message_reaction] Error:", error);
       socket.emit("error", { message: "Unable to update reaction" });
-    }
-  });
-
-  // Handle key exchange
-  socket.on("init_key_exchange", async (data) => {
-    try {
-      const { roomId } = data;
-
-      // Generate a consistent key for this match using the matchId
-      const sessionKey = crypto
-        .createHash("sha256")
-        .update(roomId)
-        .digest("hex");
-
-      // Store the key temporarily
-      keyExchangeService.storeTempKeys(userId, { sessionKey });
-
-      // Send the key to the room
-      socket.to(roomId).emit("key_exchange_request", {
-        fromUserId: userId,
-        sessionKey,
-        timestamp: Date.now(),
-      });
-
-      // Also send to the sender to ensure they have the key
-      socket.emit("key_exchange_request", {
-        fromUserId: userId,
-        sessionKey,
-        timestamp: Date.now(),
-      });
-    } catch (error) {
-      console.error("[init_key_exchange] Error:", error);
-      socket.emit("error", { message: error.message });
-    }
-  });
-
-  socket.on("key_exchange_response", async (data) => {
-    try {
-      const { fromUserId, sessionKey, timestamp } = data;
-
-      // Store the received key
-      keyExchangeService.storeTempKeys(userId, {
-        sessionKey,
-        timestamp,
-        fromUserId,
-      });
-    } catch (error) {
-      console.error("[key_exchange_response] Error:", error);
-      socket.emit("error", { message: error.message });
     }
   });
 
