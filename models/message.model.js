@@ -56,40 +56,10 @@ const messageSchema = new mongoose.Schema(
       ref: "Message",
       default: null,
     },
-    encryptedContent: {
-      alg: {
-        type: String,
-        default: null,
-      },
-      keyEpoch: {
-        type: Number,
-        default: null,
-      },
-      ciphertext: {
-        type: String,
-        default: null,
-      },
-      iv: {
-        type: String,
-        default: null,
-      },
-      tag: {
-        type: String,
-        default: null,
-      },
-      aadHash: {
-        type: String,
-        default: null,
-      },
-    },
     message: {
       type: String,
       required: function requiredMessage() {
-        return (
-          this.messageType === "text" &&
-          !this.encryptedContent?.ciphertext &&
-          !this.encryptedContent?.alg
-        );
+        return this.messageType === "text";
       },
       trim: true,
       default: null,

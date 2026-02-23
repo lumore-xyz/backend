@@ -15,24 +15,13 @@ const getAuthorizedRoom = async (roomId, userId, { requireActive = false } = {})
 };
 
 const normalizeMessageForResponse = (msg) => {
-  const hasEncryptedText = Boolean(
-    msg?.encryptedContent?.ciphertext && msg?.encryptedContent?.alg
-  );
-
   const normalizeReply = (reply) => {
     if (!reply) return null;
-    const replyEncrypted = Boolean(
-      reply?.encryptedContent?.ciphertext && reply?.encryptedContent?.alg
-    );
     return {
       _id: reply._id,
       sender: reply.sender,
       messageType: reply.messageType || "text",
-      message:
-        reply?.messageType === "text" && replyEncrypted
-          ? ""
-          : reply?.message || "",
-      encryptedContent: replyEncrypted ? reply.encryptedContent : null,
+      message: reply?.message || "",
       imageUrl: reply.imageUrl || null,
       editedAt: reply.editedAt || null,
       createdAt: reply.createdAt || null,
@@ -45,9 +34,7 @@ const normalizeMessageForResponse = (msg) => {
     receiver: msg?.receiver,
     roomId: msg?.roomId,
     messageType: msg?.messageType || "text",
-    message:
-      msg?.messageType === "text" && hasEncryptedText ? "" : msg?.message || "",
-    encryptedContent: hasEncryptedText ? msg?.encryptedContent : null,
+    message: msg?.message || "",
     imageUrl: msg?.imageUrl || null,
     imagePublicId: msg?.imagePublicId || null,
     reactions: (msg?.reactions || []).map((reaction) => ({
@@ -89,8 +76,7 @@ export const getRoomMessages = async (req, res) => {
       .populate("receiver", "_id name avatar")
       .populate({
         path: "replyTo",
-        select:
-          "_id sender messageType message encryptedContent imageUrl editedAt createdAt",
+        select: "_id sender messageType message imageUrl editedAt createdAt",
         populate: {
           path: "sender",
           select: "_id name avatar",

@@ -42,25 +42,19 @@ let io = null;
 const userSockets = new Map();
 
 const DEFAULT_REACTION_EMOJI = "\u2764\uFE0F";
-const CHAT_E2EE_ENABLED = String(process.env.CHAT_E2EE_ENABLED || "false") === "true";
 
 const isParticipant = (room, currentUserId) =>
   room?.participants?.some((id) => id.toString() === currentUserId.toString());
 
 const normalizeReplyMessage = (replyDoc) => {
   if (!replyDoc) return null;
-  const hasEncryptedText = Boolean(
-    replyDoc?.encryptedContent?.ciphertext && replyDoc?.encryptedContent?.alg
-  );
   return {
     _id: replyDoc._id?.toString(),
     senderId: replyDoc.sender?._id
       ? replyDoc.sender._id.toString()
       : replyDoc.sender?.toString?.() || null,
-    message:
-      replyDoc.messageType === "text" && hasEncryptedText ? "" : replyDoc.message || "",
+    message: replyDoc.message || "",
     messageType: replyDoc.messageType || "text",
-    encryptedContent: hasEncryptedText ? replyDoc.encryptedContent : null,
     imageUrl: replyDoc.imageUrl || null,
     editedAt: replyDoc.editedAt || null,
     createdAt: replyDoc.createdAt || null,
@@ -73,18 +67,7 @@ const normalizeMessagePayload = (messageDoc, extra = {}) => ({
   senderId: messageDoc.sender?.toString?.() || null,
   receiverId: messageDoc.receiver?.toString?.() || null,
   messageType: messageDoc.messageType || "text",
-  message:
-    messageDoc?.messageType === "text" &&
-    messageDoc?.encryptedContent?.ciphertext &&
-    messageDoc?.encryptedContent?.alg
-      ? ""
-      : messageDoc.message || "",
-  encryptedContent:
-    messageDoc?.messageType === "text" &&
-    messageDoc?.encryptedContent?.ciphertext &&
-    messageDoc?.encryptedContent?.alg
-      ? messageDoc.encryptedContent
-      : null,
+  message: messageDoc.message || "",
   imageUrl: messageDoc.imageUrl || null,
   imagePublicId: messageDoc.imagePublicId || null,
   replyTo: normalizeReplyMessage(messageDoc.replyTo),
@@ -100,19 +83,6 @@ const normalizeMessagePayload = (messageDoc, extra = {}) => ({
   ...extra,
 });
 
-const isValidEncryptedContent = (encryptedContent) => {
-  if (!encryptedContent || typeof encryptedContent !== "object") return false;
-  const { alg, keyEpoch, ciphertext, iv, tag, aadHash } = encryptedContent;
-  return Boolean(
-    alg &&
-      Number.isInteger(Number(keyEpoch)) &&
-      Number(keyEpoch) > 0 &&
-      ciphertext &&
-      iv &&
-      tag &&
-      aadHash
-  );
-};
 
 /* ============================================================
  * AUTHENTICATION MIDDLEWARE
@@ -489,7 +459,6 @@ const handleConnection = (socket) => {
       const {
         roomId,
         message: messageText,
-        encryptedContent = null,
         receiverId,
         replyTo,
         messageType = "text",
@@ -503,29 +472,13 @@ const handleConnection = (socket) => {
       if (!isParticipant(room, userId)) return;
       if (room.status !== "active") return;
 
-      if (messageType === "text" && !messageText && !encryptedContent) return;
+      if (messageType === "text" && !messageText) return;
       if (messageType === "image" && !imageUrl) return;
-      const roomEncryptionEnabled = Boolean(room?.encryption?.enabled);
-      const shouldUseEncryptedText = CHAT_E2EE_ENABLED || roomEncryptionEnabled;
-      if (
-        messageType === "text" &&
-        shouldUseEncryptedText &&
-        !isValidEncryptedContent(encryptedContent)
-      ) {
-        socket.emit("error", { message: "Invalid encrypted payload" });
-        return;
-      }
-      if (messageType === "text" && shouldUseEncryptedText && messageText) {
-        socket.emit("error", { message: "Plaintext text payload is not allowed" });
-        return;
-      }
 
       let replyMessage = null;
       if (replyTo) {
         replyMessage = await Message.findOne({ _id: replyTo, roomId })
-          .select(
-            "_id sender messageType message encryptedContent imageUrl editedAt createdAt"
-          )
+          .select("_id sender messageType message imageUrl editedAt createdAt")
           .lean();
       }
 
@@ -538,10 +491,7 @@ const handleConnection = (socket) => {
         receiver: receiverId,
         roomId,
         messageType,
-        message:
-          messageType === "text" && !shouldUseEncryptedText ? messageText : null,
-        encryptedContent:
-          messageType === "text" && shouldUseEncryptedText ? encryptedContent : null,
+        message: messageType === "text" ? messageText : null,
         imageUrl: messageType === "image" ? imageUrl : null,
         imagePublicId: messageType === "image" ? imagePublicId : null,
         replyTo: replyMessage?._id || null,
@@ -590,23 +540,16 @@ const handleConnection = (socket) => {
           lastMessage: {
             sender: userId,
             messageType,
-            message:
-              messageType === "text" && !shouldUseEncryptedText ? messageText : null,
+            message: messageType === "text" ? messageText : null,
             previewType:
               messageType === "image"
                 ? "image"
                 : messageType === "text"
                   ? "text"
                   : "none",
-            hasEncryptedText: Boolean(messageType === "text" && shouldUseEncryptedText),
-            encryptedContent:
-              messageType === "text" && shouldUseEncryptedText
-                ? encryptedContent
-                : null,
             imageUrl: messageType === "image" ? imageUrl : null,
             createdAt: new Date(),
           },
-          ...(shouldUseEncryptedText ? { "encryption.enabled": true } : {}),
         },
         ...(Object.keys(unreadIncrements).length
           ? { $inc: unreadIncrements }
@@ -654,7 +597,7 @@ const handleConnection = (socket) => {
 
   socket.on("edit_message", async (data) => {
     try {
-      const { roomId, messageId, message: messageText, encryptedContent } = data || {};
+      const { roomId, messageId, message: messageText } = data || {};
       if (!roomId || !messageId) return;
 
       const room = await MatchRoom.findById(roomId).lean();
@@ -669,12 +612,7 @@ const handleConnection = (socket) => {
 
       if (!messageDoc) return;
 
-      const shouldUseEncryptedText = CHAT_E2EE_ENABLED || Boolean(room?.encryption?.enabled);
-      if (shouldUseEncryptedText) {
-        if (!isValidEncryptedContent(encryptedContent)) return;
-        messageDoc.message = null;
-        messageDoc.encryptedContent = encryptedContent;
-      } else if (messageText) {
+      if (messageText) {
         messageDoc.message = messageText;
       } else {
         return;
@@ -685,8 +623,7 @@ const handleConnection = (socket) => {
       socket.nsp.to(roomId).emit("message_edited", {
         roomId,
         messageId: messageDoc._id.toString(),
-        message: shouldUseEncryptedText ? "" : messageDoc.message,
-        encryptedContent: shouldUseEncryptedText ? messageDoc.encryptedContent : null,
+        message: messageDoc.message,
         editedAt: messageDoc.editedAt,
       });
     } catch (error) {

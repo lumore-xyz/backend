@@ -52,10 +52,7 @@ export const getInbox = async (req, res) => {
     const safeLastMessage = room?.lastMessage
       ? {
           ...room.lastMessage,
-          message:
-            previewType === "text" || room?.encryption?.enabled
-              ? null
-              : room?.lastMessage?.message || null,
+          message: room?.lastMessage?.message || null,
         }
       : null;
 
@@ -91,8 +88,8 @@ export const getRoomData = async (req, res) => {
   const previewType =
     room?.lastMessage?.previewType ||
     (room?.lastMessage?.messageType === "image" ? "image" : "none");
-  if (room.lastMessage && (previewType === "text" || room?.encryption?.enabled)) {
-    room.lastMessage.message = null;
+  if (room.lastMessage && previewType === "text") {
+    room.lastMessage.message = room?.lastMessage?.message || null;
   }
 
   res.status(200).json(room);

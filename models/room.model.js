@@ -41,36 +41,6 @@ const MatchRoomSchema = new mongoose.Schema(
         enum: ["text", "image", "none"],
         default: "none",
       },
-      hasEncryptedText: {
-        type: Boolean,
-        default: false,
-      },
-      encryptedContent: {
-        alg: {
-          type: String,
-          default: null,
-        },
-        keyEpoch: {
-          type: Number,
-          default: null,
-        },
-        ciphertext: {
-          type: String,
-          default: null,
-        },
-        iv: {
-          type: String,
-          default: null,
-        },
-        tag: {
-          type: String,
-          default: null,
-        },
-        aadHash: {
-          type: String,
-          default: null,
-        },
-      },
       imageUrl: {
         type: String,
         default: null,
@@ -95,17 +65,6 @@ const MatchRoomSchema = new mongoose.Schema(
     matchingNote: {
       type: mongoose.Schema.Types.Mixed,
       default: null,
-    },
-    encryption: {
-      enabled: {
-        type: Boolean,
-        default: false,
-      },
-      currentKeyEpoch: {
-        type: Number,
-        min: 1,
-        default: 1,
-      },
     },
   },
   { timestamps: true }

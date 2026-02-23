@@ -24,10 +24,3 @@ export const profilePictureLimiter = rateLimit({
   message: { message: "Too many uploads, please try again later." },
 });
 
-export const recoveryPinVerifyLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { message: "Too many attempts. Please try again later." },
-});
