@@ -1,8 +1,10 @@
 import mongoose from "mongoose";
 import UserPreference from "../models/preference.model.js";
-import UserGroup from "../models/userGroup.model.js";
 import User from "../models/user.model.js";
-import { sendEmailViaOneSignal } from "../services/onesignal.service.js";
+import UserGroup from "../models/userGroup.model.js";
+import { getOrCreateGlobalOptions } from "../services/options.service.js";
+import { sendEmailViaNodemailer } from "../services/nodemailer.service.js";
+import { sendNotificationToUser } from "../services/push.service.js";
 import {
   buildPreferenceFilter,
   buildUserFilterClauses,
@@ -11,16 +13,16 @@ import {
   sanitizeUserFilters,
   splitUserAndPreferenceFilters,
 } from "../utils/userFilters.js";
-import {
-  sendNotificationToAll,
-  sendNotificationToMultipleUsers,
-} from "../services/push.service.js";
 
 const normalizeUsernames = (list = []) =>
   Array.from(
     new Set(
       (Array.isArray(list) ? list : [])
-        .map((item) => String(item || "").trim().toLowerCase())
+        .map((item) =>
+          String(item || "")
+            .trim()
+            .toLowerCase(),
+        )
         .filter(Boolean),
     ),
   );
@@ -37,7 +39,8 @@ const normalizeUserIds = (list = []) =>
 const resolveFilteredUserIds = async (filters = {}) => {
   if (!hasAnySupportedFilters(filters)) return [];
 
-  const { userFilters, preferenceFilters } = splitUserAndPreferenceFilters(filters);
+  const { userFilters, preferenceFilters } =
+    splitUserAndPreferenceFilters(filters);
   const userClauses = buildUserFilterClauses(userFilters);
 
   if (hasPreferenceFilters(preferenceFilters)) {
@@ -47,9 +50,7 @@ const resolveFilteredUserIds = async (filters = {}) => {
       .lean();
     const preferenceUserIds = Array.from(
       new Set(
-        preferenceRows
-          .map((row) => row.user?.toString())
-          .filter(Boolean),
+        preferenceRows.map((row) => row.user?.toString()).filter(Boolean),
       ),
     );
 
@@ -62,14 +63,20 @@ const resolveFilteredUserIds = async (filters = {}) => {
   return users.map((user) => user._id.toString());
 };
 
-const resolveUserIds = async ({ userIds = [], usernames = [], filters = {} }) => {
+const resolveUserIds = async ({
+  userIds = [],
+  usernames = [],
+  filters = {},
+}) => {
   const normalizedIds = normalizeUserIds(userIds);
   const normalizedNames = normalizeUsernames(usernames);
   const queries = [];
 
   if (normalizedNames.length) {
     queries.push(
-      User.find({ username: { $in: normalizedNames } }).select("_id").lean(),
+      User.find({ username: { $in: normalizedNames } })
+        .select("_id")
+        .lean(),
     );
   }
 
@@ -130,6 +137,69 @@ const buildTargetUserIds = async ({
   return resolveUserIds({ userIds, usernames });
 };
 
+const PLACEHOLDER_PATTERN = /\{([a-zA-Z0-9_]+)\}/g;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const getConfiguredFromEmails = async () => {
+  const doc = await getOrCreateGlobalOptions();
+  const entries = Array.isArray(doc?.options?.campaignFromEmailOptions)
+    ? doc.options.campaignFromEmailOptions
+    : [];
+
+  const emails = entries
+    .flatMap((entry) => [entry?.value, entry?.label])
+    .map((item) =>
+      String(item || "")
+        .trim()
+        .toLowerCase(),
+    )
+    .filter((item) => item && EMAIL_PATTERN.test(item));
+
+  return Array.from(new Set(emails));
+};
+
+const computeAge = (dob) => {
+  if (!dob) return null;
+  const birthDate = new Date(dob);
+  if (Number.isNaN(birthDate.getTime())) return null;
+
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const monthDiff = today.getMonth() - birthDate.getMonth();
+
+  if (
+    monthDiff < 0 ||
+    (monthDiff === 0 && today.getDate() < birthDate.getDate())
+  ) {
+    age -= 1;
+  }
+
+  return age >= 0 ? age : null;
+};
+
+const buildTemplateVariables = (user) => {
+  const nickname = String(user?.nickname || "").trim();
+  const realName = String(user?.realName || "").trim();
+  const username = String(user?.username || "").trim();
+  const email = String(user?.email || "").trim();
+  const age = computeAge(user?.dob);
+
+  return {
+    nickname: nickname || username || "",
+    realname: realName || "",
+    age: age === null ? "" : String(age),
+    username,
+    email,
+  };
+};
+
+const applyTemplateVariables = (template, variables) =>
+  String(template || "").replace(PLACEHOLDER_PATTERN, (fullMatch, key) => {
+    const normalizedKey = String(key || "").toLowerCase();
+    if (!(normalizedKey in variables)) return fullMatch;
+    return String(variables[normalizedKey] || "");
+  });
+
 export const getAdminUserGroups = async (req, res) => {
   try {
     const groups = await UserGroup.find({})
@@ -167,12 +237,16 @@ export const createAdminUserGroup = async (req, res) => {
     });
 
     if (!name) {
-      return res.status(400).json({ success: false, message: "name is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "name is required" });
     }
 
     const exists = await UserGroup.findOne({ name }).lean();
     if (exists) {
-      return res.status(409).json({ success: false, message: "Group already exists" });
+      return res
+        .status(409)
+        .json({ success: false, message: "Group already exists" });
     }
 
     const group = await UserGroup.create({
@@ -204,7 +278,9 @@ export const createAdminUserGroup = async (req, res) => {
 export const updateAdminUserGroupMembers = async (req, res) => {
   try {
     const { groupId } = req.params;
-    const action = String(req.body?.action || "add").trim().toLowerCase();
+    const action = String(req.body?.action || "add")
+      .trim()
+      .toLowerCase();
     const { filters, error } = sanitizeUserFilters(req.body?.filters);
 
     if (error) {
@@ -226,7 +302,9 @@ export const updateAdminUserGroupMembers = async (req, res) => {
 
     const group = await UserGroup.findById(groupId);
     if (!group) {
-      return res.status(404).json({ success: false, message: "Group not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Group not found" });
     }
 
     const current = new Set((group.members || []).map((id) => id.toString()));
@@ -262,13 +340,45 @@ export const updateAdminUserGroupMembers = async (req, res) => {
   }
 };
 
+export const getAdminCampaignConfig = async (req, res) => {
+  try {
+    const fromEmails = await getConfiguredFromEmails();
+    return res.status(200).json({
+      success: true,
+      data: {
+        fromEmails,
+      },
+    });
+  } catch (error) {
+    console.error("[engagement] getAdminCampaignConfig failed:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
 export const sendAdminCampaign = async (req, res) => {
   try {
-    const channel = String(req.body?.channel || "").trim().toLowerCase();
-    const targetType = String(req.body?.targetType || "").trim().toLowerCase();
+    const channel = String(req.body?.channel || "")
+      .trim()
+      .toLowerCase();
+    const targetType = String(req.body?.targetType || "")
+      .trim()
+      .toLowerCase();
+    const emailCampaignType = String(
+      req.body?.emailCampaignType || "personalized",
+    )
+      .trim()
+      .toLowerCase();
     const title = String(req.body?.title || "").trim();
     const body = String(req.body?.body || "").trim();
     const emailSubject = String(req.body?.emailSubject || "").trim() || title;
+    const fromEmail = String(req.body?.fromEmail || "")
+      .trim()
+      .toLowerCase();
+    const fromName = String(req.body?.fromName || "").trim();
+    const replyToEmail = String(req.body?.replyToEmail || "")
+      .trim()
+      .toLowerCase();
+    const replyToName = String(req.body?.replyToName || "").trim();
     const userIds = req.body?.userIds || [];
     const usernames = req.body?.usernames || [];
     const groupIds = req.body?.groupIds || [];
@@ -301,6 +411,34 @@ export const sendAdminCampaign = async (req, res) => {
       });
     }
 
+    if (
+      channel === "email" &&
+      !["campaign", "personalized"].includes(emailCampaignType)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "emailCampaignType must be campaign or personalized",
+      });
+    }
+
+    if (channel === "email" && fromEmail && !EMAIL_PATTERN.test(fromEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: "fromEmail must be a valid email address",
+      });
+    }
+
+    if (
+      channel === "email" &&
+      replyToEmail &&
+      !EMAIL_PATTERN.test(replyToEmail)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "replyToEmail must be a valid email address",
+      });
+    }
+
     const recipients = await buildTargetUserIds({
       targetType,
       userIds,
@@ -315,58 +453,103 @@ export const sendAdminCampaign = async (req, res) => {
       });
     }
 
-    if (channel === "push") {
-      if (targetType === "all") {
-        const result = await sendNotificationToAll({
-          title,
-          body,
-          data: req.body?.data || {},
-        });
-        return res.status(200).json({
-          success: true,
-          message: "Push notification sent",
-          data: { recipientCount: recipients.length, result },
-        });
-      }
+    const recipientUsers = await User.find({
+      _id: { $in: recipients },
+    })
+      .select("_id username nickname realName email dob")
+      .lean();
 
-      const result = await sendNotificationToMultipleUsers(recipients, {
-        title,
-        body,
-        data: req.body?.data || {},
-      });
-      return res.status(200).json({
-        success: true,
-        message: "Push notification sent",
-        data: { recipientCount: recipients.length, result },
+    if (!recipientUsers.length) {
+      return res.status(400).json({
+        success: false,
+        message: "No target users resolved for this request",
       });
     }
 
-    const usersWithEmail = await User.find({
-      _id: { $in: recipients },
-      email: { $exists: true, $ne: "" },
-    })
-      .select("email")
-      .lean();
+    if (channel === "push") {
+      const result = await Promise.all(
+        recipientUsers.map((user) => {
+          const variables = buildTemplateVariables(user);
+          return sendNotificationToUser(user._id, {
+            title: applyTemplateVariables(title, variables),
+            body: applyTemplateVariables(body, variables),
+            data: req.body?.data || {},
+          });
+        }),
+      );
 
-    const emails = usersWithEmail.map((user) => user.email).filter(Boolean);
-    if (!emails.length) {
+      return res.status(200).json({
+        success: true,
+        message: "Push notification sent",
+        data: { recipientCount: recipientUsers.length, result },
+      });
+    }
+
+    const usersWithEmail = recipientUsers.filter(
+      (user) => String(user?.email || "").trim() !== "",
+    );
+
+    if (!usersWithEmail.length) {
       return res.status(400).json({
         success: false,
         message: "No users with email found in selected target",
       });
     }
 
-    const result = await sendEmailViaOneSignal({
-      emails,
-      subject: emailSubject || title || "Lumore",
-      body,
+    if (emailCampaignType === "campaign") {
+      const emails = usersWithEmail
+        .map((user) =>
+          String(user?.email || "")
+            .trim()
+            .toLowerCase(),
+        )
+        .filter(Boolean);
+
+      const result = await sendEmailViaNodemailer({
+        emails,
+        subject: emailSubject || title || "Lumore",
+        body,
+        fromEmail,
+        fromName,
+        replyToEmail,
+        replyToName,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Email campaign sent",
+        data: {
+          recipientCount: usersWithEmail.length,
+          result,
+        },
+      });
+    }
+
+    const messages = usersWithEmail.map((user) => {
+      const variables = buildTemplateVariables(user);
+      return {
+        to: user.email,
+        subject: applyTemplateVariables(
+          emailSubject || title || "Lumore",
+          variables,
+        ),
+        body: applyTemplateVariables(body, variables),
+      };
+    });
+
+    const result = await sendEmailViaNodemailer({
+      messages,
+      fromEmail,
+      fromName,
+      replyToEmail,
+      replyToName,
     });
 
     return res.status(200).json({
       success: true,
       message: "Email campaign sent",
       data: {
-        recipientCount: emails.length,
+        recipientCount: usersWithEmail.length,
         result,
       },
     });

@@ -253,39 +253,32 @@ userSchema.virtual("age").get(function () {
 // ==================== PRE-SAVE HOOKS ====================
 
 // Normalize username to lowercase
-userSchema.pre("save", function (next) {
+userSchema.pre("save", function () {
   if (this.username) {
     this.username = this.username.toLowerCase();
   }
-  next();
 });
 
 // Normalize gender to lowercase (for case-insensitive matching)
-userSchema.pre("save", function (next) {
+userSchema.pre("save", function () {
   if (this.gender && typeof this.gender === "string") {
     this.gender = this.gender.toLowerCase().trim();
   }
-  next();
 });
 
 // Validate location coordinates before saving
-userSchema.pre("save", function (next) {
+userSchema.pre("save", function () {
   if (this.location && this.location.coordinates) {
     const [lng, lat] = this.location.coordinates;
 
     // Validate ranges
     if (lng < -180 || lng > 180) {
-      return next(
-        new Error(`Invalid longitude: ${lng}. Must be between -180 and 180`)
-      );
+      throw new Error(`Invalid longitude: ${lng}. Must be between -180 and 180`);
     }
     if (lat < -90 || lat > 90) {
-      return next(
-        new Error(`Invalid latitude: ${lat}. Must be between -90 and 90`)
-      );
+      throw new Error(`Invalid latitude: ${lat}. Must be between -90 and 90`);
     }
   }
-  next();
 });
 
 // Password Hashing (Only if Modified)

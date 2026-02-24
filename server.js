@@ -4,9 +4,7 @@ import "dotenv/config";
 import express from "express";
 import helmet from "helmet";
 import { createServer } from "http";
-import swaggerUi from "swagger-ui-express";
 import connectDB from "./config/db.js";
-import { specs } from "./config/swagger.js";
 import { errorHandler, notFound } from "./middleware/error.middleware.js";
 import adminRoutes from "./routes/admin.routes.js";
 import adminAuthRoutes from "./routes/adminAuth.routes.js";
@@ -108,13 +106,10 @@ app.use(
   }),
 );
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
 app.use("/api", webhooksRoutes);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Swagger UI
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(specs));
 
 // Basic route
 app.get("/", (req, res) => {
@@ -146,7 +141,4 @@ const PORT = process.env.PORT || 5000;
 // Start the server
 httpServer.listen(PORT, () => {
   console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
-  console.log(
-    `API Documentation available at http://localhost:${PORT}/api-docs`,
-  );
 });

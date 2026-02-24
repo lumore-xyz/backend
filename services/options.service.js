@@ -1,6 +1,10 @@
 import AppOptions from "../models/appOptions.model.js";
 
 const DEFAULT_OPTIONS = {
+  campaignFromEmailOptions: [
+    { label: "noreply@lumore.xyz", value: "noreply@lumore.xyz" },
+    { label: "kritik@lumore.xyz", value: "kritik@lumore.xyz" },
+  ],
   genderOptions: [
     { label: "Woman", value: "woman" },
     { label: "Man", value: "man" },
@@ -180,7 +184,18 @@ export const normalizeOptionsPayload = (payload = {}) => {
 
 export const getOrCreateGlobalOptions = async () => {
   let doc = await AppOptions.findOne({ key: "global" }).lean();
-  if (doc) return doc;
+  if (doc) {
+    const nextOptions = { ...DEFAULT_OPTIONS, ...(doc.options || {}) };
+    if (JSON.stringify(nextOptions) !== JSON.stringify(doc.options || {})) {
+      const patched = await AppOptions.findOneAndUpdate(
+        { key: "global" },
+        { $set: { options: nextOptions } },
+        { new: true },
+      ).lean();
+      return patched;
+    }
+    return doc;
+  }
 
   await AppOptions.create({
     key: "global",

@@ -11,6 +11,7 @@ import {
 import { getAdminOptions, patchAdminOptions } from "../controllers/options.controller.js";
 import {
   createAdminUserGroup,
+  getAdminCampaignConfig,
   getAdminUserGroups,
   sendAdminCampaign,
   updateAdminUserGroupMembers,
@@ -38,6 +39,7 @@ router.patch(
   validateObjectIdParam("groupId"),
   updateAdminUserGroupMembers,
 );
+router.get("/notifications/config", getAdminCampaignConfig);
 router.post("/notifications/send", sendAdminCampaign);
 router.patch(
   "/reported-users/:reportId/status",
