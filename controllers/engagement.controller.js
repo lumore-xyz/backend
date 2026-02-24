@@ -200,6 +200,14 @@ const applyTemplateVariables = (template, variables) =>
     return String(variables[normalizedKey] || "");
   });
 
+const stripHtmlToText = (value) =>
+  String(value || "")
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
 export const getAdminUserGroups = async (req, res) => {
   try {
     const groups = await UserGroup.find({})
@@ -370,6 +378,8 @@ export const sendAdminCampaign = async (req, res) => {
       .toLowerCase();
     const title = String(req.body?.title || "").trim();
     const body = String(req.body?.body || "").trim();
+    const emailBodyHtml = String(req.body?.emailBodyHtml || "").trim();
+    const emailBodyText = String(req.body?.emailBodyText || "").trim();
     const emailSubject = String(req.body?.emailSubject || "").trim() || title;
     const fromEmail = String(req.body?.fromEmail || "")
       .trim()
@@ -397,17 +407,28 @@ export const sendAdminCampaign = async (req, res) => {
       });
     }
 
-    if (!body) {
+    if (channel === "push" && !title) {
+      return res.status(400).json({
+        success: false,
+        message: "title is required for push notifications",
+      });
+    }
+
+    if (channel === "push" && !body) {
       return res.status(400).json({
         success: false,
         message: "body is required",
       });
     }
 
-    if (channel === "push" && !title) {
+    const resolvedEmailHtmlBody = emailBodyHtml || body;
+    const resolvedEmailTextBody =
+      emailBodyText || stripHtmlToText(resolvedEmailHtmlBody) || body;
+
+    if (channel === "email" && !resolvedEmailHtmlBody && !resolvedEmailTextBody) {
       return res.status(400).json({
         success: false,
-        message: "title is required for push notifications",
+        message: "email body is required",
       });
     }
 
@@ -509,6 +530,8 @@ export const sendAdminCampaign = async (req, res) => {
         emails,
         subject: emailSubject || title || "Lumore",
         body,
+        htmlBody: resolvedEmailHtmlBody,
+        textBody: resolvedEmailTextBody,
         fromEmail,
         fromName,
         replyToEmail,
@@ -533,7 +556,8 @@ export const sendAdminCampaign = async (req, res) => {
           emailSubject || title || "Lumore",
           variables,
         ),
-        body: applyTemplateVariables(body, variables),
+        htmlBody: applyTemplateVariables(resolvedEmailHtmlBody, variables),
+        textBody: applyTemplateVariables(resolvedEmailTextBody, variables),
       };
     });
 

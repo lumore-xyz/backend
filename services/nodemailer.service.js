@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import sanitizeHtml from "sanitize-html";
 
 const parseSmtpPort = (value) => {
   const parsed = Number.parseInt(String(value || ""), 10);
@@ -76,10 +77,64 @@ const resolveFromHeader = ({ fromEmail, fromName }) => {
   });
 };
 
+const EMAIL_SANITIZE_OPTIONS = {
+  allowedTags: [
+    "p",
+    "br",
+    "strong",
+    "b",
+    "em",
+    "i",
+    "u",
+    "ul",
+    "ol",
+    "li",
+    "a",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "blockquote",
+    "code",
+    "pre",
+  ],
+  allowedAttributes: {
+    a: ["href", "target", "rel"],
+  },
+  allowedSchemes: ["http", "https", "mailto"],
+  allowedSchemesAppliedToAttributes: ["href"],
+  transformTags: {
+    a: (tagName, attribs) => ({
+      tagName,
+      attribs: {
+        ...attribs,
+        rel: "noopener noreferrer",
+        target: "_blank",
+      },
+    }),
+  },
+};
+
+const sanitizeEmailHtml = (value) =>
+  sanitizeHtml(String(value || ""), EMAIL_SANITIZE_OPTIONS).trim();
+
+const htmlToText = (value) =>
+  sanitizeHtml(String(value || ""), {
+    allowedTags: [],
+    allowedAttributes: {},
+  })
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
 export const sendEmailViaNodemailer = async ({
   emails,
   subject,
   body,
+  htmlBody,
+  textBody,
   messages,
   fromEmail,
   fromName,
@@ -102,9 +157,12 @@ export const sendEmailViaNodemailer = async ({
             .trim()
             .toLowerCase(),
           subject: String(item?.subject || "").trim() || "Lumore",
-          body: String(item?.body || ""),
+          htmlBody: sanitizeEmailHtml(item?.htmlBody || item?.body || ""),
+          textBody:
+            String(item?.textBody || "").trim() ||
+            htmlToText(item?.htmlBody || item?.body || ""),
         }))
-        .filter((item) => item.to)
+        .filter((item) => item.to && (item.htmlBody || item.textBody))
     : [];
 
   if (personalizedMessages.length) {
@@ -112,11 +170,11 @@ export const sendEmailViaNodemailer = async ({
       personalizedMessages.map((message) =>
         transporter.sendMail({
           from,
-          replyTo: replyTo || "connect@lumore.xyz",
+          replyTo: replyTo || undefined,
           to: message.to,
           subject: message.subject,
-          text: message.body,
-          html: message.body,
+          text: message.textBody || undefined,
+          html: message.htmlBody || undefined,
         }),
       ),
     );
@@ -145,14 +203,18 @@ export const sendEmailViaNodemailer = async ({
     throw new Error("No valid email recipients found");
   }
 
+  const finalHtmlBody = sanitizeEmailHtml(htmlBody || body || "");
+  const finalTextBody =
+    String(textBody || "").trim() || htmlToText(finalHtmlBody || body || "");
+
   const result = await transporter.sendMail({
     from,
     replyTo: replyTo || undefined,
     to: from,
     bcc: uniqueEmails,
     subject: String(subject || "").trim() || "Lumore",
-    text: String(body || ""),
-    html: String(body || ""),
+    text: finalTextBody || undefined,
+    html: finalHtmlBody || undefined,
   });
 
   return {
