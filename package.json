@@ -6,13 +6,15 @@
   "scripts": {
     "start": "node server.js",
     "dev": "cross-env NODE_ENV=development nodemon server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "backfill:interested-in": "node scripts/backfill-interested-in.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@google/genai": "^1.42.0",
     "@tma.js/init-data-node": "^2.0.3",
     "axios": "^1.13.5",
     "bcryptjs": "^3.0.3",
@@ -28,8 +30,8 @@
     "mongoose": "^9.2.2",
     "morgan": "^1.10.0",
     "multer": "^2.0.2",
-    "nodemailer": "^8.0.1",
     "node-cron": "^4.2.1",
+    "nodemailer": "^8.0.1",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "passport-local": "^1.0.0",

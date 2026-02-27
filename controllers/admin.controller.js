@@ -508,7 +508,7 @@ export const updateUserArchiveStatus = async (req, res) => {
         archivedAt: isArchived ? new Date() : null,
         ...(isArchived ? { isActive: false, isMatching: false } : {}),
       },
-      { new: true },
+      { returnDocument: "after" },
     )
       .select("_id username isArchived archivedAt")
       .lean();
@@ -655,7 +655,7 @@ export const updateReportedUserStatusAdmin = async (req, res) => {
     const report = await Report.findByIdAndUpdate(
       reportId,
       { status },
-      { new: true },
+      { returnDocument: "after" },
     )
       .populate("reporter", "_id username realName profilePicture email")
       .populate("reportedUser", "_id username realName profilePicture email isArchived isActive")
@@ -678,3 +678,4 @@ export const updateReportedUserStatusAdmin = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
+

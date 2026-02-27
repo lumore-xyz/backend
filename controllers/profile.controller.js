@@ -11,6 +11,24 @@ import {
   uploadImage,
 } from "../services/file.service.js";
 
+const VALID_INTERESTED_IN = new Set(["man", "woman"]);
+
+function normalizeInterestedInValue(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  return VALID_INTERESTED_IN.has(normalized) ? normalized : null;
+}
+
+function inferInterestedInFromGender(gender) {
+  const normalizedGender = String(gender || "")
+    .trim()
+    .toLowerCase();
+  if (normalizedGender === "man") return "woman";
+  if (normalizedGender === "woman") return "man";
+  return null;
+}
+
 // Create or Update Profile
 export const createUpdateProfile = async (req, res) => {
   try {
@@ -61,7 +79,7 @@ export const createUpdateProfile = async (req, res) => {
 
     // Update the user profile and return updated data
     const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
-      new: true, // Return updated user
+      returnDocument: "after", // Return updated user
       runValidators: true, // Ensure validation runs
       upsert: false, // Prevent creating new user if not found
     }).select("-password -__v"); // Exclude sensitive fields
@@ -331,6 +349,9 @@ export const updateProfilePicture = async (req, res) => {
 export const updateUserPreference = async (req, res) => {
   try {
     const userId = req.user.id;
+    const user = await User.findById(userId).select("gender").lean();
+    if (!user) return res.status(404).json({ message: "User not found" });
+
     const {
       interestedIn,
       ageRange,
@@ -357,7 +378,17 @@ export const updateUserPreference = async (req, res) => {
     }
 
     // Update preference fields
-    if (interestedIn) preferences.interestedIn = interestedIn;
+    if (interestedIn !== undefined) {
+      const normalizedInterestedIn = normalizeInterestedInValue(interestedIn);
+      if (!normalizedInterestedIn) {
+        return res.status(400).json({
+          message: "Invalid interestedIn value. Allowed values: man, woman.",
+        });
+      }
+      preferences.interestedIn = normalizedInterestedIn;
+    } else if (!normalizeInterestedInValue(preferences.interestedIn)) {
+      preferences.interestedIn = inferInterestedInFromGender(user.gender);
+    }
     if (ageRange) preferences.ageRange = ageRange;
     if (distance) preferences.distance = distance;
     if (goal) preferences.goal = goal;
@@ -395,7 +426,30 @@ export const getUserPrefrence = async (req, res) => {
     let preferences = await UserPreference.findOne({ user: userId });
     if (!preferences) {
       // Create new preferences if not found
-      preferences = new UserPreference({ user: userId });
+      preferences = new UserPreference({
+        user: userId,
+        interestedIn: inferInterestedInFromGender(user.gender),
+      });
+      await preferences.save();
+    } else {
+      const normalizedInterestedIn = normalizeInterestedInValue(
+        preferences.interestedIn,
+      );
+      if (!normalizedInterestedIn) {
+        preferences.interestedIn = inferInterestedInFromGender(user.gender);
+        await preferences.save();
+      }
+    }
+
+    if (!preferences.interestedIn) {
+      return res.status(200).json({
+        ...preferences.toObject(),
+        interestedIn: null,
+      });
+    }
+
+    if (preferences.interestedIn !== normalizeInterestedInValue(preferences.interestedIn)) {
+      preferences.interestedIn = normalizeInterestedInValue(preferences.interestedIn);
       await preferences.save();
     }
 
@@ -589,7 +643,7 @@ export const deleteAccount = async (req, res) => {
         isMatching: false,
         matchmakingTimestamp: null,
       },
-      { new: true },
+      { returnDocument: "after" },
     );
 
     if (!updatedUser) {
@@ -604,3 +658,4 @@ export const deleteAccount = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+

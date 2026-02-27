@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import UserPreference from "../models/preference.model.js";
 import MatchRoom from "../models/room.model.js";
 import ThisOrThatAnswer from "../models/thisOrThatAnswer.model.js";
@@ -11,21 +10,31 @@ const POOL_MODE = {
   SCARCE: "SCARCE",
 };
 
-const CACHE_TTL_MS = 3 * 60 * 1000;
 const MAX_DISTANCE_KM = 100;
 const REMATCH_PENALTY = 25;
-const NORMAL_MIN_SCORE = 45;
-const LOW_POOL_MIN_SCORE = 35;
 const REMATCH_COOLDOWN_DAYS = 7;
+const THIRD_PASS_SCORE_DROP = 10;
 
-const SCORE_CAPS_BY_MODE = {
-  [POOL_MODE.NORMAL]: { profile: 65, thisOrThat: 35, fairness: 0 },
-  [POOL_MODE.LOW_POOL]: { profile: 60, thisOrThat: 30, fairness: 10 },
-  [POOL_MODE.SCARCE]: { profile: 50, thisOrThat: 20, fairness: 30 },
+const MIN_SCORE_BY_MODE = {
+  [POOL_MODE.NORMAL]: 55,
+  [POOL_MODE.LOW_POOL]: 45,
+  [POOL_MODE.SCARCE]: 10,
 };
 
+const SCORE_WEIGHTS = {
+  profileCompatibility: 45,
+  intentAlignment: 20,
+  thisOrThat: 15,
+  distance: 10,
+  fairness: 10,
+  sparsePenaltyMax: 10,
+};
+
+const ANY_GENDER_VALUES = new Set(["everyone", "all", "any"]);
+const SUPPORTED_GENDERS = new Set(["man", "woman"]);
+
 const DEFAULT_PREFS = {
-  interestedIn: "man",
+  interestedIn: null,
   ageRange: [18, 27],
   distance: 10,
   goal: { primary: null, secondary: null, tertiary: null },
@@ -42,13 +51,9 @@ const DEFAULT_PREFS = {
   petPreference: [],
 };
 
-const scoreCache = new Map();
-
 export const resolvePoolMode = ({ poolSize, waitMs }) => {
   if (poolSize >= 30) return POOL_MODE.NORMAL;
   if (poolSize >= 8) return POOL_MODE.LOW_POOL;
-
-  // Keep scarce mode sticky while users are waiting.
   if (waitMs >= 0) return POOL_MODE.SCARCE;
   return POOL_MODE.SCARCE;
 };
@@ -56,215 +61,191 @@ export const resolvePoolMode = ({ poolSize, waitMs }) => {
 export const findBestMatchV2 = async ({ userId, now = new Date() }) => {
   const logStep = () => {};
 
-  logStep("start");
   const seeker = await User.findById(userId)
     .select(
       "_id gender dob interests languages religion diet lifestyle isMatching credits matchmakingTimestamp location updatedAt",
     )
     .lean();
-
-  if (!seeker) {
-    logStep("seeker_not_found");
-    return null;
-  }
-  if (!hasValidLocation(seeker)) {
-    logStep("seeker_invalid_location");
-    return null;
-  }
+  if (!seeker) return null;
+  if (!hasValidLocation(seeker)) return null;
+  if (!isSupportedGender(seeker.gender) || !seeker.dob) return null;
 
   const seekerPrefDoc = await UserPreference.findOne({ user: userId }).lean();
-  const seekerPrefs = normalizePreference(seekerPrefDoc);
+  const seekerPrefs = normalizePreference(seekerPrefDoc, {
+    userGender: seeker.gender,
+  });
+  if (!seekerPrefs.interestedIn.length) return null;
+
   const seekerId = seeker._id.toString();
   const waitMs = getWaitMs(seeker.matchmakingTimestamp, now);
   const baseDistanceKm = clampDistanceKm(seekerPrefs.distance);
-  let usedRelaxedFallback = false;
-  logStep("seeker_loaded", { waitMs, baseDistanceKm });
 
-  let baseCandidateSet = await getCandidateSet({
+  const basePool = await getCandidateSet({
     seeker,
     seekerPrefs,
     distanceKm: baseDistanceKm,
   });
-  if (!baseCandidateSet.length) {
-    baseCandidateSet = await getCandidateSet({
-      seeker,
-      seekerPrefs,
-      distanceKm: baseDistanceKm,
-      relaxHardEligibility: true,
-    });
-    usedRelaxedFallback = baseCandidateSet.length > 0;
-    if (usedRelaxedFallback) {
-      logStep("fallback_relaxed_pool_used", {
-        stage: "base",
-        poolSize: baseCandidateSet.length,
-      });
-    }
-  }
+
   const poolMode = resolvePoolMode({
-    poolSize: baseCandidateSet.length,
+    poolSize: basePool.selected.length,
     waitMs,
   });
-  logStep("base_pool_computed", {
-    basePoolSize: baseCandidateSet.length,
-    poolMode,
-  });
+  const minScoreForMode =
+    MIN_SCORE_BY_MODE[poolMode] ?? MIN_SCORE_BY_MODE.NORMAL;
 
-  const expandedDistanceKm = getDistanceForMode(baseDistanceKm, poolMode);
-  let candidateSet =
-    expandedDistanceKm === baseDistanceKm
-      ? baseCandidateSet
-      : await getCandidateSet({
-          seeker,
-          seekerPrefs,
-          distanceKm: expandedDistanceKm,
-        });
-  if (!candidateSet.length && expandedDistanceKm !== baseDistanceKm) {
-    candidateSet = await getCandidateSet({
-      seeker,
-      seekerPrefs,
-      distanceKm: expandedDistanceKm,
-      relaxHardEligibility: true,
-    });
-    if (candidateSet.length) {
-      usedRelaxedFallback = true;
-      logStep("fallback_relaxed_pool_used", {
-        stage: "expanded",
-        poolSize: candidateSet.length,
-      });
-    }
-  }
-  logStep("candidate_pool_finalized", {
-    expandedDistanceKm,
-    finalPoolSize: candidateSet.length,
-    usedRelaxedFallback,
-  });
-
-  if (!candidateSet.length) {
-    logStep("no_candidates");
-    return null;
-  }
-
-  const [answersByUser, recentRematchSet] = await Promise.all([
-    getAnswersByUser([
-      seekerId,
-      ...candidateSet.map((c) => c.user._id.toString()),
-    ]),
-    getRecentRematchSet(seekerId, now),
-  ]);
-  logStep("supporting_data_loaded", {
-    usersWithAnswers: answersByUser.size,
-    recentRematchCount: recentRematchSet.size,
-  });
-
-  const cacheKey = buildCacheKey({
-    seeker,
-    seekerPrefDoc,
-    poolMode,
-    candidates: candidateSet,
-    answersByUser,
-  });
-  const cached = readCache(cacheKey, now);
-  if (cached) {
-    logStep("cache_hit", {
-      matchedUserId: cached?.uid || null,
-      mode: cached?.mode || null,
-      score: cached?.score ?? null,
-    });
-    return cached;
-  }
-  logStep("cache_miss");
-
-  const scored = candidateSet.map(({ user, prefs }) => {
-    const candidateId = user._id.toString();
-    const scoredCandidate = scoreCandidate({
-      seeker,
-      candidate: user,
-      context: {
-        seekerPrefs,
-        candidatePrefs: prefs,
-        poolMode,
-        now,
-        maxDistanceKm: expandedDistanceKm,
-        seekerAnswers: answersByUser.get(seekerId) || new Map(),
-        candidateAnswers: answersByUser.get(candidateId) || new Map(),
-      },
-    });
-
-    return {
-      ...scoredCandidate,
-      user,
-      prefs,
-      candidateId,
-      isRecentRematch: recentRematchSet.has(candidateId),
-      matchmakingTimestamp: user.matchmakingTimestamp || null,
-      distance: Number(user.distance || 0),
-    };
-  });
-
-  const nonRematch = scored.filter((item) => !item.isRecentRematch);
-  let filtered = scored;
-
-  if (poolMode === POOL_MODE.SCARCE && nonRematch.length > 0) {
-    filtered = nonRematch;
-  }
-
-  filtered = filtered
-    .map((item) => ({
-      ...item,
-      totalScore: Math.max(
-        0,
-        item.totalScore - (item.isRecentRematch ? REMATCH_PENALTY : 0),
+  const passConfigs = [
+    {
+      distanceKm: baseDistanceKm,
+      minScore: minScoreForMode,
+      fallbackType: "none",
+    },
+    {
+      distanceKm: Math.min(
+        MAX_DISTANCE_KM,
+        Math.max(baseDistanceKm * 1.5, baseDistanceKm + 5),
       ),
-    }))
-    .filter((item) => {
-      if (poolMode === POOL_MODE.NORMAL)
-        return item.totalScore >= NORMAL_MIN_SCORE;
-      if (poolMode === POOL_MODE.LOW_POOL)
-        return item.totalScore >= LOW_POOL_MIN_SCORE;
-      return true;
-    })
-    .sort(compareCandidates);
-  logStep("candidates_scored", {
-    scoredCount: scored.length,
-    filteredCount: filtered.length,
-    nonRematchCount: nonRematch.length,
-  });
+      minScore: minScoreForMode,
+      fallbackType: "distance_only",
+    },
+    {
+      distanceKm: Math.min(
+        MAX_DISTANCE_KM,
+        Math.max(baseDistanceKm * 2.5, baseDistanceKm + 15),
+      ),
+      minScore: Math.max(0, minScoreForMode - THIRD_PASS_SCORE_DROP),
+      fallbackType: "threshold_only",
+    },
+  ];
 
-  const winner = filtered[0];
-  const result = winner
-    ? {
-        uid: winner.candidateId,
-        user: winner.user,
-        mode: poolMode,
-        score: winner.totalScore,
-        matchingNote: buildMatchingNote({
-          seeker,
-          seekerId,
+  const observability = {
+    eligible_pool_count: 0,
+    rejected_interest_mismatch: 0,
+    rejected_age_mismatch: 0,
+    fallback_type_used: "none",
+    null_match_reason: null,
+  };
+
+  let nullMatchReason = "no_eligible_candidates";
+
+  for (let passIndex = 0; passIndex < passConfigs.length; passIndex += 1) {
+    const pass = passConfigs[passIndex];
+    const candidateSetResult =
+      passIndex === 0
+        ? basePool
+        : await getCandidateSet({
+            seeker,
+            seekerPrefs,
+            distanceKm: pass.distanceKm,
+          });
+
+    observability.rejected_interest_mismatch +=
+      candidateSetResult.reasonCounts.interest_mismatch || 0;
+    observability.rejected_age_mismatch +=
+      candidateSetResult.reasonCounts.age_out_of_range || 0;
+    observability.eligible_pool_count = Math.max(
+      observability.eligible_pool_count,
+      candidateSetResult.selected.length,
+    );
+
+    if (!candidateSetResult.selected.length) {
+      continue;
+    }
+
+    const candidateSet = candidateSetResult.selected;
+    const [answersByUser, recentRematchSet] = await Promise.all([
+      getAnswersByUser([
+        seekerId,
+        ...candidateSet.map((c) => c.user._id.toString()),
+      ]),
+      getRecentRematchSet(seekerId, now),
+    ]);
+
+    const scored = candidateSet.map(({ user, prefs }) => {
+      const candidateId = user._id.toString();
+      const scoredCandidate = scoreCandidate({
+        seeker,
+        candidate: user,
+        context: {
           seekerPrefs,
-          answersByUser,
-          winner,
-          poolMode,
-          usedRelaxedFallback,
-        }),
-      }
-    : null;
-  logStep("result_computed", {
-    matchedUserId: result?.uid || null,
-    mode: result?.mode || null,
-    score: result?.score ?? null,
-  });
+          candidatePrefs: prefs,
+          now,
+          maxDistanceKm: pass.distanceKm,
+          seekerAnswers: answersByUser.get(seekerId) || new Map(),
+          candidateAnswers: answersByUser.get(candidateId) || new Map(),
+        },
+      });
 
-  writeCache(cacheKey, result, now);
-  logStep("cache_written");
-  return result;
+      return {
+        ...scoredCandidate,
+        user,
+        prefs,
+        candidateId,
+        isRecentRematch: recentRematchSet.has(candidateId),
+        matchmakingTimestamp: user.matchmakingTimestamp || null,
+        distance: Number(user.distance || 0),
+      };
+    });
+
+    let filtered = scored
+      .map((item) => ({
+        ...item,
+        totalScore: Math.max(
+          0,
+          item.totalScore - (item.isRecentRematch ? REMATCH_PENALTY : 0),
+        ),
+      }))
+      .filter((item) => item.totalScore >= pass.minScore)
+      .sort(compareCandidates);
+
+    if (!filtered.length) {
+      nullMatchReason = "below_threshold";
+      continue;
+    }
+
+    const winner = filtered[0];
+    const runnerUp = filtered[1] || null;
+    observability.fallback_type_used = pass.fallbackType;
+    observability.null_match_reason = null;
+
+    const result = {
+      uid: winner.candidateId,
+      user: winner.user,
+      mode: poolMode,
+      score: winner.totalScore,
+      matchingNote: buildMatchingNote({
+        seeker,
+        seekerId,
+        seekerPrefs,
+        answersByUser,
+        winner,
+        poolMode,
+        fallbackType: pass.fallbackType,
+        candidatePoolSize: filtered.length,
+        runnerUpScore: runnerUp?.totalScore ?? null,
+      }),
+    };
+
+    logStep("result_computed", {
+      matchedUserId: result.uid,
+      mode: result.mode,
+      score: result.score,
+      observability,
+    });
+    return result;
+  }
+
+  observability.null_match_reason = nullMatchReason;
+  console.info("[matchmaking-v3]", observability);
+  return null;
 };
 
 export const getPreferenceBasedAvailableCount = async ({
   userId,
   now = new Date(),
 }) => {
-  const seeker = await User.findById(userId).select("_id").lean();
+  const seeker = await User.findById(userId).select("_id gender").lean();
   if (!seeker) return 0;
+  if (!isSupportedGender(seeker.gender)) return 0;
 
   const pref = await UserPreference.findOne({ user: userId })
     .select("interestedIn ageRange")
@@ -274,14 +255,13 @@ export const getPreferenceBasedAvailableCount = async ({
   const minAge = Number(ageRange[0]) || 18;
   const maxAge = Number(ageRange[1]) || 27;
 
-  const interestedIn = Array.isArray(pref?.interestedIn)
-    ? pref.interestedIn
-    : [pref?.interestedIn || "man"];
-  const normalizedGenderPref = interestedIn
-    .map((item) => String(item || "").trim().toLowerCase())
-    .filter(Boolean);
+  const normalizedGenderPref = normalizeInterestedIn(pref?.interestedIn, {
+    userGender: seeker.gender,
+  });
+  if (!normalizedGenderPref.length) return 0;
+
   const allowsAnyGender = normalizedGenderPref.some((item) =>
-    ["everyone", "all", "any"].includes(item)
+    ANY_GENDER_VALUES.has(item),
   );
 
   const pipeline = [
@@ -327,31 +307,44 @@ export const scoreCandidate = ({ seeker, candidate, context }) => {
   const {
     seekerPrefs,
     candidatePrefs,
-    poolMode,
     now,
     maxDistanceKm,
     seekerAnswers,
     candidateAnswers,
   } = context;
 
-  const profileRaw = scoreProfileAndPreference({
+  const profileCompatibilityRatio = scoreMutualProfileCompatibility({
     seeker,
     candidate,
     seekerPrefs,
     candidatePrefs,
-    maxDistanceKm,
   });
-  const thisOrThatRaw = scoreThisOrThat(seekerAnswers, candidateAnswers);
+  const intentAlignmentRatio = scoreIntentAlignment({
+    seekerPrefs,
+    candidatePrefs,
+  });
+  const thisOrThat = scoreThisOrThatSimilarity(seekerAnswers, candidateAnswers);
+  const distanceKm = Number(candidate.distance || 0) / 1000;
+  const distanceRatio = distanceAffinity(distanceKm, maxDistanceKm);
   const fairnessRatio = getFairnessRatio(candidate.matchmakingTimestamp, now);
+  const sparsePenaltyRatio = sparseDataPenalty({ candidate, candidatePrefs });
 
-  const modeCaps =
-    SCORE_CAPS_BY_MODE[poolMode] || SCORE_CAPS_BY_MODE[POOL_MODE.NORMAL];
-  const profileScore = (profileRaw / 65) * modeCaps.profile;
-  const thisOrThatScore = (thisOrThatRaw / 35) * modeCaps.thisOrThat;
-  const fairnessScore = fairnessRatio * modeCaps.fairness;
+  const profileScore =
+    profileCompatibilityRatio * SCORE_WEIGHTS.profileCompatibility;
+  const intentScore = intentAlignmentRatio * SCORE_WEIGHTS.intentAlignment;
+  const thisOrThatScore =
+    thisOrThat.similarity * thisOrThat.confidence * SCORE_WEIGHTS.thisOrThat;
+  const distanceScore = distanceRatio * SCORE_WEIGHTS.distance;
+  const fairnessScore = fairnessRatio * SCORE_WEIGHTS.fairness;
+  const penaltyScore = sparsePenaltyRatio * SCORE_WEIGHTS.sparsePenaltyMax;
 
   const totalScore = clampNumber(
-    profileScore + thisOrThatScore + fairnessScore,
+    profileScore +
+      intentScore +
+      thisOrThatScore +
+      distanceScore +
+      fairnessScore -
+      penaltyScore,
     0,
     100,
   );
@@ -360,67 +353,56 @@ export const scoreCandidate = ({ seeker, candidate, context }) => {
     totalScore,
     componentScores: {
       profileScore,
+      intentScore,
       thisOrThatScore,
+      distanceScore,
       fairnessScore,
+      penaltyScore,
     },
   };
 };
 
-async function getCandidateSet({
-  seeker,
-  seekerPrefs,
-  distanceKm,
-  relaxHardEligibility = false,
-}) {
-  const seekerId = seeker?._id?.toString?.() || "unknown";
-  const logStep = () => {};
-
-  logStep("start", { distanceKm, relaxHardEligibility });
+async function getCandidateSet({ seeker, seekerPrefs, distanceKm }) {
   const [lng, lat] = seeker.location.coordinates;
+  const queryableGenders = getQueryableInterestedInGenders(
+    seekerPrefs.interestedIn,
+  );
+  const query = {
+    isMatching: true,
+    credits: { $gte: CREDIT_RULES.CONVERSATION_COST },
+    ...(queryableGenders.length ? { gender: { $in: queryableGenders } } : {}),
+  };
+
   const rawCandidates = await User.findNearby(
     lng,
     lat,
     distanceKm * 1000,
-    {
-      isMatching: true,
-      credits: { $gte: CREDIT_RULES.CONVERSATION_COST },
-    },
+    query,
     seeker._id.toString(),
     200,
   );
-  logStep("nearby_fetched", { rawCount: rawCandidates.length });
 
   if (!rawCandidates.length) {
-    logStep("no_raw_candidates");
-    return [];
+    return {
+      selected: [],
+      rawCount: 0,
+      reasonCounts: {
+        missing_candidate_or_id: 0,
+        missing_gender: 0,
+        missing_dob: 0,
+        interest_mismatch: 0,
+        age_out_of_range: 0,
+      },
+    };
   }
 
   const candidateIds = rawCandidates.map((candidate) => candidate._id);
   const candidatePrefsDocs = await UserPreference.find({
     user: { $in: candidateIds },
   }).lean();
-  logStep("candidate_preferences_fetched", {
-    prefsCount: candidatePrefsDocs.length,
-  });
   const candidatePrefsMap = new Map(
-    candidatePrefsDocs.map((doc) => [
-      doc.user.toString(),
-      normalizePreference(doc),
-    ]),
+    candidatePrefsDocs.map((doc) => [doc.user.toString(), doc]),
   );
-
-  if (relaxHardEligibility) {
-    const relaxedSelected = rawCandidates.map((candidate) => ({
-      user: candidate,
-      prefs:
-        candidatePrefsMap.get(candidate._id.toString()) ||
-        normalizePreference(null),
-    }));
-    logStep("hard_filter_skipped_relaxed", {
-      selectedCount: relaxedSelected.length,
-    });
-    return relaxedSelected;
-  }
 
   const reasonCounts = {
     missing_candidate_or_id: 0,
@@ -432,9 +414,12 @@ async function getCandidateSet({
 
   const selected = [];
   for (const candidate of rawCandidates) {
-    const prefs =
-      candidatePrefsMap.get(candidate._id.toString()) ||
-      normalizePreference(null);
+    const prefs = normalizePreference(
+      candidatePrefsMap.get(candidate._id.toString()),
+      {
+        userGender: candidate.gender,
+      },
+    );
     const eligibility = getHardEligibilityResult({
       seeker,
       seekerPrefs,
@@ -451,27 +436,11 @@ async function getCandidateSet({
     selected.push({ user: candidate, prefs });
   }
 
-  logStep("hard_filter_completed", {
-    selectedCount: selected.length,
-    rejectedCount: rawCandidates.length - selected.length,
-    reasons: reasonCounts,
-  });
-
-  return selected;
-}
-
-function passesHardEligibility({
-  seeker,
-  seekerPrefs,
-  candidate,
-  candidatePrefs,
-}) {
-  return getHardEligibilityResult({
-    seeker,
-    seekerPrefs,
-    candidate,
-    candidatePrefs,
-  }).ok;
+  return {
+    selected,
+    rawCount: rawCandidates.length,
+    reasonCounts,
+  };
 }
 
 function getHardEligibilityResult({
@@ -483,7 +452,10 @@ function getHardEligibilityResult({
   if (!candidate || !candidate._id) {
     return { ok: false, reason: "missing_candidate_or_id" };
   }
-  if (!candidate.gender || !seeker.gender) {
+  if (
+    !isSupportedGender(candidate.gender) ||
+    !isSupportedGender(seeker.gender)
+  ) {
     return { ok: false, reason: "missing_gender" };
   }
   if (!candidate.dob || !seeker.dob) {
@@ -493,10 +465,12 @@ function getHardEligibilityResult({
   const seekerInterestOk = isInterestedIn(
     seekerPrefs.interestedIn,
     candidate.gender,
+    { userGender: seeker.gender },
   );
   const candidateInterestOk = isInterestedIn(
     candidatePrefs.interestedIn,
     seeker.gender,
+    { userGender: candidate.gender },
   );
   if (!seekerInterestOk || !candidateInterestOk) {
     return { ok: false, reason: "interest_mismatch" };
@@ -504,7 +478,6 @@ function getHardEligibilityResult({
 
   const seekerAge = getAge(seeker.dob);
   const candidateAge = getAge(candidate.dob);
-
   if (!isAgeInRange(candidateAge, seekerPrefs.ageRange)) {
     return { ok: false, reason: "age_out_of_range" };
   }
@@ -513,102 +486,6 @@ function getHardEligibilityResult({
   }
 
   return { ok: true, reason: "ok" };
-}
-
-function scoreProfileAndPreference({
-  seeker,
-  candidate,
-  seekerPrefs,
-  candidatePrefs,
-  maxDistanceKm,
-}) {
-  const candidateAge = getAge(candidate.dob);
-  const ageScore = ageClosenessScore(candidateAge, seekerPrefs.ageRange); // /10
-
-  const goalScore = jaccard(
-    compactGoals(seekerPrefs.goal),
-    compactGoals(candidatePrefs.goal),
-  ); // /8
-
-  const relationshipScore =
-    seekerPrefs.relationshipType &&
-    candidatePrefs.relationshipType &&
-    seekerPrefs.relationshipType === candidatePrefs.relationshipType
-      ? 1
-      : 0; // /6
-
-  const interestsScore = jaccard(
-    seekerPrefs.interests,
-    candidatePrefs.interests,
-  ); // /8
-  const languagesScore = jaccard(
-    seekerPrefs.languages,
-    candidatePrefs.languages,
-  ); // /8
-
-  const traitsScore =
-    singleTraitScore(seekerPrefs.dietPreference, candidate.diet) * 2 +
-    singleTraitScore(seekerPrefs.zodiacPreference, candidate.zodiacSign) * 1 +
-    singleTraitScore(
-      seekerPrefs.personalityTypePreference,
-      candidate.personalityType,
-    ) *
-      2 +
-    singleTraitScore(seekerPrefs.religionPreference, candidate.religion) * 2 +
-    singleTraitScore(
-      seekerPrefs.drinkingPreference,
-      candidate.lifestyle?.drinking,
-    ) *
-      2 +
-    singleTraitScore(
-      seekerPrefs.smokingPreference,
-      candidate.lifestyle?.smoking,
-    ) *
-      2 +
-    singleTraitScore(seekerPrefs.petPreference, candidate.lifestyle?.pets) * 1; // /12
-
-  const distanceKm = Number(candidate.distance || 0) / 1000;
-  const distanceScore = distanceAffinity(distanceKm, maxDistanceKm); // /8
-
-  const interestedSoft = interestedSoftStrength(
-    seekerPrefs.interestedIn,
-    candidate.gender,
-  ); // /5
-
-  return clampNumber(
-    interestedSoft * 5 +
-      ageScore * 10 +
-      goalScore * 8 +
-      relationshipScore * 6 +
-      interestsScore * 8 +
-      languagesScore * 8 +
-      traitsScore +
-      distanceScore * 8,
-    0,
-    65,
-  );
-}
-
-function scoreThisOrThat(seekerAnswers, candidateAnswers) {
-  if (!seekerAnswers.size || !candidateAnswers.size) return 0;
-
-  let shared = 0;
-  let matched = 0;
-
-  for (const [questionId, seekerSelection] of seekerAnswers.entries()) {
-    if (!candidateAnswers.has(questionId)) continue;
-    shared += 1;
-    if (candidateAnswers.get(questionId) === seekerSelection) {
-      matched += 1;
-    }
-  }
-
-  if (!shared) return 0;
-
-  const similarity = matched / shared;
-  const confidence = Math.min(shared / 20, 1);
-
-  return clampNumber(35 * similarity * confidence, 0, 35);
 }
 
 async function getAnswersByUser(userIds) {
@@ -648,7 +525,7 @@ async function getRecentRematchSet(seekerId, now) {
   return recent;
 }
 
-function normalizePreference(prefDoc) {
+function normalizePreference(prefDoc, { userGender } = {}) {
   const merged = { ...DEFAULT_PREFS, ...(prefDoc || {}) };
   const [minAge, maxAge] = Array.isArray(merged.ageRange)
     ? merged.ageRange
@@ -656,7 +533,7 @@ function normalizePreference(prefDoc) {
 
   return {
     ...merged,
-    interestedIn: normalizeInterestedIn(merged.interestedIn),
+    interestedIn: normalizeInterestedIn(merged.interestedIn, { userGender }),
     ageRange: {
       min: Number.isFinite(minAge) ? minAge : 18,
       max: Number.isFinite(maxAge) ? maxAge : 27,
@@ -682,7 +559,7 @@ function normalizePreference(prefDoc) {
   };
 }
 
-function normalizeInterestedIn(value) {
+function normalizeInterestedIn(value, { userGender } = {}) {
   const list = Array.isArray(value) ? value : [value];
   const normalized = list
     .map((item) =>
@@ -691,7 +568,14 @@ function normalizeInterestedIn(value) {
         .toLowerCase(),
     )
     .filter(Boolean);
-  return normalized.length ? normalized : ["man"];
+
+  if (normalized.some((item) => ANY_GENDER_VALUES.has(item))) return ["any"];
+
+  const genders = normalized.filter((item) => isSupportedGender(item));
+  if (genders.length) return Array.from(new Set(genders));
+
+  const inferred = inferInterestedInFromGender(userGender);
+  return inferred ? [inferred] : [];
 }
 
 function normalizeStringArray(value) {
@@ -715,22 +599,134 @@ function compactGoals(goal) {
     .filter(Boolean);
 }
 
-function isInterestedIn(interestedIn, gender) {
-  const g = String(gender || "")
+function isInterestedIn(interestedIn, gender, { userGender } = {}) {
+  const targetGender = String(gender || "")
     .trim()
     .toLowerCase();
-  if (!g) return false;
-  const normalized = normalizeInterestedIn(interestedIn);
-  if (normalized.some((item) => ["everyone", "all", "any"].includes(item)))
-    return true;
-  return normalized.includes(g);
+  if (!isSupportedGender(targetGender)) return false;
+
+  const normalized = normalizeInterestedIn(interestedIn, { userGender });
+  if (!normalized.length) return false;
+  if (normalized.includes("any")) return true;
+  return normalized.includes(targetGender);
 }
 
-function interestedSoftStrength(interestedIn, gender) {
+function getQueryableInterestedInGenders(interestedIn) {
   const normalized = normalizeInterestedIn(interestedIn);
-  if (normalized.some((item) => ["everyone", "all", "any"].includes(item)))
-    return 0.7;
-  return normalized.includes(String(gender || "").toLowerCase()) ? 1 : 0;
+  if (normalized.some((item) => item === "any")) return [];
+  return normalized.filter((item) => isSupportedGender(item));
+}
+
+function scoreMutualProfileCompatibility({
+  seeker,
+  candidate,
+  seekerPrefs,
+  candidatePrefs,
+}) {
+  const seekerAge = getAge(seeker.dob);
+  const candidateAge = getAge(candidate.dob);
+  const seekerToCandidateAge = ageClosenessScore(
+    candidateAge,
+    seekerPrefs.ageRange,
+  );
+  const candidateToSeekerAge = ageClosenessScore(
+    seekerAge,
+    candidatePrefs.ageRange,
+  );
+  const ageScore = (seekerToCandidateAge + candidateToSeekerAge) / 2;
+
+  const interestsScore = jaccard(
+    seeker.interests || [],
+    candidate.interests || [],
+  );
+  const languagesScore = jaccard(
+    seeker.languages || [],
+    candidate.languages || [],
+  );
+  const traitsScore =
+    (traitsAlignmentScore(seekerPrefs, candidate) +
+      traitsAlignmentScore(candidatePrefs, seeker)) /
+    2;
+
+  return clampNumber(
+    ageScore * 0.3 +
+      interestsScore * 0.25 +
+      languagesScore * 0.15 +
+      traitsScore * 0.3,
+    0,
+    1,
+  );
+}
+
+function scoreIntentAlignment({ seekerPrefs, candidatePrefs }) {
+  const goalScore = jaccard(
+    compactGoals(seekerPrefs.goal),
+    compactGoals(candidatePrefs.goal),
+  );
+
+  const relationshipScore =
+    seekerPrefs.relationshipType && candidatePrefs.relationshipType
+      ? seekerPrefs.relationshipType === candidatePrefs.relationshipType
+        ? 1
+        : 0
+      : 0.5;
+
+  return clampNumber(goalScore * 0.7 + relationshipScore * 0.3, 0, 1);
+}
+
+function scoreThisOrThatSimilarity(seekerAnswers, candidateAnswers) {
+  if (!seekerAnswers.size || !candidateAnswers.size) {
+    return { similarity: 0, confidence: 0, shared: 0, matched: 0 };
+  }
+
+  let shared = 0;
+  let matched = 0;
+  for (const [questionId, seekerSelection] of seekerAnswers.entries()) {
+    if (!candidateAnswers.has(questionId)) continue;
+    shared += 1;
+    if (candidateAnswers.get(questionId) === seekerSelection) matched += 1;
+  }
+
+  if (!shared) return { similarity: 0, confidence: 0, shared: 0, matched: 0 };
+  return {
+    similarity: matched / shared,
+    confidence: Math.min(shared / 20, 1),
+    shared,
+    matched,
+  };
+}
+
+function sparseDataPenalty({ candidate, candidatePrefs }) {
+  const checks = [
+    Array.isArray(candidate?.interests) && candidate.interests.length > 0,
+    Array.isArray(candidate?.languages) && candidate.languages.length > 0,
+    compactGoals(candidatePrefs?.goal).length > 0,
+    Boolean(candidate?.religion),
+    Boolean(candidate?.diet),
+    Boolean(candidate?.personalityType),
+  ];
+  const missing = checks.filter((hasData) => !hasData).length;
+  return missing / checks.length;
+}
+
+function traitsAlignmentScore(preferences, profile) {
+  const scores = [
+    singleTraitScore(preferences.dietPreference, profile.diet),
+    singleTraitScore(preferences.zodiacPreference, profile.zodiacSign),
+    singleTraitScore(
+      preferences.personalityTypePreference,
+      profile.personalityType,
+    ),
+    singleTraitScore(preferences.religionPreference, profile.religion),
+    singleTraitScore(
+      preferences.drinkingPreference,
+      profile.lifestyle?.drinking,
+    ),
+    singleTraitScore(preferences.smokingPreference, profile.lifestyle?.smoking),
+    singleTraitScore(preferences.petPreference, profile.lifestyle?.pets),
+  ];
+  const sum = scores.reduce((acc, value) => acc + value, 0);
+  return scores.length ? sum / scores.length : 0;
 }
 
 function isAgeInRange(age, range) {
@@ -775,7 +771,7 @@ function jaccard(a = [], b = []) {
 function singleTraitScore(preferredValues, candidateValue) {
   const pref = normalizeStringArray(preferredValues);
   if (!pref.length) return 0.5;
-  if (pref.some((item) => ["any", "all", "everyone"].includes(item))) return 1;
+  if (pref.some((item) => ANY_GENDER_VALUES.has(item))) return 1;
   const value = String(candidateValue || "")
     .trim()
     .toLowerCase();
@@ -809,22 +805,6 @@ function clampDistanceKm(distance) {
   return Math.min(parsed, MAX_DISTANCE_KM);
 }
 
-function getDistanceForMode(baseDistanceKm, mode) {
-  if (mode === POOL_MODE.LOW_POOL) {
-    return Math.min(
-      MAX_DISTANCE_KM,
-      Math.max(baseDistanceKm * 1.5, baseDistanceKm + 5),
-    );
-  }
-  if (mode === POOL_MODE.SCARCE) {
-    return Math.min(
-      MAX_DISTANCE_KM,
-      Math.max(baseDistanceKm * 2.5, baseDistanceKm + 15),
-    );
-  }
-  return baseDistanceKm;
-}
-
 function hasValidLocation(user) {
   const coords = user?.location?.coordinates;
   if (!Array.isArray(coords) || coords.length !== 2) return false;
@@ -849,56 +829,6 @@ function compareCandidates(a, b) {
   return String(a.candidateId).localeCompare(String(b.candidateId));
 }
 
-function buildCacheKey({
-  seeker,
-  seekerPrefDoc,
-  poolMode,
-  candidates,
-  answersByUser,
-}) {
-  const seekerId = seeker._id.toString();
-  const candidateIds = candidates
-    .map((item) => item.user._id.toString())
-    .sort()
-    .join(",");
-  const candidatePrefUpdated = candidates
-    .map((item) => String(item.prefs?.updatedAt || "0"))
-    .join("|");
-  const answersStamp = Array.from(answersByUser.entries())
-    .map(([uid, answerMap]) => `${uid}:${answerMap.size}`)
-    .sort()
-    .join("|");
-
-  const payload = [
-    seekerId,
-    poolMode,
-    String(seeker.updatedAt || "0"),
-    String(seekerPrefDoc?.updatedAt || "0"),
-    candidateIds,
-    candidatePrefUpdated,
-    answersStamp,
-  ].join("::");
-
-  return crypto.createHash("sha1").update(payload).digest("hex");
-}
-
-function readCache(key, now) {
-  const entry = scoreCache.get(key);
-  if (!entry) return null;
-  if (entry.expiresAt <= now.getTime()) {
-    scoreCache.delete(key);
-    return null;
-  }
-  return entry.value;
-}
-
-function writeCache(key, value, now) {
-  scoreCache.set(key, {
-    value,
-    expiresAt: now.getTime() + CACHE_TTL_MS,
-  });
-}
-
 function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -910,12 +840,23 @@ function buildMatchingNote({
   answersByUser,
   winner,
   poolMode,
-  usedRelaxedFallback,
+  fallbackType,
+  candidatePoolSize,
+  runnerUpScore,
 }) {
   const profileScore = round2(winner?.componentScores?.profileScore || 0);
+  const intentScore = round2(winner?.componentScores?.intentScore || 0);
   const thisOrThatScore = round2(winner?.componentScores?.thisOrThatScore || 0);
+  const distanceScore = round2(winner?.componentScores?.distanceScore || 0);
   const fairnessScore = round2(winner?.componentScores?.fairnessScore || 0);
+  const penaltyScore = round2(winner?.componentScores?.penaltyScore || 0);
   const totalScore = round2(winner?.totalScore || 0);
+  const runnerUpTotalScore = Number.isFinite(runnerUpScore)
+    ? round2(runnerUpScore)
+    : null;
+  const scoreGapVsRunnerUp = Number.isFinite(runnerUpTotalScore)
+    ? round2(totalScore - runnerUpTotalScore)
+    : null;
   const distanceKm = Number.isFinite(winner?.distance)
     ? round2(Number(winner.distance) / 1000)
     : null;
@@ -937,24 +878,31 @@ function buildMatchingNote({
   if (common.religion) reasons.push("shared_religion");
   if (common.diet) reasons.push("shared_diet");
   if (thisOrThat.matchedAnswers > 0) reasons.push("this_or_that_similarity");
-  if (profileScore > 0 && !reasons.includes("this_or_that_similarity")) {
-    reasons.push("profile_preference_alignment");
-  }
   if (fairnessScore > 0) reasons.push("wait_time_fairness_boost");
-  if (usedRelaxedFallback) reasons.push("fallback_relaxed_eligibility");
-  if (!reasons.length) reasons.push("last_resort_available_match");
+  if (fallbackType !== "none") reasons.push("fallback_distance_or_threshold");
+  if (!reasons.length) reasons.push("profile_preference_alignment");
 
   return {
-    version: "matchmaking_v2",
+    version: "matchmaking_v3",
+    eligibilityVersion: "v3",
+    fallbackType,
     poolMode,
     totalScore,
+    candidatePoolSize: Number(candidatePoolSize || 0),
+    rankingContext: {
+      selectedRank: 1,
+      runnerUpScore: runnerUpTotalScore,
+      scoreGapVsRunnerUp,
+    },
     components: {
       profileScore,
+      intentScore,
       thisOrThatScore,
+      distanceScore,
       fairnessScore,
+      penaltyScore,
     },
     isRecentRematch: Boolean(winner?.isRecentRematch),
-    usedRelaxedFallback: Boolean(usedRelaxedFallback),
     distanceKm,
     common,
     thisOrThat,
@@ -994,7 +942,10 @@ function getCommonalityBreakdown({
         seeker?.lifestyle?.smoking,
         candidate?.lifestyle?.smoking,
       ),
-      pets: getExactMatchValue(seeker?.lifestyle?.pets, candidate?.lifestyle?.pets),
+      pets: getExactMatchValue(
+        seeker?.lifestyle?.pets,
+        candidate?.lifestyle?.pets,
+      ),
     },
   };
 }
@@ -1014,20 +965,43 @@ function getThisOrThatStats({ seekerAnswers, candidateAnswers }) {
   return {
     sharedAnswers,
     matchedAnswers,
-    matchRate: sharedAnswers ? round2((matchedAnswers / sharedAnswers) * 100) : 0,
+    matchRate: sharedAnswers
+      ? round2((matchedAnswers / sharedAnswers) * 100)
+      : 0,
   };
 }
 
 function getIntersection(a = [], b = []) {
   const setB = new Set((b || []).map((item) => String(item)));
-  return Array.from(new Set((a || []).map((item) => String(item)))).filter((item) =>
-    setB.has(item),
+  return Array.from(new Set((a || []).map((item) => String(item)))).filter(
+    (item) => setB.has(item),
   );
 }
 
 function getExactMatchValue(a, b) {
-  const left = String(a || "").trim().toLowerCase();
-  const right = String(b || "").trim().toLowerCase();
+  const left = String(a || "")
+    .trim()
+    .toLowerCase();
+  const right = String(b || "")
+    .trim()
+    .toLowerCase();
   if (!left || !right) return null;
   return left === right ? left : null;
+}
+
+function isSupportedGender(value) {
+  return SUPPORTED_GENDERS.has(
+    String(value || "")
+      .trim()
+      .toLowerCase(),
+  );
+}
+
+function inferInterestedInFromGender(gender) {
+  const normalized = String(gender || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "man") return "woman";
+  if (normalized === "woman") return "man";
+  return null;
 }

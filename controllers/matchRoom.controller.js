@@ -126,7 +126,7 @@ export const submitChatFeedback = async (req, res) => {
     { user: userId, rejectedUser, roomId },
     payload,
     {
-      new: true,
+      returnDocument: "after",
       upsert: true,
       setDefaultsOnInsert: true,
     }
@@ -185,3 +185,4 @@ export const getReceivedFeedbacks = async (req, res) => {
     return res.status(500).json({ message: "Failed to fetch received feedbacks" });
   }
 };
+

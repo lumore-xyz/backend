@@ -122,7 +122,7 @@ export const applyReferralCode = async (req, res) => {
     const applied = await User.findOneAndUpdate(
       { _id: userId, referredBy: null },
       { $set: { referredBy: referrer._id } },
-      { new: true }
+      { returnDocument: "after" }
     )
       .select("_id referredBy")
       .lean();
@@ -150,3 +150,4 @@ export const applyReferralCode = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
+

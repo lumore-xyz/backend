@@ -136,7 +136,7 @@ export const updatePost = async (req, res) => {
   const post = await Post.findOneAndUpdate(
     { _id: id, userId },
     { content: req.body.content, visibility: req.body.visibility },
-    { new: true },
+    { returnDocument: "after" },
   );
 
   if (!post) {
@@ -173,3 +173,4 @@ export const deletePost = async (req, res) => {
   await post.deleteOne();
   res.json({ success: true });
 };
+

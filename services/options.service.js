@@ -190,7 +190,7 @@ export const getOrCreateGlobalOptions = async () => {
       const patched = await AppOptions.findOneAndUpdate(
         { key: "global" },
         { $set: { options: nextOptions } },
-        { new: true },
+        { returnDocument: "after" },
       ).lean();
       return patched;
     }
@@ -226,8 +226,9 @@ export const updateGlobalOptions = async ({ optionsPatch, userId }) => {
         lastUpdatedBy: userId || null,
       },
     },
-    { new: true },
+    { returnDocument: "after" },
   ).lean();
 
   return updated;
 };
+

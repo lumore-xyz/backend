@@ -89,7 +89,7 @@ export const grantDailyActiveBonus = async (userId, now = new Date()) => {
       $inc: { credits: bonus },
       $set: { lastDailyCreditAt: now },
     },
-    { new: true }
+    { returnDocument: "after" }
   );
 
   if (!user) {
@@ -148,7 +148,7 @@ export const spendCreditsForConversationStart = async (initiatorId, partnerId) =
     const u1 = await User.findOneAndUpdate(
       { _id: initiatorId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
       { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
-      { new: true }
+      { returnDocument: "after" }
     );
     if (!u1) {
       return { success: false, reason: "INSUFFICIENT_CREDITS" };
@@ -157,7 +157,7 @@ export const spendCreditsForConversationStart = async (initiatorId, partnerId) =
     const u2 = await User.findOneAndUpdate(
       { _id: partnerId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
       { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
-      { new: true }
+      { returnDocument: "after" }
     );
     if (!u2) {
       await User.findByIdAndUpdate(initiatorId, {
@@ -204,12 +204,12 @@ export const spendCreditsForConversationStart = async (initiatorId, partnerId) =
         User.findOneAndUpdate(
           { _id: initiatorId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
           { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
-          { new: true, session }
+          { returnDocument: "after", session }
         ),
         User.findOneAndUpdate(
           { _id: partnerId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
           { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
-          { new: true, session }
+          { returnDocument: "after", session }
         ),
       ]);
 
@@ -282,7 +282,7 @@ export const awardCreditsForThisOrThatApproval = async ({
   const user = await User.findByIdAndUpdate(
     userId,
     { $inc: { credits: CREDIT_RULES.THIS_OR_THAT_APPROVAL_BONUS } },
-    { new: true }
+    { returnDocument: "after" }
   );
   if (!user) return { granted: false };
 
@@ -341,7 +341,7 @@ export const awardReferralBonusForVerifiedUser = async ({
   const updatedReferrer = await User.findByIdAndUpdate(
     referrer._id,
     { $inc: { credits: CREDIT_RULES.REFERRAL_VERIFICATION_BONUS } },
-    { new: true }
+    { returnDocument: "after" }
   );
 
   if (!updatedReferrer) {
@@ -392,3 +392,4 @@ export const getCreditHistory = async (userId, page = 1, limit = 20) => {
     },
   };
 };
+

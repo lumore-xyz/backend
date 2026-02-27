@@ -24,6 +24,7 @@ import {
   CREDIT_RULES,
   spendCreditsForConversationStart,
 } from "./credits.service.js";
+import { generateGeminiMatchNotesByUser } from "./matchNoteAi.service.js";
 import { getOrCreateMatchRoom } from "./matching.service.js";
 import { findBestMatchV2 } from "./matchmaking.service.js";
 import { sendNotificationToUser } from "./push.service.js";
@@ -82,6 +83,51 @@ const normalizeMessagePayload = (messageDoc, extra = {}) => ({
   timestamp: new Date(messageDoc.createdAt).getTime(),
   ...extra,
 });
+
+const buildAiMatchNote = async ({ seekerId, candidateId, matchingNote }) => {
+  if (!matchingNote || typeof matchingNote !== "object") return matchingNote;
+
+  let seeker = null;
+  let candidate = null;
+  try {
+    const users = await User.find({
+      _id: { $in: [seekerId, candidateId] },
+    })
+      .select("_id username nickname")
+      .lean();
+    for (const user of users) {
+      const uid = user?._id?.toString?.();
+      if (!uid) continue;
+      if (uid === String(seekerId)) seeker = user;
+      if (uid === String(candidateId)) candidate = user;
+    }
+  } catch (error) {
+    console.error("[matchnote-ai] Failed to load users:", error?.message || error);
+  }
+
+  const aiResult = await generateGeminiMatchNotesByUser({
+    seeker,
+    candidate,
+    matchingNote,
+  });
+  console.info("[matchnote-ai] generation result", {
+    seekerId: String(seekerId),
+    candidateId: String(candidateId),
+    usedFallback: Boolean(aiResult?.meta?.usedFallback),
+    reasons: aiResult?.meta?.reasons || [],
+    model: aiResult?.meta?.model || null,
+  });
+
+  return {
+    ...matchingNote,
+    oneSentenceNote: aiResult.primarySentence,
+    notesByUser: aiResult.notesByUser,
+    aiSummary: {
+      ...aiResult.meta,
+      generatedAt: new Date().toISOString(),
+    },
+  };
+};
 
 
 /* ============================================================
@@ -375,10 +421,15 @@ const handleConnection = (socket) => {
       });
 
       if (match) {
+        const enrichedMatchingNote = await buildAiMatchNote({
+          seekerId: userId,
+          candidateId: match.uid,
+          matchingNote: match.matchingNote || null,
+        });
         const created = await createAndNotifyMatch(
           userId,
           match.uid,
-          match.matchingNote || null
+          enrichedMatchingNote || match.matchingNote || null
         );
         logMatchStep("create_and_notify_result", {
           success: Boolean(created?.success),

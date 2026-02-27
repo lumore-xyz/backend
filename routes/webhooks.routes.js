@@ -74,7 +74,7 @@ router.get("/didit/callback", async (req, res) => {
           verificationMethod: "didit",
           ...statusPatch,
         },
-        { new: true }
+        { returnDocument: "after" }
       );
 
       if (updatedUser?.isVerified || updatedUser?.verificationStatus === "approved") {
@@ -127,7 +127,7 @@ router.post("/didit/callback", async (req, res) => {
         verificationMethod: "didit",
         verificationSessionId: sessionId,
         ...statusPatch,
-      }, { new: true });
+      }, { returnDocument: "after" });
 
       if (updatedUser?.isVerified || updatedUser?.verificationStatus === "approved") {
         await awardReferralBonusForVerifiedUser({
@@ -145,3 +145,4 @@ router.post("/didit/callback", async (req, res) => {
 });
 
 export default router;
+

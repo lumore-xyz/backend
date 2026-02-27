@@ -52,7 +52,7 @@ export const getPromptCategories = async (_req, res) => {
  */
 export const updatePrompt = async (req, res) => {
   const prompt = await Prompt.findByIdAndUpdate(req.params.id, req.body, {
-    new: true,
+    returnDocument: "after",
   });
 
   if (!prompt) {
@@ -69,7 +69,7 @@ export const deletePrompt = async (req, res) => {
   const prompt = await Prompt.findByIdAndUpdate(
     req.params.id,
     { isActive: false },
-    { new: true }
+    { returnDocument: "after" }
   );
 
   if (!prompt) {
@@ -78,3 +78,4 @@ export const deletePrompt = async (req, res) => {
 
   res.json({ success: true });
 };
+

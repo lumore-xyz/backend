@@ -4,7 +4,7 @@ const userPreferenceSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   interestedIn: {
     type: String,
-    default: "man",
+    default: null,
   },
   ageRange: {
     type: [Number],
