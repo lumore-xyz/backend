@@ -15,6 +15,7 @@
   "description": "",
   "dependencies": {
     "@google/genai": "^1.42.0",
+    "@onesignal/node-onesignal": "^5.4.0-beta1",
     "@tma.js/init-data-node": "^2.0.3",
     "axios": "^1.13.5",
     "bcryptjs": "^3.0.3",

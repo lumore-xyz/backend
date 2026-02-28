@@ -10,8 +10,78 @@ import {
   extractPublicIdFromUrl,
   uploadImage,
 } from "../services/file.service.js";
+import {
+  extractLocationTags,
+  syncUserProfileTagsToOneSignal,
+} from "../services/onesignalUserTags.service.js";
 
 const VALID_INTERESTED_IN = new Set(["man", "woman"]);
+
+const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
+const getOneSignalErrorCode = (error) => {
+  const rawCode = error?.code || error?.statusCode || error?.response?.status;
+  const code = Number(rawCode);
+  return Number.isFinite(code) ? code : "unknown";
+};
+
+const buildOneSignalErrorDetails = (error) => {
+  const body = error?.body || error?.response?.body || null;
+  return {
+    code: getOneSignalErrorCode(error),
+    message: String(error?.message || ""),
+    reference: body?.reference || null,
+    errors: body?.errors || null,
+  };
+};
+
+const shouldSyncOneSignalProfileTagsFromUpdateData = (updateData = {}) => {
+  if (hasOwn(updateData, "nickname") || hasOwn(updateData, "gender")) return true;
+  if (hasOwn(updateData, "location.formattedAddress")) return true;
+
+  const locationPatch = updateData.location;
+  return Boolean(
+    locationPatch &&
+      typeof locationPatch === "object" &&
+      !Array.isArray(locationPatch) &&
+      hasOwn(locationPatch, "formattedAddress"),
+  );
+};
+
+const triggerOneSignalProfileTagSync = (user) => {
+  const userId = String(user?._id || user?.id || "").trim();
+  if (!userId) return;
+
+  void syncUserProfileTagsToOneSignal(user)
+    .then((result) => {
+      if (result?.success) {
+        if (result?.partial) {
+          console.info(
+            `[OneSignalTagSync] synced user=${userId} mode=partial details=${JSON.stringify({
+              reason: result.reason || "unknown",
+              appliedKeys: result.appliedKeys || [],
+              blockedKey: result.blockedKey || null,
+            })}`,
+          );
+          return;
+        }
+
+        console.info(`[OneSignalTagSync] synced user=${userId}`);
+        return;
+      }
+
+      if (result?.skipped) {
+        const reason = String(result.reason || "unknown");
+        console.info(`[OneSignalTagSync] skipped user=${userId} reason=${reason}`);
+      }
+    })
+    .catch((error) => {
+      const details = buildOneSignalErrorDetails(error);
+      console.error(
+        `[OneSignalTagSync] failed user=${userId} details=${JSON.stringify(details)}`,
+      );
+    });
+};
 
 function normalizeInterestedInValue(value) {
   const normalized = String(value || "")
@@ -88,6 +158,9 @@ export const createUpdateProfile = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
 
     await updatedUser.updateLastActive();
+    if (shouldSyncOneSignalProfileTagsFromUpdateData(updateData)) {
+      triggerOneSignalProfileTagSync(updatedUser);
+    }
     res.status(200).json(updatedUser);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -124,8 +197,19 @@ export const updateUserLocation = async (req, res) => {
       });
     }
 
+    const previousCountry = extractLocationTags(
+      user?.location?.formattedAddress,
+    ).country;
+
     // Update location using the model method
     await user.updateLocation(latitude, longitude, formattedAddress);
+    const currentCountry = extractLocationTags(
+      user?.location?.formattedAddress,
+    ).country;
+
+    if (previousCountry !== currentCountry) {
+      triggerOneSignalProfileTagSync(user);
+    }
 
     res.json({
       success: true,
@@ -658,4 +742,6 @@ export const deleteAccount = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+
 

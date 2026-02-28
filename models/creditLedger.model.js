@@ -21,6 +21,7 @@ const creditLedgerSchema = new mongoose.Schema(
         "conversation_start",
         "this_or_that_approved",
         "referral_bonus",
+        "rewarded_ad_watch",
         "admin_adjustment",
       ],
       index: true,
@@ -48,5 +49,16 @@ const creditLedgerSchema = new mongoose.Schema(
 );
 
 creditLedgerSchema.index({ user: 1, createdAt: -1 });
+creditLedgerSchema.index({ user: 1, type: 1, createdAt: -1 });
+creditLedgerSchema.index(
+  { user: 1, type: 1, referenceType: 1, referenceId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      type: "rewarded_ad_watch",
+      referenceType: "rewarded_ad_session",
+    },
+  },
+);
 
 export default mongoose.model("CreditLedger", creditLedgerSchema);
