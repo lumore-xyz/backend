@@ -193,7 +193,7 @@ const userSchema = new mongoose.Schema(
     timestamps: true,
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
-  }
+  },
 );
 
 // ==================== INDEXES ====================
@@ -273,7 +273,9 @@ userSchema.pre("save", function () {
 
     // Validate ranges
     if (lng < -180 || lng > 180) {
-      throw new Error(`Invalid longitude: ${lng}. Must be between -180 and 180`);
+      throw new Error(
+        `Invalid longitude: ${lng}. Must be between -180 and 180`,
+      );
     }
     if (lat < -90 || lat > 90) {
       throw new Error(`Invalid latitude: ${lat}. Must be between -90 and 90`);
@@ -283,17 +285,17 @@ userSchema.pre("save", function () {
 
 // Password Hashing (Only if Modified)
 // Uncomment if you want password hashing on save
-// userSchema.pre("save", async function (next) {
-//   if (!this.isModified("password") || !this.password) return next();
-//
-//   try {
-//     const saltRounds = 12;
-//     this.password = await bcrypt.hash(this.password, saltRounds);
-//     next();
-//   } catch (error) {
-//     next(error);
-//   }
-// });
+userSchema.pre("save", async function (next) {
+  if (!this.isModified("password") || !this.password) return next();
+
+  try {
+    const saltRounds = 12;
+    this.password = await bcrypt.hash(this.password, saltRounds);
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
 
 // ==================== INSTANCE METHODS ====================
 
@@ -312,7 +314,7 @@ userSchema.methods.updateLastActive = async function () {
 userSchema.methods.updateLocation = async function (
   latitude,
   longitude,
-  formattedAddress = ""
+  formattedAddress = "",
 ) {
   // Validate coordinates
   if (typeof latitude !== "number" || typeof longitude !== "number") {
@@ -429,7 +431,7 @@ userSchema.statics.findNearby = async function (
   maxDistanceMeters = 10000,
   additionalQuery = {},
   userId,
-  limit = 100
+  limit = 100,
 ) {
   return await this.aggregate([
     {
@@ -467,7 +469,7 @@ userSchema.statics.findMatchmakingCandidates = async function (
   userId,
   userLocation,
   userGenderPreference,
-  maxDistanceMeters = 10000
+  maxDistanceMeters = 10000,
 ) {
   const [longitude, latitude] = userLocation.coordinates;
 
@@ -511,7 +513,7 @@ userSchema.statics.findMatchmakingCandidates = async function (
 // Count users by distance ranges
 userSchema.statics.getUserDistributionStats = async function (
   longitude,
-  latitude
+  latitude,
 ) {
   return await this.aggregate([
     {
