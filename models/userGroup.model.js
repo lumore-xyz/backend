@@ -35,7 +35,4 @@ const userGroupSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
-
-userGroupSchema.index({ name: 1 }, { unique: true });
-
 export default mongoose.model("UserGroup", userGroupSchema);

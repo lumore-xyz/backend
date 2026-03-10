@@ -283,18 +283,12 @@ userSchema.pre("save", function () {
   }
 });
 
-// Password Hashing (Only if Modified)
-// Uncomment if you want password hashing on save
-userSchema.pre("save", async function (next) {
-  if (!this.isModified("password") || !this.password) return next();
+// Password hashing (only when password changes)
+userSchema.pre("save", async function () {
+  if (!this.isModified("password") || !this.password) return;
 
-  try {
-    const saltRounds = 12;
-    this.password = await bcrypt.hash(this.password, saltRounds);
-    next();
-  } catch (error) {
-    next(error);
-  }
+  const saltRounds = 12;
+  this.password = await bcrypt.hash(this.password, saltRounds);
 });
 
 // ==================== INSTANCE METHODS ====================

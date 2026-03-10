@@ -1,5 +1,6 @@
 import express from "express";
 import { appStatus, preferenceMatchCount } from "../controllers/status.controller.js";
+import { getPublicMobileConfig } from "../controllers/mobileRuntimeConfig.controller.js";
 import {
   getPublicOptions,
   getPublicOptionsVersion,
@@ -12,5 +13,6 @@ router.get("/match-available-count", protect, preferenceMatchCount);
 router.get("/options", getPublicOptions);
 router.get("/options/meta", getPublicOptionsVersion);
 router.get("/options-version", getPublicOptionsVersion);
+router.get("/mobile-config", getPublicMobileConfig);
 
 export default router;

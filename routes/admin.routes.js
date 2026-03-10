@@ -8,6 +8,10 @@ import {
   updateReportedUserStatusAdmin,
   updateUserArchiveStatus,
 } from "../controllers/admin.controller.js";
+import {
+  getAdminMobileConfig,
+  patchAdminMobileConfig,
+} from "../controllers/mobileRuntimeConfig.controller.js";
 import { getAdminOptions, patchAdminOptions } from "../controllers/options.controller.js";
 import {
   createAdminUserGroup,
@@ -32,6 +36,8 @@ router.get("/credits/ledger", getCreditLedgerAdmin);
 router.get("/reported-users", getReportedUsersAdmin);
 router.get("/options", getAdminOptions);
 router.patch("/options", patchAdminOptions);
+router.get("/mobile-config", getAdminMobileConfig);
+router.patch("/mobile-config", patchAdminMobileConfig);
 router.get("/user-groups", getAdminUserGroups);
 router.post("/user-groups", createAdminUserGroup);
 router.patch(
