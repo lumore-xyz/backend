@@ -53,6 +53,16 @@ const userSchema = new mongoose.Schema(
       type: String,
       minlength: 8,
     },
+    passwordResetToken: {
+      type: String,
+      default: null,
+      select: false,
+    },
+    passwordResetExpiresAt: {
+      type: Date,
+      default: null,
+      select: false,
+    },
     gender: {
       type: String,
       lowercase: true, // Automatically convert to lowercase for case-insensitive matching
@@ -218,6 +228,7 @@ userSchema.index({ email: 1 }, { sparse: true, unique: true });
 userSchema.index({ phoneNumber: 1 }, { sparse: true, unique: true });
 userSchema.index({ googleId: 1 }, { sparse: true, unique: true });
 userSchema.index({ telegramId: 1 }, { sparse: true, unique: true });
+userSchema.index({ passwordResetToken: 1 }, { sparse: true });
 userSchema.index({ lastActive: -1 });
 userSchema.index({ matchmakingTimestamp: 1 }, { sparse: true });
 userSchema.index({ gender: 1 });

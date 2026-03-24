@@ -4,6 +4,16 @@ import { OAuth2Client } from "google-auth-library";
 import jwt from "jsonwebtoken";
 import User from "../models/user.model.js";
 import { grantSignupBonusIfMissing } from "../services/credits.service.js";
+import { sendEmailViaNodemailer } from "../services/nodemailer.service.js";
+import {
+  buildPasswordResetLink,
+  createPasswordResetToken,
+  getPasswordResetExpiryMinutes,
+  hashPasswordResetToken,
+  isStrongPassword,
+  isValidEmail,
+  normalizeEmail,
+} from "../services/passwordReset.service.js";
 
 const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
@@ -23,26 +33,72 @@ const generateToken = (id) => {
   return { accessToken, refreshToken };
 };
 
+const PASSWORD_RESET_GENERIC_MESSAGE =
+  "If an account exists for this email, a password reset link has been sent.";
+const PASSWORD_RESET_SUBJECT = "Reset your Lumore password";
+
+const buildPasswordResetEmailContent = ({ resetUrl, expiryMinutes }) => {
+  const textBody = [
+    "Hi,",
+    "",
+    "We received a request to reset your Lumore password.",
+    `Use this link within ${expiryMinutes} minute(s):`,
+    resetUrl,
+    "",
+    "If you did not request this, you can safely ignore this email.",
+    "",
+    "Team Lumore",
+  ].join("\n");
+
+  const htmlBody = `
+    <p>Hi,</p>
+    <p>We received a request to reset your Lumore password.</p>
+    <p>Use the button below within <strong>${expiryMinutes} minute(s)</strong>.</p>
+    <p>
+      <a href="${resetUrl}" style="display:inline-block;padding:10px 16px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;">
+        Reset Password
+      </a>
+    </p>
+    <p>If the button does not work, copy and paste this link:</p>
+    <p><a href="${resetUrl}">${resetUrl}</a></p>
+    <p>If you did not request this, you can safely ignore this email.</p>
+    <p>Team Lumore</p>
+  `;
+
+  return { textBody, htmlBody };
+};
+
 // Signup user
 export const signup = async (req, res) => {
-  const { username, email, password } = req.body;
+  const email = normalizeEmail(req.body?.email);
+  const password = String(req.body?.password || "");
 
   try {
-    // Check for existing user
-    const existingUser = await User.findOne({
-      username,
-      email,
-    });
+    if (!email || !isValidEmail(email)) {
+      return res
+        .status(400)
+        .json({ message: "Please provide a valid email address." });
+    }
 
+    if (!password) {
+      return res.status(400).json({ message: "Password is required." });
+    }
+
+    if (!isStrongPassword(password)) {
+      return res.status(400).json({
+        message:
+          "Password must include uppercase, lowercase, number, and special character.",
+      });
+    }
+
+    const existingUser = await User.findOne({ email }).select("_id");
     if (existingUser) {
-      return res.status(400).json({ message: "Username already in use" });
+      return res.status(409).json({ message: "Email is already registered." });
     }
 
-    if (userData.location && !Array.isArray(userData.location.coordinates)) {
-      delete userData.location; // ⛔ Prevent MongoDB from seeing invalid location
-    }
+    const emailPrefix = email.split("@")[0] || "user";
+    const username = await generateUniqueUsername(emailPrefix);
 
-    // Create user
     const user = await User.create({
       username,
       email,
@@ -51,14 +107,19 @@ export const signup = async (req, res) => {
 
     await grantSignupBonusIfMissing(user._id);
     await user.updateLastActive();
+    const { accessToken, refreshToken } = generateToken(user?._id);
 
-    res.status(201).json({
-      _id: user._id,
-      username: user.username,
-      token: generateToken(user._id),
+    return res.status(201).json({
+      user,
+      accessToken,
+      refreshToken,
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    if (error?.code === 11000 && error?.keyPattern?.email) {
+      return res.status(409).json({ message: "Email is already registered." });
+    }
+    console.error("Signup error:", error);
+    return res.status(500).json({ message: "Unable to create account right now." });
   }
 };
 
@@ -251,6 +312,108 @@ export const refreshToken = async (req, res) => {
   }
 };
 
+export const forgotPassword = async (req, res) => {
+  const email = normalizeEmail(req.body?.email);
+
+  if (!email || !isValidEmail(email)) {
+    return res
+      .status(400)
+      .json({ message: "Please provide a valid email address." });
+  }
+
+  try {
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(200).json({ message: PASSWORD_RESET_GENERIC_MESSAGE });
+    }
+
+    const { token, hashedToken, expiresAt } = createPasswordResetToken();
+    user.passwordResetToken = hashedToken;
+    user.passwordResetExpiresAt = expiresAt;
+    await user.save({ validateBeforeSave: false });
+
+    const resetUrl = buildPasswordResetLink({ token, email });
+    const expiryMinutes = getPasswordResetExpiryMinutes();
+    const { htmlBody, textBody } = buildPasswordResetEmailContent({
+      resetUrl,
+      expiryMinutes,
+    });
+
+    try {
+      await sendEmailViaNodemailer({
+        emails: [email],
+        subject: PASSWORD_RESET_SUBJECT,
+        htmlBody,
+        textBody,
+      });
+    } catch (emailError) {
+      user.passwordResetToken = null;
+      user.passwordResetExpiresAt = null;
+      await user.save({ validateBeforeSave: false });
+      throw emailError;
+    }
+
+    return res.status(200).json({ message: PASSWORD_RESET_GENERIC_MESSAGE });
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    return res.status(500).json({
+      message: "Unable to send reset email right now. Please try again later.",
+    });
+  }
+};
+
+export const resetPassword = async (req, res) => {
+  const token = String(req.body?.token || "").trim();
+  const newPassword = String(req.body?.newPassword || "");
+
+  if (!token) {
+    return res.status(400).json({ message: "Reset token is required." });
+  }
+
+  if (!newPassword) {
+    return res.status(400).json({ message: "New password is required." });
+  }
+
+  if (!isStrongPassword(newPassword)) {
+    return res.status(400).json({
+      message:
+        "Password must include uppercase, lowercase, number, and special character.",
+    });
+  }
+
+  try {
+    const hashedToken = hashPasswordResetToken(token);
+    const user = await User.findOne({
+      passwordResetToken: hashedToken,
+      passwordResetExpiresAt: { $gt: new Date() },
+    });
+
+    if (!user) {
+      return res
+        .status(400)
+        .json({ message: "Reset link is invalid or has expired." });
+    }
+
+    user.password = newPassword;
+    user.passwordResetToken = null;
+    user.passwordResetExpiresAt = null;
+    user.lastActive = Date.now();
+
+    await user.save();
+
+    return res.status(200).json({
+      message:
+        "Password reset successful. You can now log in with your new password.",
+    });
+  } catch (error) {
+    console.error("Reset password error:", error);
+    return res.status(500).json({
+      message: "Unable to reset password right now. Please try again later.",
+    });
+  }
+};
+
 // Set Password for Google Users
 export const setPassword = async (req, res) => {
   const { newPassword } = req.body;
@@ -337,3 +500,4 @@ export function generateCleanUsername(name) {
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
 }
+

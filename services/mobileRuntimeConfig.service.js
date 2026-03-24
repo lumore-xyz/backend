@@ -17,16 +17,23 @@ const STRING_FIELDS = [
 ];
 
 const ALLOWED_FIELDS = [...STRING_FIELDS, "featureFlags"];
-const URL_FIELDS = new Set(["BASE_URL", "SOCKET_URL", "PLAYSTORE_URL", "APPSTORE_URL"]);
+const URL_FIELDS = new Set([
+  "BASE_URL",
+  "SOCKET_URL",
+  "PLAYSTORE_URL",
+  "APPSTORE_URL",
+]);
 const REQUIRED_URL_FIELDS = new Set(["BASE_URL", "SOCKET_URL"]);
 const ALLOWED_FIELD_SET = new Set(ALLOWED_FIELDS);
-const DEFAULT_ENVIRONMENT = String(process.env.NODE_ENV || "development").toLowerCase();
+const DEFAULT_ENVIRONMENT = String(
+  process.env.NODE_ENV || "development",
+).toLowerCase();
 
 const DEFAULT_RUNTIME_CONFIG = {
   BASE_URL: "https://api.lumore.xyz",
   SOCKET_URL: "https://api.lumore.xyz/api/chat",
   GOOGLE_WEB_CLIENT_ID:
-    "681858960345-vdjvn8t4sh9du8p396bv9krcf3irjc6s.apps.googleusercontent.com",
+    "681858960345-qghtb8olrkb2oh6q05ki37i6p8k8f9ga.apps.googleusercontent.com",
   IOS_URL_SCHEMA:
     "com.googleusercontent.apps.681858960345-t8llre06pgn2pegq01kjgukhmuiu46kf",
   ADMOB_ANDROID_INTERSTITIAL_ID: "ca-app-pub-5845343690682759/4569153863",
@@ -35,9 +42,9 @@ const DEFAULT_RUNTIME_CONFIG = {
   ADMOB_IOS_REWARDED_UNIT_ID: "ca-app-pub-5845343690682759/1563780217",
   ONESIGNAL_APP_ID: "1763039e-c3e6-45d6-846d-17cf9868f189",
   PLAYSTORE_URL:
-    "https://play.google.com/store/apps/details?id=xyz.lumore.www.twa",
+    "https://play.google.com/store/apps/details?id=xyz.lumore.rebel",
   APPSTORE_URL:
-    "https://play.google.com/store/apps/details?id=xyz.lumore.www.twa",
+    "https://play.google.com/store/apps/details?id=xyz.lumore.rebel",
   featureFlags: {},
 };
 

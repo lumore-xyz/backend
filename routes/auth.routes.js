@@ -2,10 +2,12 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
 import {
+  forgotPassword,
   googleLogin,
   googleLoginWeb,
   isUniqueUsername,
   login,
+  resetPassword,
   refreshToken,
   setPassword,
   signup,
@@ -14,6 +16,9 @@ import {
 import { protect } from "../middleware/auth.middleware.js";
 
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5 });
+const signupLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
+const forgotPasswordLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5 });
+const resetPasswordLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
 const router = express.Router();
 
 /**
@@ -29,13 +34,9 @@ const router = express.Router();
  *           schema:
  *             type: object
  *             required:
- *               - username
  *               - email
  *               - password
  *             properties:
- *               username:
- *                 type: string
- *                 description: Unique username
  *               email:
  *                 type: string
  *                 format: email
@@ -50,9 +51,9 @@ const router = express.Router();
  *       400:
  *         description: Invalid input
  *       409:
- *         description: Username or email already exists
+ *         description: Email already exists
  */
-router.post("/signup", signup);
+router.post("/signup", signupLimiter, signup);
 
 /**
  * @swagger
@@ -95,6 +96,8 @@ router.post("/signup", signup);
  *         description: Too many login attempts
  */
 router.post("/login", loginLimiter, login);
+router.post("/forgot-password", forgotPasswordLimiter, forgotPassword);
+router.post("/reset-password", resetPasswordLimiter, resetPassword);
 
 router.post("/google-signin", googleLogin);
 router.post("/google-signin-web", googleLoginWeb);
