@@ -18,7 +18,7 @@ import {
 const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  "postmessage"
+  "postmessage",
 );
 
 // Generate JWT Token (id = userId)
@@ -38,20 +38,8 @@ const PASSWORD_RESET_GENERIC_MESSAGE =
 const PASSWORD_RESET_SUBJECT = "Reset your Lumore password";
 
 const buildPasswordResetEmailContent = ({ resetUrl, expiryMinutes }) => {
-  const textBody = [
-    "Hi,",
-    "",
-    "We received a request to reset your Lumore password.",
-    `Use this link within ${expiryMinutes} minute(s):`,
-    resetUrl,
-    "",
-    "If you did not request this, you can safely ignore this email.",
-    "",
-    "Team Lumore",
-  ].join("\n");
-
   const htmlBody = `
-    <p>Hi,</p>
+    <p>Hi test,</p>
     <p>We received a request to reset your Lumore password.</p>
     <p>Use the button below within <strong>${expiryMinutes} minute(s)</strong>.</p>
     <p>
@@ -65,7 +53,7 @@ const buildPasswordResetEmailContent = ({ resetUrl, expiryMinutes }) => {
     <p>Team Lumore</p>
   `;
 
-  return { textBody, htmlBody };
+  return { htmlBody };
 };
 
 // Signup user
@@ -119,7 +107,9 @@ export const signup = async (req, res) => {
       return res.status(409).json({ message: "Email is already registered." });
     }
     console.error("Signup error:", error);
-    return res.status(500).json({ message: "Unable to create account right now." });
+    return res
+      .status(500)
+      .json({ message: "Unable to create account right now." });
   }
 };
 
@@ -292,7 +282,7 @@ export const refreshToken = async (req, res) => {
   try {
     const decoded = jwt.verify(
       reqRefreshToken,
-      process.env.REFRESH_TOKEN_SECRET
+      process.env.REFRESH_TOKEN_SECRET,
     );
     const user = await User.findById(decoded.id);
     if (!user) {
@@ -303,7 +293,7 @@ export const refreshToken = async (req, res) => {
       process.env.ACCESS_TOKEN_SECRET,
       {
         expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
-      }
+      },
     );
     res.status(200).json({ accessToken: newAccessToken });
   } catch (error) {
@@ -325,7 +315,7 @@ export const forgotPassword = async (req, res) => {
     const user = await User.findOne({ email });
 
     if (!user) {
-      return res.status(200).json({ message: PASSWORD_RESET_GENERIC_MESSAGE });
+      return res.status(200).json({ message: "user not found" });
     }
 
     const { token, hashedToken, expiresAt } = createPasswordResetToken();
@@ -335,7 +325,7 @@ export const forgotPassword = async (req, res) => {
 
     const resetUrl = buildPasswordResetLink({ token, email });
     const expiryMinutes = getPasswordResetExpiryMinutes();
-    const { htmlBody, textBody } = buildPasswordResetEmailContent({
+    const { htmlBody } = buildPasswordResetEmailContent({
       resetUrl,
       expiryMinutes,
     });
@@ -345,7 +335,7 @@ export const forgotPassword = async (req, res) => {
         emails: [email],
         subject: PASSWORD_RESET_SUBJECT,
         htmlBody,
-        textBody,
+        fromEmail: "noreply@lumore.xyz",
       });
     } catch (emailError) {
       user.passwordResetToken = null;
@@ -500,4 +490,3 @@ export function generateCleanUsername(name) {
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
 }
-

@@ -65,9 +65,7 @@ const resolveMailboxHeader = ({
 };
 
 const resolveFromHeader = ({ fromEmail, fromName }) => {
-  const fallbackFrom = String(
-    process.env.EMAIL_FROM || process.env.SMTP_USER || "",
-  ).trim();
+  const fallbackFrom = "noreply@lumore.xyz";
   return resolveMailboxHeader({
     email: fromEmail,
     name: fromName,
@@ -75,6 +73,17 @@ const resolveFromHeader = ({ fromEmail, fromName }) => {
     required: true,
     emailLabel: "from email",
   });
+};
+
+const buildAllowedLinkSchemes = () => {
+  const customSchemes = String(process.env.EMAIL_ALLOWED_SCHEMES || "")
+    .split(",")
+    .map((scheme) => String(scheme || "").trim().toLowerCase())
+    .filter(Boolean)
+    .map((scheme) => scheme.replace(/:$/, ""))
+    .filter((scheme) => /^[a-z][a-z0-9+.-]*$/.test(scheme));
+
+  return Array.from(new Set(["http", "https", "mailto", "lumore", ...customSchemes]));
 };
 
 const EMAIL_SANITIZE_OPTIONS = {
@@ -103,7 +112,7 @@ const EMAIL_SANITIZE_OPTIONS = {
   allowedAttributes: {
     a: ["href", "target", "rel"],
   },
-  allowedSchemes: ["http", "https", "mailto"],
+  allowedSchemes: buildAllowedLinkSchemes(),
   allowedSchemesAppliedToAttributes: ["href"],
   transformTags: {
     a: (tagName, attribs) => ({
