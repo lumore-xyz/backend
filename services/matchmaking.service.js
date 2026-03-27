@@ -16,9 +16,9 @@ const REMATCH_COOLDOWN_DAYS = 7;
 const THIRD_PASS_SCORE_DROP = 10;
 
 const MIN_SCORE_BY_MODE = {
-  [POOL_MODE.NORMAL]: 55,
-  [POOL_MODE.LOW_POOL]: 45,
-  [POOL_MODE.SCARCE]: 10,
+  [POOL_MODE.NORMAL]: 5, //50
+  [POOL_MODE.LOW_POOL]: 4, //40
+  [POOL_MODE.SCARCE]: 1, //10
 };
 
 const SCORE_WEIGHTS = {
@@ -51,6 +51,9 @@ const DEFAULT_PREFS = {
   petPreference: [],
 };
 
+const SEEKER_MATCH_SELECT =
+  "_id gender dob interests languages religion diet lifestyle isMatching credits matchmakingTimestamp location updatedAt";
+
 export const resolvePoolMode = ({ poolSize, waitMs }) => {
   if (poolSize >= 30) return POOL_MODE.NORMAL;
   if (poolSize >= 8) return POOL_MODE.LOW_POOL;
@@ -58,14 +61,8 @@ export const resolvePoolMode = ({ poolSize, waitMs }) => {
   return POOL_MODE.SCARCE;
 };
 
-export const findBestMatchV2 = async ({ userId, now = new Date() }) => {
-  const logStep = () => {};
-
-  const seeker = await User.findById(userId)
-    .select(
-      "_id gender dob interests languages religion diet lifestyle isMatching credits matchmakingTimestamp location updatedAt",
-    )
-    .lean();
+async function getSeekerMatchContext({ userId }) {
+  const seeker = await User.findById(userId).select(SEEKER_MATCH_SELECT).lean();
   if (!seeker) return null;
   if (!hasValidLocation(seeker)) return null;
   if (!isSupportedGender(seeker.gender) || !seeker.dob) return null;
@@ -76,14 +73,26 @@ export const findBestMatchV2 = async ({ userId, now = new Date() }) => {
   });
   if (!seekerPrefs.interestedIn.length) return null;
 
-  const seekerId = seeker._id.toString();
+  return {
+    seeker,
+    seekerId: seeker._id.toString(),
+    seekerPrefs,
+    baseDistanceKm: clampDistanceKm(seekerPrefs.distance),
+  };
+}
+
+export const findBestMatchV2 = async ({ userId, now = new Date() }) => {
+  const seekerContext = await getSeekerMatchContext({ userId });
+  if (!seekerContext) return null;
+
+  const { seeker, seekerId, seekerPrefs, baseDistanceKm } = seekerContext;
   const waitMs = getWaitMs(seeker.matchmakingTimestamp, now);
-  const baseDistanceKm = clampDistanceKm(seekerPrefs.distance);
 
   const basePool = await getCandidateSet({
     seeker,
     seekerPrefs,
     distanceKm: baseDistanceKm,
+    now,
   });
 
   const poolMode = resolvePoolMode({
@@ -136,6 +145,7 @@ export const findBestMatchV2 = async ({ userId, now = new Date() }) => {
             seeker,
             seekerPrefs,
             distanceKm: pass.distanceKm,
+            now,
           });
 
     observability.rejected_interest_mismatch +=
@@ -224,13 +234,6 @@ export const findBestMatchV2 = async ({ userId, now = new Date() }) => {
         runnerUpScore: runnerUp?.totalScore ?? null,
       }),
     };
-
-    logStep("result_computed", {
-      matchedUserId: result.uid,
-      mode: result.mode,
-      score: result.score,
-      observability,
-    });
     return result;
   }
 
@@ -243,64 +246,18 @@ export const getPreferenceBasedAvailableCount = async ({
   userId,
   now = new Date(),
 }) => {
-  const seeker = await User.findById(userId).select("_id gender").lean();
-  if (!seeker) return 0;
-  if (!isSupportedGender(seeker.gender)) return 0;
+  const seekerContext = await getSeekerMatchContext({ userId });
+  if (!seekerContext) return 0;
 
-  const pref = await UserPreference.findOne({ user: userId })
-    .select("interestedIn ageRange")
-    .lean();
-
-  const ageRange = Array.isArray(pref?.ageRange) ? pref.ageRange : [18, 27];
-  const minAge = Number(ageRange[0]) || 18;
-  const maxAge = Number(ageRange[1]) || 27;
-
-  const normalizedGenderPref = normalizeInterestedIn(pref?.interestedIn, {
-    userGender: seeker.gender,
+  const { seeker, seekerPrefs, baseDistanceKm } = seekerContext;
+  const candidateSetResult = await getCandidateSet({
+    seeker,
+    seekerPrefs,
+    distanceKm: baseDistanceKm,
+    now,
   });
-  if (!normalizedGenderPref.length) return 0;
 
-  const allowsAnyGender = normalizedGenderPref.some((item) =>
-    ANY_GENDER_VALUES.has(item),
-  );
-
-  const pipeline = [
-    {
-      $match: {
-        _id: { $ne: seeker._id },
-        isMatching: true,
-      },
-    },
-    {
-      $match: {
-        dob: { $type: "date" },
-        ...(allowsAnyGender ? {} : { gender: { $in: normalizedGenderPref } }),
-      },
-    },
-    {
-      $addFields: {
-        age: {
-          $dateDiff: {
-            startDate: "$dob",
-            endDate: now,
-            unit: "year",
-          },
-        },
-      },
-    },
-    {
-      $match: {
-        age: {
-          $gte: minAge,
-          $lte: maxAge,
-        },
-      },
-    },
-    { $count: "count" },
-  ];
-
-  const [result] = await User.aggregate(pipeline);
-  return Number(result?.count || 0);
+  return candidateSetResult.selected.length;
 };
 
 export const scoreCandidate = ({ seeker, candidate, context }) => {
@@ -362,7 +319,7 @@ export const scoreCandidate = ({ seeker, candidate, context }) => {
   };
 };
 
-async function getCandidateSet({ seeker, seekerPrefs, distanceKm }) {
+async function getCandidateSet({ seeker, seekerPrefs, distanceKm, now }) {
   const [lng, lat] = seeker.location.coordinates;
   const queryableGenders = getQueryableInterestedInGenders(
     seekerPrefs.interestedIn,
@@ -425,6 +382,7 @@ async function getCandidateSet({ seeker, seekerPrefs, distanceKm }) {
       seekerPrefs,
       candidate,
       candidatePrefs: prefs,
+      now,
     });
 
     if (!eligibility.ok) {
@@ -448,6 +406,7 @@ function getHardEligibilityResult({
   seekerPrefs,
   candidate,
   candidatePrefs,
+  now,
 }) {
   if (!candidate || !candidate._id) {
     return { ok: false, reason: "missing_candidate_or_id" };
@@ -476,8 +435,8 @@ function getHardEligibilityResult({
     return { ok: false, reason: "interest_mismatch" };
   }
 
-  const seekerAge = getAge(seeker.dob);
-  const candidateAge = getAge(candidate.dob);
+  const seekerAge = getAge(seeker.dob, now);
+  const candidateAge = getAge(candidate.dob, now);
   if (!isAgeInRange(candidateAge, seekerPrefs.ageRange)) {
     return { ok: false, reason: "age_out_of_range" };
   }
@@ -736,14 +695,18 @@ function isAgeInRange(age, range) {
   return age >= range.min && age <= range.max;
 }
 
-function getAge(dob) {
+function getAge(dob, now = new Date()) {
   if (!dob) return NaN;
   const birth = new Date(dob);
   if (Number.isNaN(birth.getTime())) return NaN;
-  const now = new Date();
-  let age = now.getFullYear() - birth.getFullYear();
-  const monthDiff = now.getMonth() - birth.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birth.getDate())) {
+  const reference = new Date(now);
+  if (Number.isNaN(reference.getTime())) return NaN;
+  let age = reference.getFullYear() - birth.getFullYear();
+  const monthDiff = reference.getMonth() - birth.getMonth();
+  if (
+    monthDiff < 0 ||
+    (monthDiff === 0 && reference.getDate() < birth.getDate())
+  ) {
     age -= 1;
   }
   return age;

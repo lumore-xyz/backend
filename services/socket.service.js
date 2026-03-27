@@ -102,7 +102,10 @@ const buildAiMatchNote = async ({ seekerId, candidateId, matchingNote }) => {
       if (uid === String(candidateId)) candidate = user;
     }
   } catch (error) {
-    console.error("[matchnote-ai] Failed to load users:", error?.message || error);
+    console.error(
+      "[matchnote-ai] Failed to load users:",
+      error?.message || error,
+    );
   }
 
   const aiResult = await generateGeminiMatchNotesByUser({
@@ -128,7 +131,6 @@ const buildAiMatchNote = async ({ seekerId, candidateId, matchingNote }) => {
     },
   };
 };
-
 
 /* ============================================================
  * AUTHENTICATION MIDDLEWARE
@@ -257,7 +259,7 @@ const createAndNotifyMatch = async (userId1, userId2, matchingNote = null) => {
       $set: {
         isMatching: false,
       },
-    }
+    },
   );
 
   const roomId = room._id.toString();
@@ -317,7 +319,10 @@ const createAndNotifyMatch = async (userId1, userId2, matchingNote = null) => {
     });
   }
 
-  await Promise.allSettled([matchNotificationForUser1, matchNotificationForUser2]);
+  await Promise.allSettled([
+    matchNotificationForUser1,
+    matchNotificationForUser2,
+  ]);
   return { success: true, roomId, balances: creditSpend.balances };
 };
 
@@ -334,7 +339,6 @@ const createAndNotifyMatch = async (userId1, userId2, matchingNote = null) => {
 const handleConnection = (socket) => {
   const userId = socket.user._id.toString();
   userSockets.set(userId, socket);
-  const logMatchStep = () => {};
 
   const markRoomMessagesReadAndDelivered = async (roomId) => {
     const now = new Date();
@@ -349,12 +353,16 @@ const handleConnection = (socket) => {
       readAt: null,
     };
 
-    const deliveredMessages = await Message.find(deliveredFilter).select("_id").lean();
+    const deliveredMessages = await Message.find(deliveredFilter)
+      .select("_id")
+      .lean();
     const readMessages = await Message.find(readFilter).select("_id").lean();
 
     if (deliveredMessages.length > 0) {
       await Message.updateMany(deliveredFilter, { $set: { deliveredAt: now } });
-      const deliveredMessageIds = deliveredMessages.map((m) => m._id.toString());
+      const deliveredMessageIds = deliveredMessages.map((m) =>
+        m._id.toString(),
+      );
       socket.nsp.to(roomId).emit("message_delivered", {
         roomId,
         messageIds: deliveredMessageIds,
@@ -385,16 +393,12 @@ const handleConnection = (socket) => {
   /* -------- Matchmaking -------- */
   socket.on("startMatchmaking", async () => {
     try {
-      logMatchStep("start_requested", { socketId: socket.id });
-
       const currentUser = await User.findById(userId).select("credits").lean();
-      logMatchStep("credits_fetched", { credits: currentUser?.credits ?? null });
 
-      if (!currentUser || currentUser.credits < CREDIT_RULES.CONVERSATION_COST) {
-        logMatchStep("credits_insufficient", {
-          credits: currentUser?.credits ?? 0,
-          required: CREDIT_RULES.CONVERSATION_COST,
-        });
+      if (
+        !currentUser ||
+        currentUser.credits < CREDIT_RULES.CONVERSATION_COST
+      ) {
         socket.emit("insufficientCredits", {
           message: "You need at least 1 credit to start matchmaking.",
           credits: currentUser?.credits || 0,
@@ -410,15 +414,8 @@ const handleConnection = (socket) => {
         isMatching: true,
         matchmakingTimestamp: Date.now(),
       });
-      logMatchStep("user_marked_matching");
 
       const match = await findBestMatchV2({ userId, now: new Date() });
-      logMatchStep("match_lookup_completed", {
-        found: Boolean(match),
-        matchedUserId: match?.uid || null,
-        mode: match?.mode || null,
-        score: match?.score ?? null,
-      });
 
       if (match) {
         const enrichedMatchingNote = await buildAiMatchNote({
@@ -429,26 +426,19 @@ const handleConnection = (socket) => {
         const created = await createAndNotifyMatch(
           userId,
           match.uid,
-          enrichedMatchingNote || match.matchingNote || null
+          enrichedMatchingNote || match.matchingNote || null,
         );
-        logMatchStep("create_and_notify_result", {
-          success: Boolean(created?.success),
-          reason: created?.reason || null,
-          roomId: created?.roomId || null,
-        });
 
         if (!created?.success) {
           await User.findByIdAndUpdate(userId, { isMatching: false });
-          logMatchStep("user_unmarked_matching_after_failed_create");
           socket.emit("matchmakingError", {
-            message: "Unable to start conversation due to insufficient credits.",
+            message:
+              "Unable to start conversation due to insufficient credits.",
           });
         }
       } else {
-        logMatchStep("no_match_found");
       }
     } catch (e) {
-      logMatchStep("start_failed", { error: e?.message || "Unknown error" });
       socket.emit("matchmakingError", { message: e.message });
     }
   });
@@ -533,7 +523,9 @@ const handleConnection = (socket) => {
           .lean();
       }
 
-      const receiverSocket = receiverId ? userSockets.get(receiverId.toString()) : null;
+      const receiverSocket = receiverId
+        ? userSockets.get(receiverId.toString())
+        : null;
       const receiverInRoom = Boolean(receiverSocket?.rooms?.has(roomId));
       const now = new Date();
 
@@ -555,7 +547,7 @@ const handleConnection = (socket) => {
           ...createdMessage.toObject(),
           replyTo: replyMessage,
         },
-        { clientMessageId }
+        { clientMessageId },
       );
 
       socket.to(roomId).emit("new_message", payload);
@@ -643,7 +635,9 @@ const handleConnection = (socket) => {
   socket.on("typing", (data) => {
     const { roomId, isTyping } = data || {};
     if (!roomId) return;
-    socket.to(roomId).emit("typing", { roomId, userId, isTyping: Boolean(isTyping) });
+    socket
+      .to(roomId)
+      .emit("typing", { roomId, userId, isTyping: Boolean(isTyping) });
   });
 
   socket.on("edit_message", async (data) => {
@@ -652,7 +646,8 @@ const handleConnection = (socket) => {
       if (!roomId || !messageId) return;
 
       const room = await MatchRoom.findById(roomId).lean();
-      if (!room || !isParticipant(room, userId) || room.status !== "active") return;
+      if (!room || !isParticipant(room, userId) || room.status !== "active")
+        return;
 
       const messageDoc = await Message.findOne({
         _id: messageId,
@@ -695,7 +690,7 @@ const handleConnection = (socket) => {
       if (!message) return;
 
       const existingIndex = message.reactions.findIndex(
-        (reaction) => reaction.user.toString() === userId
+        (reaction) => reaction.user.toString() === userId,
       );
 
       if (existingIndex >= 0) {
@@ -766,7 +761,7 @@ const unlockProfile = async (socket, userId, profileId, roomId) => {
     await UnlockHistory.findOneAndUpdate(
       { user: userId, unlockedUser: profileId },
       { unlockedAt: new Date() },
-      { upsert: true }
+      { upsert: true },
     );
 
     // send to OTHER user in room
@@ -775,7 +770,6 @@ const unlockProfile = async (socket, userId, profileId, roomId) => {
       unlockedBy: userId,
       timestamp: new Date().toISOString(),
     });
-
   } catch (err) {
     console.error("[Profile] Unlock error:", err);
     socket.emit("error", { message: err.message });
@@ -797,7 +791,6 @@ const lockProfile = async (socket, userId, profileId, roomId) => {
       lockedBy: userId,
       timestamp: new Date().toISOString(),
     });
-
   } catch (err) {
     console.error("[Profile] Lock error:", err);
     socket.emit("error", { message: err.message });
@@ -805,8 +798,3 @@ const lockProfile = async (socket, userId, profileId, roomId) => {
 };
 
 export default { initialize };
-
-
-
-
-

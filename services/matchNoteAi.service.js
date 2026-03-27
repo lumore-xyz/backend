@@ -304,11 +304,17 @@ export const generateGeminiMatchNote = async ({
     };
 
     const prompt = [
-      "You write dating app match-opening notes.",
-      "Return exactly one sentence and no extra text.",
-      'Start with: "You should talk to <name> because ...".',
-      "Use second-person tone and only use provided facts.",
-      "No JSON, no markdown, no emojis, no hashtags.",
+      "You write cute, slightly funny, charming dating app match-opening notes.",
+      "Your tone is warm, playful, and natural — never cringe, never try-hard.",
+      "Return exactly ONE sentence. No extra text.",
+      'Start EXACTLY with: "You should talk to <name> because ...".',
+      "Write in second-person (you).",
+      "Use only the provided facts. Do not invent anything.",
+      "Make it feel personal, like a friend nudging someone to talk.",
+      "Light humor is encouraged (subtle, not cheesy).",
+      "Avoid generic phrases like 'you both have a lot in common'.",
+      "Avoid emojis, hashtags, markdown, or JSON.",
+      "Keep it under 25 words.",
       "",
       `Viewer name: ${String(viewer?.nickname || viewer?.username || "User")}`,
       `Suggested person name: ${String(otherUser?.nickname || otherUser?.username || "User")}`,
