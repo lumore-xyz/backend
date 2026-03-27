@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "cross-env NODE_ENV=development nodemon server.js",
     "test": "node --test",
-    "backfill:interested-in": "node scripts/backfill-interested-in.js"
+    "backfill:interested-in": "node scripts/backfill-interested-in.js",
+    "backfill:location": "node scripts/backfill-location-coordinates.js"
   },
   "keywords": [],
   "author": "",

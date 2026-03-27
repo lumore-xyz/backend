@@ -14,8 +14,14 @@ import {
   extractLocationTags,
   syncUserProfileTagsToOneSignal,
 } from "../services/onesignalUserTags.service.js";
+import { getGeoPointFromLocation } from "../utils/location.js";
 
 const VALID_INTERESTED_IN = new Set(["man", "woman"]);
+const FORBIDDEN_LOCATION_FIELDS = new Set([
+  "location",
+  "location.coordinates",
+  "location.formattedAddress",
+]);
 
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 
@@ -103,6 +109,17 @@ function inferInterestedInFromGender(gender) {
 export const createUpdateProfile = async (req, res) => {
   try {
     const userId = req.user.id;
+    const attemptedLocationField = Object.keys(req.body || {}).find((key) =>
+      FORBIDDEN_LOCATION_FIELDS.has(key),
+    );
+
+    if (attemptedLocationField) {
+      return res.status(400).json({
+        message:
+          "Location updates must use POST /profile/:userId/update-location",
+      });
+    }
+
     const allowedFields = [
       "username",
       "nickname",
@@ -132,9 +149,6 @@ export const createUpdateProfile = async (req, res) => {
       "verificationStatus",
       "isActive",
       "lastActive",
-      "location",
-      "location.coordinates",
-      "location.formattedAddress",
       "fieldVisibility",
       "bloodGroup",
     ];
@@ -211,11 +225,15 @@ export const updateUserLocation = async (req, res) => {
       triggerOneSignalProfileTagSync(user);
     }
 
+    const geoPoint = getGeoPointFromLocation(user.location);
+
     res.json({
       success: true,
       message: "Location updated",
       data: {
         location: user.location,
+        latitude: geoPoint?.latitude ?? null,
+        longitude: geoPoint?.longitude ?? null,
         lastLocationUpdate: user.lastLocationUpdate,
       },
     });

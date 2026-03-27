@@ -320,6 +320,8 @@ test("count and matchmaking both honor first-pass distance and credit filters", 
 
       assert.equal(count, 1);
       assert.equal(match?.uid, eligibleCandidate._id);
+      assert.equal(findNearbyCalls[0]?.longitude, 77.5946);
+      assert.equal(findNearbyCalls[0]?.latitude, 12.9716);
       assert.equal(findNearbyCalls[0]?.maxDistanceMeters, 5000);
       assert.equal(
         findNearbyCalls[0]?.additionalQuery?.credits?.$gte,

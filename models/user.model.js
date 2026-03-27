@@ -1,6 +1,7 @@
 // /models/user.model.js
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
+import { buildCanonicalLocation } from "../utils/location.js";
 
 const userSchema = new mongoose.Schema(
   {
@@ -321,25 +322,11 @@ userSchema.methods.updateLocation = async function (
   longitude,
   formattedAddress = "",
 ) {
-  // Validate coordinates
-  if (typeof latitude !== "number" || typeof longitude !== "number") {
-    throw new Error("Latitude and longitude must be numbers");
-  }
-
-  if (latitude < -90 || latitude > 90) {
-    throw new Error("Latitude must be between -90 and 90");
-  }
-
-  if (longitude < -180 || longitude > 180) {
-    throw new Error("Longitude must be between -180 and 180");
-  }
-
-  // Update location in GeoJSON format
-  this.location = {
-    type: "Point",
-    coordinates: [longitude, latitude], // [lng, lat] - MongoDB format
-    formattedAddress: formattedAddress,
-  };
+  this.location = buildCanonicalLocation({
+    latitude,
+    longitude,
+    formattedAddress,
+  });
   this.lastLocationUpdate = new Date();
 
   return await this.save();
@@ -451,6 +438,7 @@ userSchema.statics.findNearby = async function (
         query: {
           _id: { $ne: new mongoose.Types.ObjectId(userId) }, // exclude self
           "location.coordinates": { $exists: true, $ne: [0, 0] },
+          isMatching: true,
           ...additionalQuery,
         },
       },

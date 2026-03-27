@@ -256,6 +256,10 @@ export const getPreferenceBasedAvailableCount = async ({
     distanceKm: baseDistanceKm,
     now,
   });
+  console.log("seekerContext + candidateSetResult", {
+    seekerContext,
+    candidateSetResult,
+  });
 
   return candidateSetResult.selected.length;
 };
@@ -321,13 +325,11 @@ export const scoreCandidate = ({ seeker, candidate, context }) => {
 
 async function getCandidateSet({ seeker, seekerPrefs, distanceKm, now }) {
   const [lng, lat] = seeker.location.coordinates;
-  const queryableGenders = getQueryableInterestedInGenders(
-    seekerPrefs.interestedIn,
-  );
+
   const query = {
-    isMatching: true,
-    credits: { $gte: CREDIT_RULES.CONVERSATION_COST },
-    ...(queryableGenders.length ? { gender: { $in: queryableGenders } } : {}),
+    // isMatching: true,
+    // credits: { $gte: CREDIT_RULES.CONVERSATION_COST },
+    // gender: seekerPrefs.interestedIn[0],
   };
 
   const rawCandidates = await User.findNearby(
@@ -336,7 +338,7 @@ async function getCandidateSet({ seeker, seekerPrefs, distanceKm, now }) {
     distanceKm * 1000,
     query,
     seeker._id.toString(),
-    200,
+    100,
   );
 
   if (!rawCandidates.length) {
