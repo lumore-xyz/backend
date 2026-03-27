@@ -1,8 +1,12 @@
 // import { parse, validate } from "@tma.js/init-data-node";
 // new push
 import { OAuth2Client } from "google-auth-library";
-import jwt from "jsonwebtoken";
 import User from "../models/user.model.js";
+import {
+  generateAccessToken,
+  generateAuthTokens,
+  verifyRefreshToken,
+} from "../services/authToken.service.js";
 import { grantSignupBonusIfMissing } from "../services/credits.service.js";
 import { sendEmailViaNodemailer } from "../services/nodemailer.service.js";
 import {
@@ -20,18 +24,6 @@ const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_SECRET,
   "postmessage",
 );
-
-// Generate JWT Token (id = userId)
-const generateToken = (id) => {
-  const accessToken = jwt.sign({ id }, process.env.ACCESS_TOKEN_SECRET, {
-    expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
-  });
-  const refreshToken = jwt.sign({ id }, process.env.REFRESH_TOKEN_SECRET, {
-    expiresIn: process.env.REFRESH_TOKEN_EXPIRY,
-  });
-
-  return { accessToken, refreshToken };
-};
 
 const PASSWORD_RESET_GENERIC_MESSAGE =
   "If an account exists for this email, a password reset link has been sent.";
@@ -95,7 +87,7 @@ export const signup = async (req, res) => {
 
     await grantSignupBonusIfMissing(user._id);
     await user.updateLastActive();
-    const { accessToken, refreshToken } = generateToken(user?._id);
+    const { accessToken, refreshToken } = generateAuthTokens(user?._id);
 
     return res.status(201).json({
       user,
@@ -129,7 +121,7 @@ export const login = async (req, res) => {
 
     if (isMatched) {
       await user.updateLastActive();
-      const { accessToken, refreshToken } = generateToken(user?._id);
+      const { accessToken, refreshToken } = generateAuthTokens(user?._id);
       res.status(200).json({
         user,
         accessToken,
@@ -181,7 +173,7 @@ export const googleLogin = async (req, res) => {
       }
     }
     await user.updateLastActive();
-    const { accessToken, refreshToken } = generateToken(user?._id);
+    const { accessToken, refreshToken } = generateAuthTokens(user?._id);
     res.status(200).json({
       isNewUser,
       user,
@@ -228,7 +220,7 @@ export const googleLoginWeb = async (req, res) => {
       }
     }
     await user.updateLastActive();
-    const { accessToken, refreshToken } = generateToken(user?._id);
+    const { accessToken, refreshToken } = generateAuthTokens(user?._id);
     res.status(200).json({
       isNewUser,
       user,
@@ -260,7 +252,7 @@ export const tma_login = async (req, res) => {
       isNewUser = true;
     }
     await _user.updateLastActive();
-    const { accessToken, refreshToken } = generateToken(_user?._id);
+    const { accessToken, refreshToken } = generateAuthTokens(_user?._id);
     res.status(200).json({
       isNewUser,
       user: _user,
@@ -273,28 +265,24 @@ export const tma_login = async (req, res) => {
 };
 
 export const refreshToken = async (req, res) => {
-  const { refreshToken: reqRefreshToken } = req.body;
-  if (!refreshToken) {
+  const reqRefreshToken = String(
+    req.body?.refreshToken || req.query?.refreshToken || "",
+  ).trim();
+
+  if (!reqRefreshToken) {
     return res.status(401).json({
       error: "No refresh token provided",
     });
   }
+
   try {
-    const decoded = jwt.verify(
-      reqRefreshToken,
-      process.env.REFRESH_TOKEN_SECRET,
-    );
+    const decoded = verifyRefreshToken(reqRefreshToken);
     const user = await User.findById(decoded.id);
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
-    const newAccessToken = jwt.sign(
-      { id: user._id },
-      process.env.ACCESS_TOKEN_SECRET,
-      {
-        expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
-      },
-    );
+
+    const newAccessToken = generateAccessToken(user._id);
     res.status(200).json({ accessToken: newAccessToken });
   } catch (error) {
     console.error("Refresh token error", error);

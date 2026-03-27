@@ -1,23 +1,12 @@
 import { OAuth2Client } from "google-auth-library";
-import jwt from "jsonwebtoken";
 import User from "../models/user.model.js";
+import { generateAuthTokens } from "../services/authToken.service.js";
 
 const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
   "postmessage"
 );
-
-const generateToken = (id) => {
-  const accessToken = jwt.sign({ id }, process.env.ACCESS_TOKEN_SECRET, {
-    expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
-  });
-  const refreshToken = jwt.sign({ id }, process.env.REFRESH_TOKEN_SECRET, {
-    expiresIn: process.env.REFRESH_TOKEN_EXPIRY,
-  });
-
-  return { accessToken, refreshToken };
-};
 
 export const adminGoogleLoginWeb = async (req, res) => {
   const { code } = req.body;
@@ -54,7 +43,7 @@ export const adminGoogleLoginWeb = async (req, res) => {
     }
 
     await user.updateLastActive();
-    const { accessToken, refreshToken } = generateToken(user._id);
+    const { accessToken, refreshToken } = generateAuthTokens(user._id);
 
     return res.status(200).json({
       user,
@@ -66,4 +55,3 @@ export const adminGoogleLoginWeb = async (req, res) => {
     return res.status(500).json({ message: "Google login failed" });
   }
 };
-

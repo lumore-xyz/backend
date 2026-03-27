@@ -103,6 +103,7 @@ router.post("/google-signin", googleLogin);
 router.post("/google-signin-web", googleLoginWeb);
 router.post("/tma-login", tma_login);
 
+router.post("/refresh-token", refreshToken);
 router.get("/refresh-token", refreshToken);
 
 /**
