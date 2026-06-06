@@ -59,6 +59,10 @@ const messageSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+    audioWaveform: {
+      type: [Number],
+      default: [],
+    },
     reactions: {
       type: [reactionSchema],
       default: [],

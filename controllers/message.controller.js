@@ -25,6 +25,9 @@ const normalizeMessageForResponse = (msg) => {
       imageUrl: reply.imageUrl || null,
       audioUrl: reply.audioUrl || null,
       audioDurationMs: reply.audioDurationMs || null,
+      audioWaveform: Array.isArray(reply.audioWaveform)
+        ? reply.audioWaveform
+        : [],
       editedAt: reply.editedAt || null,
       createdAt: reply.createdAt || null,
     };
@@ -42,6 +45,7 @@ const normalizeMessageForResponse = (msg) => {
     audioUrl: msg?.audioUrl || null,
     audioPublicId: msg?.audioPublicId || null,
     audioDurationMs: msg?.audioDurationMs || null,
+    audioWaveform: Array.isArray(msg?.audioWaveform) ? msg.audioWaveform : [],
     reactions: (msg?.reactions || []).map((reaction) => ({
       user: reaction.user,
       emoji: reaction.emoji || "\u2764\uFE0F",
@@ -81,7 +85,7 @@ export const getRoomMessages = async (req, res) => {
       .populate("receiver", "_id name avatar")
       .populate({
         path: "replyTo",
-        select: "_id sender messageType message imageUrl audioUrl audioDurationMs editedAt createdAt",
+        select: "_id sender messageType message imageUrl audioUrl audioDurationMs audioWaveform editedAt createdAt",
         populate: {
           path: "sender",
           select: "_id name avatar",

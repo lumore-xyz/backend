@@ -59,6 +59,9 @@ const normalizeReplyMessage = (replyDoc) => {
     imageUrl: replyDoc.imageUrl || null,
     audioUrl: replyDoc.audioUrl || null,
     audioDurationMs: replyDoc.audioDurationMs || null,
+    audioWaveform: Array.isArray(replyDoc.audioWaveform)
+      ? replyDoc.audioWaveform
+      : [],
     editedAt: replyDoc.editedAt || null,
     createdAt: replyDoc.createdAt || null,
   };
@@ -76,6 +79,9 @@ const normalizeMessagePayload = (messageDoc, extra = {}) => ({
   audioUrl: messageDoc.audioUrl || null,
   audioPublicId: messageDoc.audioPublicId || null,
   audioDurationMs: messageDoc.audioDurationMs || null,
+  audioWaveform: Array.isArray(messageDoc.audioWaveform)
+    ? messageDoc.audioWaveform
+    : [],
   replyTo: normalizeReplyMessage(messageDoc.replyTo),
   reactions: (messageDoc.reactions || []).map((reaction) => ({
     userId: reaction.user?.toString?.() || null,
@@ -460,6 +466,7 @@ const handleConnection = (socket) => {
         audioUrl = null,
         audioPublicId = null,
         audioDurationMs = null,
+        audioWaveform = [],
         clientMessageId = null,
       } = data || {};
 
@@ -475,7 +482,7 @@ const handleConnection = (socket) => {
       let replyMessage = null;
       if (replyTo) {
         replyMessage = await Message.findOne({ _id: replyTo, roomId })
-          .select("_id sender messageType message imageUrl audioUrl audioDurationMs editedAt createdAt")
+          .select("_id sender messageType message imageUrl audioUrl audioDurationMs audioWaveform editedAt createdAt")
           .lean();
       }
 
@@ -497,6 +504,10 @@ const handleConnection = (socket) => {
         audioPublicId: messageType === "audio" ? audioPublicId : null,
         audioDurationMs:
           messageType === "audio" ? Math.max(0, Number(audioDurationMs || 0)) : null,
+        audioWaveform:
+          messageType === "audio" && Array.isArray(audioWaveform)
+            ? audioWaveform.map(Number).filter(Number.isFinite).slice(0, 72)
+            : [],
         replyTo: replyMessage?._id || null,
         deliveredAt: receiverInRoom ? now : null,
         readAt: receiverInRoom ? now : null,
