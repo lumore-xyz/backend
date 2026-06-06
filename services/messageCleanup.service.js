@@ -23,49 +23,69 @@ export const cleanupExpiredImageMessages = async () => {
   const cutoff = getCleanupCutoff();
   const batchSize = getBatchSize();
 
-  const expiredImageMessages = await Message.find({
-    messageType: "image",
-    imagePublicId: { $exists: true, $ne: null },
+  const expiredMediaMessages = await Message.find({
     timestamp: { $lte: cutoff },
+    $or: [
+      {
+        messageType: "image",
+        imagePublicId: { $exists: true, $ne: null },
+      },
+      {
+        messageType: "audio",
+        audioPublicId: { $exists: true, $ne: null },
+      },
+    ],
   })
-    .select("_id imagePublicId")
+    .select("_id messageType imagePublicId audioPublicId")
     .sort({ timestamp: 1 })
     .limit(batchSize)
     .lean();
 
-  if (!expiredImageMessages.length) {
+  if (!expiredMediaMessages.length) {
     return {
       scanned: 0,
       deletedMessages: 0,
       deletedImages: 0,
+      deletedAudio: 0,
       failedImages: 0,
+      failedAudio: 0,
     };
   }
 
   let deletedImages = 0;
+  let deletedAudio = 0;
   let failedImages = 0;
+  let failedAudio = 0;
 
-  for (const message of expiredImageMessages) {
+  for (const message of expiredMediaMessages) {
+    const isAudio = message.messageType === "audio";
+    const publicId = isAudio ? message.audioPublicId : message.imagePublicId;
+    const resourceType = isAudio ? "video" : "image";
     try {
-      await deleteFile(message.imagePublicId, "image");
-      deletedImages += 1;
+      await deleteFile(publicId, resourceType);
+      if (isAudio) deletedAudio += 1;
+      else deletedImages += 1;
     } catch (error) {
-      failedImages += 1;
-      console.error("[MessageCleanup] Failed deleting image from cloud storage:", {
+      if (isAudio) failedAudio += 1;
+      else failedImages += 1;
+      console.error("[MessageCleanup] Failed deleting media from cloud storage:", {
         messageId: message._id?.toString?.() || message._id,
-        imagePublicId: message.imagePublicId,
+        publicId,
+        resourceType,
         error: error?.message || error,
       });
     }
   }
 
-  const messageIds = expiredImageMessages.map((item) => item._id);
+  const messageIds = expiredMediaMessages.map((item) => item._id);
   const deleteResult = await Message.deleteMany({ _id: { $in: messageIds } });
 
   return {
-    scanned: expiredImageMessages.length,
+    scanned: expiredMediaMessages.length,
     deletedMessages: deleteResult.deletedCount || 0,
     deletedImages,
+    deletedAudio,
     failedImages,
+    failedAudio,
   };
 };

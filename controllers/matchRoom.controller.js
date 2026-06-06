@@ -48,7 +48,11 @@ export const getInbox = async (req, res) => {
   const normalized = rooms.map((room) => {
     const previewType =
       room?.lastMessage?.previewType ||
-      (room?.lastMessage?.messageType === "image" ? "image" : "none");
+      (room?.lastMessage?.messageType === "image"
+        ? "image"
+        : room?.lastMessage?.messageType === "audio"
+          ? "audio"
+          : "none");
     const safeLastMessage = room?.lastMessage
       ? {
           ...room.lastMessage,
@@ -87,7 +91,11 @@ export const getRoomData = async (req, res) => {
 
   const previewType =
     room?.lastMessage?.previewType ||
-    (room?.lastMessage?.messageType === "image" ? "image" : "none");
+    (room?.lastMessage?.messageType === "image"
+      ? "image"
+      : room?.lastMessage?.messageType === "audio"
+        ? "audio"
+        : "none");
   if (room.lastMessage && previewType === "text") {
     room.lastMessage.message = room?.lastMessage?.message || null;
   }

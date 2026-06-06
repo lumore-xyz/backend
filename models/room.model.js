@@ -29,7 +29,7 @@ const MatchRoomSchema = new mongoose.Schema(
       },
       messageType: {
         type: String,
-        enum: ["text", "image"],
+        enum: ["text", "image", "audio"],
         default: "text",
       },
       message: {
@@ -38,11 +38,19 @@ const MatchRoomSchema = new mongoose.Schema(
       },
       previewType: {
         type: String,
-        enum: ["text", "image", "none"],
+        enum: ["text", "image", "audio", "none"],
         default: "none",
       },
       imageUrl: {
         type: String,
+        default: null,
+      },
+      audioUrl: {
+        type: String,
+        default: null,
+      },
+      audioDurationMs: {
+        type: Number,
         default: null,
       },
       createdAt: {

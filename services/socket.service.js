@@ -57,6 +57,8 @@ const normalizeReplyMessage = (replyDoc) => {
     message: replyDoc.message || "",
     messageType: replyDoc.messageType || "text",
     imageUrl: replyDoc.imageUrl || null,
+    audioUrl: replyDoc.audioUrl || null,
+    audioDurationMs: replyDoc.audioDurationMs || null,
     editedAt: replyDoc.editedAt || null,
     createdAt: replyDoc.createdAt || null,
   };
@@ -71,6 +73,9 @@ const normalizeMessagePayload = (messageDoc, extra = {}) => ({
   message: messageDoc.message || "",
   imageUrl: messageDoc.imageUrl || null,
   imagePublicId: messageDoc.imagePublicId || null,
+  audioUrl: messageDoc.audioUrl || null,
+  audioPublicId: messageDoc.audioPublicId || null,
+  audioDurationMs: messageDoc.audioDurationMs || null,
   replyTo: normalizeReplyMessage(messageDoc.replyTo),
   reactions: (messageDoc.reactions || []).map((reaction) => ({
     userId: reaction.user?.toString?.() || null,
@@ -452,6 +457,9 @@ const handleConnection = (socket) => {
         messageType = "text",
         imageUrl = null,
         imagePublicId = null,
+        audioUrl = null,
+        audioPublicId = null,
+        audioDurationMs = null,
         clientMessageId = null,
       } = data || {};
 
@@ -462,11 +470,12 @@ const handleConnection = (socket) => {
 
       if (messageType === "text" && !messageText) return;
       if (messageType === "image" && !imageUrl) return;
+      if (messageType === "audio" && !audioUrl) return;
 
       let replyMessage = null;
       if (replyTo) {
         replyMessage = await Message.findOne({ _id: replyTo, roomId })
-          .select("_id sender messageType message imageUrl editedAt createdAt")
+          .select("_id sender messageType message imageUrl audioUrl audioDurationMs editedAt createdAt")
           .lean();
       }
 
@@ -484,6 +493,10 @@ const handleConnection = (socket) => {
         message: messageType === "text" ? messageText : null,
         imageUrl: messageType === "image" ? imageUrl : null,
         imagePublicId: messageType === "image" ? imagePublicId : null,
+        audioUrl: messageType === "audio" ? audioUrl : null,
+        audioPublicId: messageType === "audio" ? audioPublicId : null,
+        audioDurationMs:
+          messageType === "audio" ? Math.max(0, Number(audioDurationMs || 0)) : null,
         replyTo: replyMessage?._id || null,
         deliveredAt: receiverInRoom ? now : null,
         readAt: receiverInRoom ? now : null,
@@ -534,10 +547,15 @@ const handleConnection = (socket) => {
             previewType:
               messageType === "image"
                 ? "image"
+                : messageType === "audio"
+                  ? "audio"
                 : messageType === "text"
                   ? "text"
                   : "none",
             imageUrl: messageType === "image" ? imageUrl : null,
+            audioUrl: messageType === "audio" ? audioUrl : null,
+            audioDurationMs:
+              messageType === "audio" ? Math.max(0, Number(audioDurationMs || 0)) : null,
             createdAt: new Date(),
           },
         },

@@ -93,6 +93,26 @@ export const deleteFile = async (publicId, resourceType = "image") => {
   });
 };
 
+export const uploadAudio = async ({ buffer, folder, publicId } = {}) => {
+  if (!buffer) throw new Error("Missing file buffer");
+
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        resource_type: "video",
+        folder,
+        public_id: publicId,
+      },
+      (error, result) => {
+        if (error) return reject(error);
+        resolve(result);
+      },
+    );
+
+    stream.end(buffer);
+  });
+};
+
 export const extractPublicIdFromUrl = (url) => {
   if (!url) return null;
   try {

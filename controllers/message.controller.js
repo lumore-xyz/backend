@@ -1,6 +1,6 @@
 import MatchRoom from "../models/room.model.js";
 import Message from "../models/message.model.js";
-import { deleteFile, uploadImage } from "../services/file.service.js";
+import { deleteFile, uploadAudio, uploadImage } from "../services/file.service.js";
 
 const isRoomParticipant = (room, userId) =>
   room?.participants?.some((id) => id.toString() === userId.toString());
@@ -23,6 +23,8 @@ const normalizeMessageForResponse = (msg) => {
       messageType: reply.messageType || "text",
       message: reply?.message || "",
       imageUrl: reply.imageUrl || null,
+      audioUrl: reply.audioUrl || null,
+      audioDurationMs: reply.audioDurationMs || null,
       editedAt: reply.editedAt || null,
       createdAt: reply.createdAt || null,
     };
@@ -37,6 +39,9 @@ const normalizeMessageForResponse = (msg) => {
     message: msg?.message || "",
     imageUrl: msg?.imageUrl || null,
     imagePublicId: msg?.imagePublicId || null,
+    audioUrl: msg?.audioUrl || null,
+    audioPublicId: msg?.audioPublicId || null,
+    audioDurationMs: msg?.audioDurationMs || null,
     reactions: (msg?.reactions || []).map((reaction) => ({
       user: reaction.user,
       emoji: reaction.emoji || "\u2764\uFE0F",
@@ -76,7 +81,7 @@ export const getRoomMessages = async (req, res) => {
       .populate("receiver", "_id name avatar")
       .populate({
         path: "replyTo",
-        select: "_id sender messageType message imageUrl editedAt createdAt",
+        select: "_id sender messageType message imageUrl audioUrl audioDurationMs editedAt createdAt",
         populate: {
           path: "sender",
           select: "_id name avatar",
@@ -131,6 +136,50 @@ export const uploadRoomImage = async (req, res) => {
   }
 };
 
+export const uploadRoomAudio = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const userId = getUserId(req);
+    const durationMs = Number(req.body?.durationMs || 0);
+
+    if (!roomId) {
+      return res.status(400).json({ message: "roomId is required" });
+    }
+
+    if (!req.file?.buffer) {
+      return res.status(400).json({ message: "Audio file is required" });
+    }
+
+    if (!Number.isFinite(durationMs) || durationMs <= 0) {
+      return res.status(400).json({ message: "durationMs is required" });
+    }
+
+    const room = await getAuthorizedRoom(roomId, userId, { requireActive: true });
+    if (!room) {
+      return res.status(403).json({ message: "Not authorized for this room" });
+    }
+    if (room === "inactive") {
+      return res.status(400).json({ message: "Room is not active" });
+    }
+
+    const uploaded = await uploadAudio({
+      buffer: req.file.buffer,
+      folder: `chat-audio/${userId}`,
+      publicId: `${roomId}-${Date.now()}`,
+    });
+
+    return res.status(200).json({
+      message: "Audio uploaded successfully",
+      audioUrl: uploaded?.secure_url,
+      audioPublicId: uploaded?.public_id,
+      audioDurationMs: Math.round(durationMs),
+    });
+  } catch (error) {
+    console.error("Error uploading room audio:", error);
+    return res.status(500).json({ message: "Failed to upload audio" });
+  }
+};
+
 export const deleteTempRoomImage = async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -151,6 +200,29 @@ export const deleteTempRoomImage = async (req, res) => {
   } catch (error) {
     console.error("Error deleting temp room image:", error);
     return res.status(500).json({ message: "Failed to delete image" });
+  }
+};
+
+export const deleteTempRoomAudio = async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { publicId } = req.body || {};
+
+    if (!publicId) {
+      return res.status(400).json({ message: "publicId is required" });
+    }
+
+    const expectedPrefix = `chat-audio/${userId}/`;
+    if (!publicId.startsWith(expectedPrefix)) {
+      return res.status(403).json({ message: "Not authorized to delete this audio" });
+    }
+
+    await deleteFile(publicId, "video");
+
+    return res.status(200).json({ message: "Audio deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting temp room audio:", error);
+    return res.status(500).json({ message: "Failed to delete audio" });
   }
 };
 
