@@ -11,6 +11,12 @@ const POOL_MODE = {
 };
 
 const MAX_DISTANCE_KM = 100;
+const SMALL_MATCHING_POOL_THRESHOLD = 1000;
+const SMALL_POOL_MIN_DISTANCE_KM = 25;
+const SMALL_POOL_SECOND_PASS_DISTANCE_KM = 50;
+const SMALL_POOL_FINAL_PASS_DISTANCE_KM = MAX_DISTANCE_KM;
+const SMALL_POOL_SECOND_PASS_AGE_RELAXATION_YEARS = 3;
+const SMALL_POOL_FINAL_PASS_AGE_RELAXATION_YEARS = 7;
 const REMATCH_PENALTY = 25;
 const REMATCH_COOLDOWN_DAYS = 7;
 const THIRD_PASS_SCORE_DROP = 10;
@@ -36,7 +42,7 @@ const SUPPORTED_GENDERS = new Set(["man", "woman"]);
 const DEFAULT_PREFS = {
   interestedIn: null,
   ageRange: [18, 27],
-  distance: 10,
+  distance: 50,
   goal: { primary: null, secondary: null, tertiary: null },
   interests: [],
   relationshipType: null,
@@ -44,7 +50,7 @@ const DEFAULT_PREFS = {
   zodiacPreference: [],
   personalityTypePreference: [],
   dietPreference: [],
-  heightRange: [150, 200],
+  heightRange: [120, 200],
   religionPreference: [],
   drinkingPreference: [],
   smokingPreference: [],
@@ -81,17 +87,102 @@ async function getSeekerMatchContext({ userId }) {
   };
 }
 
-export const findBestMatchV2 = async ({ userId, now = new Date() }) => {
+async function getMatchingPoolCount({ seekerId }) {
+  return await User.countDocuments({
+    _id: { $ne: seekerId },
+    isMatching: true,
+    credits: { $gte: CREDIT_RULES.CONVERSATION_COST },
+    gender: { $in: Array.from(SUPPORTED_GENDERS) },
+    dob: { $exists: true, $ne: null },
+    "location.coordinates": { $exists: true, $ne: [0, 0] },
+  });
+}
+
+function getFirstPassDistanceKm({ baseDistanceKm, shouldRelaxForSmallPool }) {
+  if (!shouldRelaxForSmallPool) return baseDistanceKm;
+  return Math.min(
+    MAX_DISTANCE_KM,
+    Math.max(baseDistanceKm, SMALL_POOL_MIN_DISTANCE_KM),
+  );
+}
+
+function buildPassConfigs({
+  firstPassDistanceKm,
+  minScoreForMode,
+  shouldRelaxForSmallPool,
+}) {
+  if (shouldRelaxForSmallPool) {
+    return [
+      {
+        distanceKm: firstPassDistanceKm,
+        minScore: Math.max(0, minScoreForMode - 2),
+        fallbackType: "none",
+        ageRelaxationYears: 0,
+      },
+      {
+        distanceKm: Math.min(
+          MAX_DISTANCE_KM,
+          Math.max(firstPassDistanceKm * 2, SMALL_POOL_SECOND_PASS_DISTANCE_KM),
+        ),
+        minScore: Math.max(0, minScoreForMode - 3),
+        fallbackType: "distance_only",
+        ageRelaxationYears: SMALL_POOL_SECOND_PASS_AGE_RELAXATION_YEARS,
+      },
+      {
+        distanceKm: SMALL_POOL_FINAL_PASS_DISTANCE_KM,
+        minScore: 0,
+        fallbackType: "threshold_only",
+        ageRelaxationYears: SMALL_POOL_FINAL_PASS_AGE_RELAXATION_YEARS,
+      },
+    ];
+  }
+
+  return [
+    {
+      distanceKm: firstPassDistanceKm,
+      minScore: minScoreForMode,
+      fallbackType: "none",
+      ageRelaxationYears: 0,
+    },
+    {
+      distanceKm: Math.min(
+        MAX_DISTANCE_KM,
+        Math.max(firstPassDistanceKm * 1.5, firstPassDistanceKm + 5),
+      ),
+      minScore: minScoreForMode,
+      fallbackType: "distance_only",
+      ageRelaxationYears: 0,
+    },
+    {
+      distanceKm: Math.min(
+        MAX_DISTANCE_KM,
+        Math.max(firstPassDistanceKm * 2.5, firstPassDistanceKm + 15),
+      ),
+      minScore: Math.max(0, minScoreForMode - THIRD_PASS_SCORE_DROP),
+      fallbackType: "threshold_only",
+      ageRelaxationYears: 0,
+    },
+  ];
+}
+
+export const findBestMatch = async ({ userId, now = new Date() }) => {
   const seekerContext = await getSeekerMatchContext({ userId });
   if (!seekerContext) return null;
 
   const { seeker, seekerId, seekerPrefs, baseDistanceKm } = seekerContext;
   const waitMs = getWaitMs(seeker.matchmakingTimestamp, now);
+  const matchingPoolCount = await getMatchingPoolCount({ seekerId });
+  const shouldRelaxForSmallPool =
+    matchingPoolCount < SMALL_MATCHING_POOL_THRESHOLD;
+  const firstPassDistanceKm = getFirstPassDistanceKm({
+    baseDistanceKm,
+    shouldRelaxForSmallPool,
+  });
 
   const basePool = await getCandidateSet({
     seeker,
     seekerPrefs,
-    distanceKm: baseDistanceKm,
+    distanceKm: firstPassDistanceKm,
     now,
   });
 
@@ -102,35 +193,20 @@ export const findBestMatchV2 = async ({ userId, now = new Date() }) => {
   const minScoreForMode =
     MIN_SCORE_BY_MODE[poolMode] ?? MIN_SCORE_BY_MODE.NORMAL;
 
-  const passConfigs = [
-    {
-      distanceKm: baseDistanceKm,
-      minScore: minScoreForMode,
-      fallbackType: "none",
-    },
-    {
-      distanceKm: Math.min(
-        MAX_DISTANCE_KM,
-        Math.max(baseDistanceKm * 1.5, baseDistanceKm + 5),
-      ),
-      minScore: minScoreForMode,
-      fallbackType: "distance_only",
-    },
-    {
-      distanceKm: Math.min(
-        MAX_DISTANCE_KM,
-        Math.max(baseDistanceKm * 2.5, baseDistanceKm + 15),
-      ),
-      minScore: Math.max(0, minScoreForMode - THIRD_PASS_SCORE_DROP),
-      fallbackType: "threshold_only",
-    },
-  ];
+  const passConfigs = buildPassConfigs({
+    firstPassDistanceKm,
+    minScoreForMode,
+    shouldRelaxForSmallPool,
+  });
 
   const observability = {
+    matching_pool_count: matchingPoolCount,
+    small_pool_relaxation: shouldRelaxForSmallPool,
     eligible_pool_count: 0,
     rejected_interest_mismatch: 0,
     rejected_age_mismatch: 0,
     fallback_type_used: "none",
+    age_relaxation_years_used: 0,
     null_match_reason: null,
   };
 
@@ -145,6 +221,7 @@ export const findBestMatchV2 = async ({ userId, now = new Date() }) => {
             seeker,
             seekerPrefs,
             distanceKm: pass.distanceKm,
+            ageRelaxationYears: pass.ageRelaxationYears,
             now,
           });
 
@@ -215,6 +292,7 @@ export const findBestMatchV2 = async ({ userId, now = new Date() }) => {
     const winner = filtered[0];
     const runnerUp = filtered[1] || null;
     observability.fallback_type_used = pass.fallbackType;
+    observability.age_relaxation_years_used = pass.ageRelaxationYears;
     observability.null_match_reason = null;
 
     const result = {
@@ -230,6 +308,9 @@ export const findBestMatchV2 = async ({ userId, now = new Date() }) => {
         winner,
         poolMode,
         fallbackType: pass.fallbackType,
+        matchingPoolCount,
+        smallPoolRelaxed: shouldRelaxForSmallPool,
+        ageRelaxationYears: pass.ageRelaxationYears,
         candidatePoolSize: filtered.length,
         runnerUpScore: runnerUp?.totalScore ?? null,
       }),
@@ -238,7 +319,7 @@ export const findBestMatchV2 = async ({ userId, now = new Date() }) => {
   }
 
   observability.null_match_reason = nullMatchReason;
-  console.info("[matchmaking-v3]", observability);
+  console.info("[matchmaking]", observability);
   return null;
 };
 
@@ -246,22 +327,8 @@ export const getPreferenceBasedAvailableCount = async ({
   userId,
   now = new Date(),
 }) => {
-  const seekerContext = await getSeekerMatchContext({ userId });
-  if (!seekerContext) return 0;
-
-  const { seeker, seekerPrefs, baseDistanceKm } = seekerContext;
-  const candidateSetResult = await getCandidateSet({
-    seeker,
-    seekerPrefs,
-    distanceKm: baseDistanceKm,
-    now,
-  });
-  console.log("seekerContext + candidateSetResult", {
-    seekerContext,
-    candidateSetResult,
-  });
-
-  return candidateSetResult.selected.length;
+  const match = await findBestMatch({ userId, now });
+  return Number(match?.matchingNote?.candidatePoolSize || 0);
 };
 
 export const scoreCandidate = ({ seeker, candidate, context }) => {
@@ -323,13 +390,22 @@ export const scoreCandidate = ({ seeker, candidate, context }) => {
   };
 };
 
-async function getCandidateSet({ seeker, seekerPrefs, distanceKm, now }) {
+async function getCandidateSet({
+  seeker,
+  seekerPrefs,
+  distanceKm,
+  ageRelaxationYears = 0,
+  now,
+}) {
   const [lng, lat] = seeker.location.coordinates;
 
+  const interestedGenders = getQueryableInterestedInGenders(
+    seekerPrefs.interestedIn,
+  );
   const query = {
-    // isMatching: true,
-    // credits: { $gte: CREDIT_RULES.CONVERSATION_COST },
-    // gender: seekerPrefs.interestedIn[0],
+    isMatching: true,
+    credits: { $gte: CREDIT_RULES.CONVERSATION_COST },
+    ...(interestedGenders.length ? { gender: { $in: interestedGenders } } : {}),
   };
 
   const rawCandidates = await User.findNearby(
@@ -384,6 +460,7 @@ async function getCandidateSet({ seeker, seekerPrefs, distanceKm, now }) {
       seekerPrefs,
       candidate,
       candidatePrefs: prefs,
+      ageRelaxationYears,
       now,
     });
 
@@ -408,6 +485,7 @@ function getHardEligibilityResult({
   seekerPrefs,
   candidate,
   candidatePrefs,
+  ageRelaxationYears = 0,
   now,
 }) {
   if (!candidate || !candidate._id) {
@@ -439,10 +517,18 @@ function getHardEligibilityResult({
 
   const seekerAge = getAge(seeker.dob, now);
   const candidateAge = getAge(candidate.dob, now);
-  if (!isAgeInRange(candidateAge, seekerPrefs.ageRange)) {
+  const seekerAgeRange = expandAgeRange(
+    seekerPrefs.ageRange,
+    ageRelaxationYears,
+  );
+  const candidateAgeRange = expandAgeRange(
+    candidatePrefs.ageRange,
+    ageRelaxationYears,
+  );
+  if (!isAgeInRange(candidateAge, seekerAgeRange)) {
     return { ok: false, reason: "age_out_of_range" };
   }
-  if (!isAgeInRange(seekerAge, candidatePrefs.ageRange)) {
+  if (!isAgeInRange(seekerAge, candidateAgeRange)) {
     return { ok: false, reason: "age_out_of_range" };
   }
 
@@ -690,6 +776,15 @@ function traitsAlignmentScore(preferences, profile) {
   return scores.length ? sum / scores.length : 0;
 }
 
+function expandAgeRange(range, relaxationYears = 0) {
+  if (!range) return range;
+  const years = Math.max(0, Number(relaxationYears) || 0);
+  return {
+    min: Math.max(18, range.min - years),
+    max: range.max + years,
+  };
+}
+
 function isAgeInRange(age, range) {
   if (!range || !Number.isFinite(range.min) || !Number.isFinite(range.max))
     return false;
@@ -806,6 +901,9 @@ function buildMatchingNote({
   winner,
   poolMode,
   fallbackType,
+  matchingPoolCount,
+  smallPoolRelaxed,
+  ageRelaxationYears,
   candidatePoolSize,
   runnerUpScore,
 }) {
@@ -848,10 +946,12 @@ function buildMatchingNote({
   if (!reasons.length) reasons.push("profile_preference_alignment");
 
   return {
-    version: "matchmaking_v3",
-    eligibilityVersion: "v3",
+    version: "matchmaking",
     fallbackType,
     poolMode,
+    matchingPoolCount,
+    smallPoolRelaxed,
+    ageRelaxationYears,
     totalScore,
     candidatePoolSize: Number(candidatePoolSize || 0),
     rankingContext: {

@@ -457,52 +457,6 @@ userSchema.statics.findNearby = async function (
   ]);
 };
 
-// Find users for matchmaking near a location
-userSchema.statics.findMatchmakingCandidates = async function (
-  userId,
-  userLocation,
-  userGenderPreference,
-  maxDistanceMeters = 10000,
-) {
-  const [longitude, latitude] = userLocation.coordinates;
-
-  // Build gender filter (case-insensitive)
-  const genderFilter = {};
-  if (userGenderPreference) {
-    if (Array.isArray(userGenderPreference)) {
-      genderFilter.gender = {
-        $in: userGenderPreference.map((g) => g.toLowerCase()),
-      };
-    } else {
-      genderFilter.gender = userGenderPreference.toLowerCase();
-    }
-  }
-
-  return await this.aggregate([
-    {
-      $geoNear: {
-        near: {
-          type: "Point",
-          coordinates: [longitude, latitude],
-        },
-        distanceField: "distance",
-        maxDistance: maxDistanceMeters,
-        spherical: true,
-        query: {
-          isMatching: true,
-          isActive: true,
-          _id: { $ne: userId },
-          "location.coordinates": { $exists: true, $ne: [0, 0] },
-          ...genderFilter,
-        },
-      },
-    },
-    {
-      $limit: 100, // Limit candidates for performance
-    },
-  ]);
-};
-
 // Count users by distance ranges
 userSchema.statics.getUserDistributionStats = async function (
   longitude,

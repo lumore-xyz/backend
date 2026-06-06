@@ -6,7 +6,7 @@ import ThisOrThatAnswer from "../models/thisOrThatAnswer.model.js";
 import User from "../models/user.model.js";
 import { CREDIT_RULES } from "../services/credits.service.js";
 import {
-  findBestMatchV2,
+  findBestMatch,
   getPreferenceBasedAvailableCount,
 } from "../services/matchmaking.service.js";
 
@@ -140,12 +140,14 @@ const withMatchmakingMocks = async (
     candidatePreferences = [],
     answers = [],
     rooms = [],
+    matchingPoolCount = 1000,
     findNearby,
   },
   fn,
 ) => {
   const originalFindById = User.findById;
   const originalFindNearby = User.findNearby;
+  const originalCountDocuments = User.countDocuments;
   const originalPreferenceFindOne = UserPreference.findOne;
   const originalPreferenceFind = UserPreference.find;
   const originalAnswersFind = ThisOrThatAnswer.find;
@@ -156,6 +158,7 @@ const withMatchmakingMocks = async (
     createLeanChain(
       seeker && String(userId) === String(seeker._id) ? { ...seeker } : null,
     );
+  User.countDocuments = async () => matchingPoolCount;
   User.findNearby =
     findNearby || createFindNearbyStub(candidates, []);
   UserPreference.findOne = ({ user }) =>
@@ -183,6 +186,7 @@ const withMatchmakingMocks = async (
   } finally {
     User.findById = originalFindById;
     User.findNearby = originalFindNearby;
+    User.countDocuments = originalCountDocuments;
     UserPreference.findOne = originalPreferenceFindOne;
     UserPreference.find = originalPreferenceFind;
     ThisOrThatAnswer.find = originalAnswersFind;
@@ -204,13 +208,14 @@ test("invalid seeker state returns zero count and no match", async () => {
       userId: seeker._id,
       now: NOW,
     });
-    const match = await findBestMatchV2({
+    const match = await findBestMatch({
       userId: seeker._id,
       now: NOW,
     });
 
     assert.equal(count, 0);
     assert.equal(match, null);
+    assert.equal(count, match?.matchingNote?.candidatePoolSize ?? 0);
   });
 });
 
@@ -250,13 +255,14 @@ test("one-sided preference mismatch is excluded from count and matchmaking", asy
         userId: seeker._id,
         now: NOW,
       });
-      const match = await findBestMatchV2({
+      const match = await findBestMatch({
         userId: seeker._id,
         now: NOW,
       });
 
       assert.equal(count, 0);
       assert.equal(match, null);
+      assert.equal(count, match?.matchingNote?.candidatePoolSize ?? 0);
     },
   );
 });
@@ -313,13 +319,14 @@ test("count and matchmaking both honor first-pass distance and credit filters", 
         userId: seeker._id,
         now: NOW,
       });
-      const match = await findBestMatchV2({
+      const match = await findBestMatch({
         userId: seeker._id,
         now: NOW,
       });
 
       assert.equal(count, 1);
       assert.equal(match?.uid, eligibleCandidate._id);
+      assert.equal(count, match?.matchingNote?.candidatePoolSize);
       assert.equal(findNearbyCalls[0]?.longitude, 77.5946);
       assert.equal(findNearbyCalls[0]?.latitude, 12.9716);
       assert.equal(findNearbyCalls[0]?.maxDistanceMeters, 5000);
@@ -331,7 +338,7 @@ test("count and matchmaking both honor first-pass distance and credit filters", 
   );
 });
 
-test("available count matches the initial candidate pool before scoring chooses a winner", async () => {
+test("available count matches the selected match candidate pool size", async () => {
   const seeker = createUser({
     _id: "seeker-4",
     gender: "woman",
@@ -403,13 +410,118 @@ test("available count matches the initial candidate pool before scoring chooses 
         userId: seeker._id,
         now: NOW,
       });
-      const match = await findBestMatchV2({
+      const match = await findBestMatch({
         userId: seeker._id,
         now: NOW,
       });
 
-      assert.equal(count, 2);
       assert.equal(match?.uid, strongerCandidate._id);
+      assert.equal(count, match?.matchingNote?.candidatePoolSize);
+    },
+  );
+});
+
+test("small matching pool expands distance before selecting a match", async () => {
+  const seeker = createUser({
+    _id: "seeker-small-distance",
+    gender: "woman",
+    age: 29,
+  });
+  const fartherCandidate = createUser({
+    _id: "candidate-small-distance",
+    gender: "man",
+    age: 30,
+    distance: 30000,
+  });
+  const findNearbyCalls = [];
+
+  await withMatchmakingMocks(
+    {
+      seeker,
+      seekerPreference: createPreference({
+        user: seeker._id,
+        interestedIn: "man",
+        ageRange: [26, 34],
+        distance: 5,
+      }),
+      candidates: [fartherCandidate],
+      candidatePreferences: [
+        createPreference({
+          user: fartherCandidate._id,
+          interestedIn: "woman",
+        }),
+      ],
+      matchingPoolCount: 999,
+      findNearby: createFindNearbyStub([fartherCandidate], findNearbyCalls),
+    },
+    async () => {
+      const count = await getPreferenceBasedAvailableCount({
+        userId: seeker._id,
+        now: NOW,
+      });
+      const match = await findBestMatch({
+        userId: seeker._id,
+        now: NOW,
+      });
+
+      assert.equal(match?.uid, fartherCandidate._id);
+      assert.equal(count, match?.matchingNote?.candidatePoolSize);
+      assert.equal(findNearbyCalls[0]?.maxDistanceMeters, 25000);
+      assert.equal(findNearbyCalls[1]?.maxDistanceMeters, 50000);
+      assert.equal(match?.matchingNote?.fallbackType, "distance_only");
+      assert.equal(match?.matchingNote?.smallPoolRelaxed, true);
+      assert.equal(match?.matchingNote?.matchingPoolCount, 999);
+    },
+  );
+});
+
+test("small matching pool relaxes age only on later pass", async () => {
+  const seeker = createUser({
+    _id: "seeker-small-age",
+    gender: "woman",
+    age: 29,
+  });
+  const olderCandidate = createUser({
+    _id: "candidate-small-age",
+    gender: "man",
+    age: 40,
+    distance: 80000,
+  });
+
+  await withMatchmakingMocks(
+    {
+      seeker,
+      seekerPreference: createPreference({
+        user: seeker._id,
+        interestedIn: "man",
+        ageRange: [26, 34],
+        distance: 5,
+      }),
+      candidates: [olderCandidate],
+      candidatePreferences: [
+        createPreference({
+          user: olderCandidate._id,
+          interestedIn: "woman",
+          ageRange: [24, 32],
+        }),
+      ],
+      matchingPoolCount: 25,
+    },
+    async () => {
+      const count = await getPreferenceBasedAvailableCount({
+        userId: seeker._id,
+        now: NOW,
+      });
+      const match = await findBestMatch({
+        userId: seeker._id,
+        now: NOW,
+      });
+
+      assert.equal(match?.uid, olderCandidate._id);
+      assert.equal(count, match?.matchingNote?.candidatePoolSize);
+      assert.equal(match?.matchingNote?.fallbackType, "threshold_only");
+      assert.equal(match?.matchingNote?.ageRelaxationYears, 7);
+      assert.equal(match?.matchingNote?.smallPoolRelaxed, true);
     },
   );
 });

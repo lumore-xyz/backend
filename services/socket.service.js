@@ -26,7 +26,7 @@ import {
 } from "./credits.service.js";
 import { generateGeminiMatchNotesByUser } from "./matchNoteAi.service.js";
 import { getOrCreateMatchRoom } from "./matching.service.js";
-import { findBestMatchV2 } from "./matchmaking.service.js";
+import { findBestMatch } from "./matchmaking.service.js";
 import { sendNotificationToUser } from "./push.service.js";
 
 /**
@@ -184,58 +184,6 @@ const initialize = (server) => {
   ns.on("connection", handleConnection);
 };
 
-/* ============================================================
- * MATCHMAKING ENGINE (CORE LOGIC)
- * ============================================================
- *
- * Philosophy:
- * - NOT swipe-based
- * - NOT random
- * - Deterministic, explainable, and user-respecting
- * - Designed to avoid "empty room" scenarios without
- *   degrading match quality
- *
- * High-Level Strategy:
- * 1. Geo-filter nearby users (distance-based)
- * 2. Filter by basic availability & intent (isMatching, gender)
- * 3. Batch-load preferences to avoid N+1 DB queries
- * 4. Normalize preferences to handle missing/optional fields
- * 5. Score all viable candidates using weighted criteria
- * 6. Enforce mutual interest when possible
- *
- * Match Types:
- * ------------------------------------------------------------
- * STRICT MATCH
- * - Mutual interest passes for BOTH users
- * - Age, gender, distance, intent all respected
- * - Highest quality and default desired outcome
- *
- * FALLBACK MATCH
- * - Used ONLY when no strict match exists
- * - Still score-based (no random pairing)
- * - Prevents users from being stuck waiting indefinitely
- * - Maintains minimum compatibility threshold (score > 0)
- *
- * Decision Hierarchy:
- * ------------------------------------------------------------
- * 1. Return best STRICT match (highest score)
- * 2. Else return best FALLBACK match (highest score)
- * 3. Else return null (no viable humans nearby)
- *
- * Important Guarantees:
- * ------------------------------------------------------------
- * - Only ONE best match is returned
- * - No infinite loops or broadcast matching
- * - No preference mutation inside the loop
- * - Same inputs => same output (deterministic)
- *
- * Future Extensions (Planned):
- * ------------------------------------------------------------
- * - Match quality tiers (A / B / C)
- * - Cooldown weighting (avoid repeat matches)
- * - Explainable match reasons ("Matched because...")
- * - Time-based relaxation of strict rules
- */
 /* ============================================================
  * MATCH CREATION & NOTIFICATION
  * ============================================================
@@ -415,7 +363,7 @@ const handleConnection = (socket) => {
         matchmakingTimestamp: Date.now(),
       });
 
-      const match = await findBestMatchV2({ userId, now: new Date() });
+      const match = await findBestMatch({ userId, now: new Date() });
 
       if (match) {
         const enrichedMatchingNote = await buildAiMatchNote({
@@ -436,7 +384,6 @@ const handleConnection = (socket) => {
               "Unable to start conversation due to insufficient credits.",
           });
         }
-      } else {
       }
     } catch (e) {
       socket.emit("matchmakingError", { message: e.message });
