@@ -43,6 +43,7 @@ export const getInbox = async (req, res) => {
   })
     .sort({ lastMessageAt: -1 })
     .populate("participants", "_id username nickname profilePicture")
+    .populate("locationRoom", "_id title location")
     .lean();
 
   const normalized = rooms.map((room) => {
@@ -76,6 +77,7 @@ export const getRoomData = async (req, res) => {
 
   const room = await MatchRoom.findById(roomId)
     .populate("participants", "_id username nickname profilePicture")
+    .populate("locationRoom", "_id title location")
     .lean();
 
   if (!room) {

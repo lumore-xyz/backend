@@ -3,12 +3,24 @@ import * as OneSignal from "@onesignal/node-onesignal";
 import webpush from "web-push";
 import Push from "../models/push.model.js";
 
-// Configure web-push with VAPID keys
-webpush.setVapidDetails(
-  process.env.VAPID_SUBJECT,
-  process.env.VAPID_PUSH_PUBLIC_KEY,
-  process.env.VAPID_PUSH_PRIVATE_KEY
+const VAPID_SUBJECT = String(process.env.VAPID_SUBJECT || "").trim();
+const VAPID_PUSH_PUBLIC_KEY = String(
+  process.env.VAPID_PUSH_PUBLIC_KEY || "",
+).trim();
+const VAPID_PUSH_PRIVATE_KEY = String(
+  process.env.VAPID_PUSH_PRIVATE_KEY || "",
+).trim();
+const WEB_PUSH_CONFIGURED = Boolean(
+  VAPID_SUBJECT && VAPID_PUSH_PUBLIC_KEY && VAPID_PUSH_PRIVATE_KEY,
 );
+
+if (WEB_PUSH_CONFIGURED) {
+  webpush.setVapidDetails(
+    VAPID_SUBJECT,
+    VAPID_PUSH_PUBLIC_KEY,
+    VAPID_PUSH_PRIVATE_KEY,
+  );
+}
 
 const ONESIGNAL_APP_ID = String(process.env.ONESIGNAL_APP_ID || "").trim();
 const ONESIGNAL_API_KEY = String(process.env.ONESIGNAL_API_KEY || "").trim();
@@ -140,6 +152,17 @@ const sendViaOneSignalToAll = async (payload) => {
 };
 
 const sendViaVapidToUser = async (userId, payload) => {
+  if (!WEB_PUSH_CONFIGURED) {
+    return {
+      success: false,
+      skipped: true,
+      sent: 0,
+      failed: 0,
+      results: [],
+      message: "Web push not configured",
+    };
+  }
+
   // Get all subscriptions for the user
   const subscriptions = await Push.find({ user: userId });
 
@@ -190,6 +213,16 @@ const sendViaVapidToUser = async (userId, payload) => {
 };
 
 const sendViaVapidToAll = async (payload) => {
+  if (!WEB_PUSH_CONFIGURED) {
+    return {
+      success: false,
+      skipped: true,
+      sent: 0,
+      failed: 0,
+      message: "Web push not configured",
+    };
+  }
+
   const subscriptions = await Push.find({});
 
   if (subscriptions.length === 0) {

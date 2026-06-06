@@ -1,5 +1,7 @@
 import cron from "node-cron";
+import User from "../models/user.model.js";
 import { deleteUserAndActivity } from "./accountDeletion.service.js";
+import { runDueLocationRoomCycles } from "./locationRoomMatching.service.js";
 import { cleanupExpiredImageMessages } from "./messageCleanup.service.js";
 
 /**
@@ -44,6 +46,20 @@ export const initializeCronJobs = () => {
       }
     } catch (error) {
       console.error("[Cron] Error cleaning up expired image messages:", error);
+    }
+  });
+
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      const result = await runDueLocationRoomCycles();
+      if (result.processed > 0) {
+        console.log("[Cron] Location room cycles:", {
+          scanned: result.scanned,
+          processed: result.processed,
+        });
+      }
+    } catch (error) {
+      console.error("[Cron] Error running location room cycles:", error);
     }
   });
 

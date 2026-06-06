@@ -9,6 +9,34 @@ const MatchRoomSchema = new mongoose.Schema(
         required: true,
       },
     ],
+    source: {
+      type: String,
+      enum: ["explore", "location_room"],
+      default: "explore",
+      index: true,
+    },
+    locationRoom: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "LocationRoom",
+      default: null,
+      index: true,
+    },
+    locationRoomCycle: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "LocationRoomCycle",
+      default: null,
+      index: true,
+    },
+    sourceMetadata: {
+      title: {
+        type: String,
+        default: "",
+      },
+      subtitle: {
+        type: String,
+        default: "",
+      },
+    },
 
     // optional metadata
     status: {
@@ -80,5 +108,6 @@ const MatchRoomSchema = new mongoose.Schema(
 
 // Index to speed up matching lookups
 MatchRoomSchema.index({ participants: 1 });
+MatchRoomSchema.index({ source: 1, locationRoom: 1, locationRoomCycle: 1 });
 
 export default mongoose.model("MatchRoom", MatchRoomSchema);

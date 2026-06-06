@@ -44,6 +44,21 @@ const userSockets = new Map();
 
 const DEFAULT_REACTION_EMOJI = "\u2764\uFE0F";
 
+const emitToUser = (userId, event, payload) => {
+  const socket = userSockets.get(userId?.toString?.() || String(userId || ""));
+  if (!socket) return false;
+  socket.emit(event, payload);
+  return true;
+};
+
+const emitToUsers = (userIds = [], event, payload) => {
+  let emitted = 0;
+  for (const userId of userIds) {
+    if (emitToUser(userId, event, payload)) emitted += 1;
+  }
+  return emitted;
+};
+
 const isParticipant = (room, currentUserId) =>
   room?.participants?.some((id) => id.toString() === currentUserId.toString());
 
@@ -773,4 +788,4 @@ const lockProfile = async (socket, userId, profileId, roomId) => {
   }
 };
 
-export default { initialize };
+export default { initialize, emitToUser, emitToUsers };

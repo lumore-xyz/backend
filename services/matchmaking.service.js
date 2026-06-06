@@ -480,7 +480,7 @@ async function getCandidateSet({
   };
 }
 
-function getHardEligibilityResult({
+export function getHardEligibilityResult({
   seeker,
   seekerPrefs,
   candidate,
@@ -572,7 +572,7 @@ async function getRecentRematchSet(seekerId, now) {
   return recent;
 }
 
-function normalizePreference(prefDoc, { userGender } = {}) {
+export function normalizePreference(prefDoc, { userGender } = {}) {
   const merged = { ...DEFAULT_PREFS, ...(prefDoc || {}) };
   const [minAge, maxAge] = Array.isArray(merged.ageRange)
     ? merged.ageRange

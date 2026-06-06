@@ -7,8 +7,19 @@ const DEFAULT_MODEL = [
   "gemma-3-27b-it",
 ];
 const LOG_PREFIX = "[matchnote-ai]";
-const ai = new GoogleGenAI({});
 const MODEL_LIST_TTL_MS = 10 * 60 * 1000;
+let ai = null;
+
+const getAiClient = () => {
+  const apiKey = String(process.env.GEMINI_API_KEY || "").trim();
+  if (!apiKey) {
+    throw new Error("missing_api_key");
+  }
+  if (!ai) {
+    ai = new GoogleGenAI({ apiKey });
+  }
+  return ai;
+};
 
 let modelRoundRobinIndex = 0;
 let modelCache = {
@@ -172,7 +183,7 @@ const fetchAvailableGenerateContentModels = async () => {
   }
 
   const available = new Set();
-  const pager = await ai.models.list();
+  const pager = await getAiClient().models.list();
   for await (const model of pager) {
     const methods = Array.isArray(model?.supportedActions)
       ? model.supportedActions
@@ -219,7 +230,7 @@ const resolveRunnableModels = async () => {
 };
 
 export const listAvailableGeminiModels = async () => {
-  const pager = await ai.models.list();
+  const pager = await getAiClient().models.list();
   const rows = [];
   for await (const model of pager) {
     const methods = Array.isArray(model?.supportedActions)
@@ -248,7 +259,7 @@ const callGeminiText = async ({ prompt, preface }) => {
 
   for (const model of orderedModels) {
     try {
-      const response = await ai.models.generateContent({
+      const response = await getAiClient().models.generateContent({
         model,
         contents: fullPrompt,
         config: {
