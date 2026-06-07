@@ -528,7 +528,7 @@ export const spendCreditsForConversationStart = async (initiatorId, partnerId) =
             initiatorBalance: initiatorUser.credits,
             partnerBalance: partnerUser.credits,
           }),
-          { session },
+          { session, ordered: true },
         );
 
         logConversationCreditStep("transaction_ledger_written", {
