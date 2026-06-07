@@ -62,7 +62,9 @@ const finalizeSentence = (sentence) =>
     .replace(/[.!?]+$/g, "") + ".";
 
 const stripThinkingText = (value) =>
-  toTrimmedString(value).replace(/<think>[\s\S]*?<\/think>/gi, " ").trim();
+  toTrimmedString(value)
+    .replace(/<think>[\s\S]*?<\/think>/gi, " ")
+    .trim();
 
 const stripMarkdownCodeFence = (value) =>
   stripThinkingText(value)
@@ -158,7 +160,9 @@ const buildFriendPitchReason = (noteSummary) => {
 };
 
 const buildFriendPitchTail = (candidatePoolSize) =>
-  candidatePoolSize > 1 ? ` and they stood out from ${candidatePoolSize} options` : "";
+  candidatePoolSize > 1
+    ? ` and they stood out from ${candidatePoolSize} options`
+    : "";
 
 const buildFallbackSentence = ({ suggestedPersonName, noteSummary }) =>
   finalizeSentence(
@@ -239,7 +243,7 @@ const buildNvidiaPairMessages = ({
       "Make each sentence sound like a warm friend recommendation, not an app-generated explanation.",
       "Do not mention scores, rankings, matching algorithms, or anything that sounds robotic.",
       "Do not output markdown, code fences, emoji, or commentary outside the JSON object.",
-      "Keep each sentence warm, natural, slightly playful, and under 28 words.",
+      "Keep each sentence warm, natural, slightly playful, and under 50 words.",
     ].join(" "),
   },
   {
@@ -604,7 +608,11 @@ const callNvidiaMatchNotesPair = async ({
   }
 };
 
-export const generateMatchNote = async ({ viewer, otherUser, matchingNote }) => {
+export const generateMatchNote = async ({
+  viewer,
+  otherUser,
+  matchingNote,
+}) => {
   const result = await generateSentenceForPair({
     viewer,
     otherUser,
@@ -666,8 +674,7 @@ export const generateMatchNotesByUser = async ({
       provider: pairResult.meta?.provider || MATCH_NOTE_PROVIDER_FALLBACK,
       model: pairResult.meta?.model || null,
       usedFallback: Boolean(pairResult.meta?.usedFallback),
-      strategy:
-        pairResult.meta?.strategy || MATCH_NOTE_STRATEGY_FALLBACK,
+      strategy: pairResult.meta?.strategy || MATCH_NOTE_STRATEGY_FALLBACK,
       reasons: pairResult.meta?.reasons || [],
       attemptedProvider: pairResult.meta?.attemptedProvider || null,
       seekerId: seekerId || null,
