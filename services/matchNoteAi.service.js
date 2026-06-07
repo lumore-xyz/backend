@@ -129,13 +129,9 @@ const normalizeModelCandidates = (value) => {
 };
 
 const getConfiguredModelCandidates = () => {
-  const fromEnv =
-    process.env.GEMINI_MATCH_MODELS ||
-    process.env.GEMINI_MATCH_MODEL ||
-    process.env.GEMINI_MODEL ||
-    DEFAULT_MODEL;
-
-  const normalized = Array.from(new Set(normalizeModelCandidates(fromEnv)));
+  const normalized = Array.from(
+    new Set(normalizeModelCandidates(DEFAULT_MODEL)),
+  );
   return normalized.length
     ? normalized
     : Array.from(new Set(normalizeModelCandidates(DEFAULT_MODEL)));
