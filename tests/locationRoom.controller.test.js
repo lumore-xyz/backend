@@ -217,7 +217,11 @@ test("getNearbyLocationRooms lists public rooms ranked by distance and pool size
     ]);
     assert.deepEqual(aggregatePipeline[0].$geoNear.query, {
       status: "active",
-      visibility: "public",
+      $or: [
+        { visibility: "public" },
+        { visibility: { $exists: false } },
+        { visibility: null },
+      ],
     });
     assert.equal(res.body.rooms[0].poolCount, 7);
   } finally {

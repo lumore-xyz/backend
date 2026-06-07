@@ -53,6 +53,14 @@ const getRequestedVisibility = (body = {}) => {
 
 const getRoomVisibility = (room) => room?.visibility || "public";
 
+const getPublicNearbyVisibilityQuery = () => ({
+  $or: [
+    { visibility: "public" },
+    { visibility: { $exists: false } },
+    { visibility: null },
+  ],
+});
+
 const isSameId = (first, second) => first?.toString?.() === second?.toString?.();
 
 const canAccessRoom = async ({ room, userId }) => {
@@ -306,7 +314,10 @@ export const getNearbyLocationRooms = async (req, res) => {
         distanceField: "distanceMeters",
         maxDistance: radiusKm * 1000,
         spherical: true,
-        query: { status: "active", visibility: "public" },
+        query: {
+          status: "active",
+          ...getPublicNearbyVisibilityQuery(),
+        },
       },
     },
     { $sort: { distanceMeters: 1, nextMatchAt: 1 } },
