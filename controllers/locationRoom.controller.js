@@ -1,14 +1,18 @@
 import LocationRoomPin from "../models/locationRoomPin.model.js";
 import LocationRoom, {
   LOCATION_ROOM_MATCH_INTERVAL_MS,
+  LOCATION_ROOM_VISIBILITY_OPTIONS,
 } from "../models/locationRoom.model.js";
 import { buildCanonicalLocation, getGeoPointFromLocation } from "../utils/location.js";
 import socketService from "../services/socket.service.js";
+import { uploadImage } from "../services/file.service.js";
 
 const DEFAULT_NEARBY_RADIUS_KM = 25;
 const MAX_NEARBY_RADIUS_KM = 100;
 const NEARBY_LIMIT = 50;
+const NEARBY_RANK_CANDIDATE_LIMIT = 150;
 const MEMBER_LIMIT = 100;
+const ROOM_VISIBILITY_SET = new Set(LOCATION_ROOM_VISIBILITY_OPTIONS);
 
 const isVerifiedUser = (user) =>
   Boolean(user?.isVerified || user?.verificationStatus === "approved");
@@ -35,6 +39,50 @@ const getSecondsUntil = (date, now = new Date()) => {
   const timestamp = new Date(date).getTime();
   if (Number.isNaN(timestamp)) return 0;
   return Math.max(0, Math.ceil((timestamp - now.getTime()) / 1000));
+};
+
+const getRequestedVisibility = (body = {}) => {
+  const rawVisibility = body.visibility ?? body.status;
+  if (rawVisibility === undefined || rawVisibility === null || rawVisibility === "") {
+    return "public";
+  }
+
+  const visibility = String(rawVisibility).trim().toLowerCase();
+  return ROOM_VISIBILITY_SET.has(visibility) ? visibility : null;
+};
+
+const getRoomVisibility = (room) => room?.visibility || "public";
+
+const isSameId = (first, second) => first?.toString?.() === second?.toString?.();
+
+const canAccessRoom = async ({ room, userId }) => {
+  if (getRoomVisibility(room) === "public") return true;
+  if (isSameId(room.creator, userId)) return true;
+
+  const pin = await LocationRoomPin.exists({
+    room: room._id,
+    user: userId,
+    isPinned: true,
+  });
+  return Boolean(pin);
+};
+
+const createImagePublicId = ({ title, userId }) => {
+  const safeTitle =
+    String(title || "room")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "room";
+
+  return `${userId}-${safeTitle}-${Date.now()}`;
+};
+
+const getNearbyRankScore = ({ distanceMeters = 0, poolCount = 0 }) => {
+  const distanceKm = Math.max(0, Number(distanceMeters || 0) / 1000);
+  const cappedPoolCount = Math.min(Math.max(Number(poolCount || 0), 0), 100);
+  const poolBoost = 1 + Math.log2(cappedPoolCount + 1) * 0.35;
+  return distanceKm / poolBoost;
 };
 
 const safeMemberCard = (user) => ({
@@ -119,6 +167,8 @@ const formatRoomSummary = ({ room, counts, distanceMeters = null }) => ({
   description: room.description || "",
   creator: room.creator,
   status: room.status,
+  visibility: getRoomVisibility(room),
+  imageUrl: room.imageUrl || "",
   location: room.location,
   distanceKm:
     distanceMeters === null || distanceMeters === undefined
@@ -150,11 +200,15 @@ export const createLocationRoom = async (req, res) => {
 
   const title = String(req.body?.title || "").trim();
   const description = String(req.body?.description || "").trim();
+  const visibility = getRequestedVisibility(req.body);
   if (title.length < 3 || title.length > 80) {
     return res.status(400).json({ message: "title must be 3-80 characters" });
   }
   if (description.length > 500) {
     return res.status(400).json({ message: "description must be 500 characters or less" });
+  }
+  if (!visibility) {
+    return res.status(400).json({ message: "visibility/status must be public or private" });
   }
 
   const point = getRequestPoint(req);
@@ -174,10 +228,31 @@ export const createLocationRoom = async (req, res) => {
   }
 
   const now = new Date();
+  let uploadedImage = null;
+  if (req.file?.buffer) {
+    try {
+      uploadedImage = await uploadImage({
+        buffer: req.file.buffer,
+        folder: "location_rooms",
+        publicId: createImagePublicId({ title, userId: req.user._id }),
+        format: "webp",
+        maxWidth: 1600,
+        maxHeight: 1200,
+        optimize: true,
+      });
+    } catch (error) {
+      console.error("Error uploading location room image:", error);
+      return res.status(500).json({ message: "Failed to upload room image" });
+    }
+  }
+
   const room = await LocationRoom.create({
     title,
     description,
     creator: req.user._id,
+    visibility,
+    imageUrl: uploadedImage?.secure_url || "",
+    imagePublicId: uploadedImage?.public_id || "",
     location,
     nextMatchAt: new Date(now.getTime() + LOCATION_ROOM_MATCH_INTERVAL_MS),
   });
@@ -231,16 +306,40 @@ export const getNearbyLocationRooms = async (req, res) => {
         distanceField: "distanceMeters",
         maxDistance: radiusKm * 1000,
         spherical: true,
-        query: { status: "active" },
+        query: { status: "active", visibility: "public" },
       },
     },
     { $sort: { distanceMeters: 1, nextMatchAt: 1 } },
-    { $limit: NEARBY_LIMIT },
+    { $limit: NEARBY_RANK_CANDIDATE_LIMIT },
   ]);
   const roomIds = rooms.map((room) => room._id);
   const countsByRoom = await getRoomCounts(roomIds);
+  const rankedRooms = rooms
+    .map((room) => {
+      const counts = countsByRoom.get(room._id.toString()) || {
+        pinnedCount: 0,
+        poolCount: 0,
+      };
+      return {
+        room,
+        counts,
+        rankScore: getNearbyRankScore({
+          distanceMeters: room.distanceMeters,
+          poolCount: counts.poolCount,
+        }),
+      };
+    })
+    .sort((first, second) => {
+      if (first.rankScore !== second.rankScore) return first.rankScore - second.rankScore;
+      if (first.counts.poolCount !== second.counts.poolCount) {
+        return second.counts.poolCount - first.counts.poolCount;
+      }
+      return (first.room.distanceMeters || 0) - (second.room.distanceMeters || 0);
+    })
+    .slice(0, NEARBY_LIMIT);
+  const rankedRoomIds = rankedRooms.map(({ room }) => room._id);
   const pinnedStates = await LocationRoomPin.find({
-    room: { $in: roomIds },
+    room: { $in: rankedRoomIds },
     user: req.user._id,
   })
     .select("room isPinned inPool poolStatus lastMatchedAt lastMatchRoom lastPoolError")
@@ -260,10 +359,10 @@ export const getNearbyLocationRooms = async (req, res) => {
   );
 
   return res.status(200).json({
-    rooms: rooms.map((room) => ({
+    rooms: rankedRooms.map(({ room, counts }) => ({
       ...formatRoomSummary({
         room,
-        counts: countsByRoom.get(room._id.toString()),
+        counts,
         distanceMeters: room.distanceMeters,
       }),
       userState:
@@ -284,6 +383,9 @@ export const getLocationRoomDetail = async (req, res) => {
   const { roomId } = req.params;
   const room = await LocationRoom.findOne({ _id: roomId, status: "active" }).lean();
   if (!room) {
+    return res.status(404).json({ message: "Room not found" });
+  }
+  if (!(await canAccessRoom({ room, userId: req.user._id }))) {
     return res.status(404).json({ message: "Room not found" });
   }
 
@@ -312,6 +414,7 @@ export const getLocationRoomDetail = async (req, res) => {
 const setPinState = async ({ roomId, userId, state }) => {
   const room = await LocationRoom.findOne({ _id: roomId, status: "active" }).lean();
   if (!room) return null;
+  if (!(await canAccessRoom({ room, userId }))) return "private";
 
   const now = new Date();
   const nextState = { ...state };
@@ -344,6 +447,9 @@ export const pinLocationRoom = async (req, res) => {
     },
   });
   if (!result) return res.status(404).json({ message: "Room not found" });
+  if (result === "private") {
+    return res.status(403).json({ message: "This room is private" });
+  }
 
   return res.status(200).json({
     userState: await getUserState({ roomId: req.params.roomId, userId: req.user._id }),
@@ -362,6 +468,9 @@ export const rejoinLocationRoomPool = async (req, res) => {
     },
   });
   if (!result) return res.status(404).json({ message: "Room not found" });
+  if (result === "private") {
+    return res.status(403).json({ message: "This room is private" });
+  }
 
   return res.status(200).json({
     userState: await getUserState({ roomId: req.params.roomId, userId: req.user._id }),
@@ -371,6 +480,9 @@ export const rejoinLocationRoomPool = async (req, res) => {
 export const unpinLocationRoom = async (req, res) => {
   const room = await LocationRoom.findOne({ _id: req.params.roomId, status: "active" }).lean();
   if (!room) return res.status(404).json({ message: "Room not found" });
+  if (!(await canAccessRoom({ room, userId: req.user._id }))) {
+    return res.status(403).json({ message: "This room is private" });
+  }
 
   await LocationRoomPin.findOneAndUpdate(
     { room: req.params.roomId, user: req.user._id },

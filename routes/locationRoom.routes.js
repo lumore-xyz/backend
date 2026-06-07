@@ -9,11 +9,12 @@ import {
   unpinLocationRoom,
 } from "../controllers/locationRoom.controller.js";
 import { protect } from "../middleware/auth.middleware.js";
+import { upload } from "../middleware/upload.middleware.js";
 import { validateObjectIdParam } from "../middleware/validate.middleware.js";
 
 const router = express.Router();
 
-router.post("/", protect, createLocationRoom);
+router.post("/", protect, upload.single("image"), createLocationRoom);
 router.get("/nearby", protect, getNearbyLocationRooms);
 router.get("/:roomId", protect, validateObjectIdParam("roomId"), getLocationRoomDetail);
 router.post("/:roomId/pin", protect, validateObjectIdParam("roomId"), pinLocationRoom);

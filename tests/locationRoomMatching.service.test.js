@@ -39,3 +39,14 @@ test("selectRoomMatchPairs never creates duplicate pair keys", () => {
   );
   assert.equal(new Set(pairKeys).size, pairKeys.length);
 });
+
+test("selectRoomMatchPairs keeps a solo eligible user unmatched", () => {
+  const result = selectRoomMatchPairs({
+    edges: [],
+    eligibleUserIds: ["solo-user"],
+  });
+
+  assert.equal(result.selected.length, 0);
+  assert.equal(result.matchCounts.get("solo-user"), 0);
+  assert.deepEqual(result.unmatchedUserIds, ["solo-user"]);
+});

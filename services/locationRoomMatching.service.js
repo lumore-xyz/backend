@@ -128,14 +128,20 @@ const buildRoomMatchPayload = ({ room, matchRoom, matchedUserId, matchingNote })
   matchingNote,
 });
 
-export const selectRoomMatchPairs = ({ edges, maxMatchesPerUser = 2 }) => {
+export const selectRoomMatchPairs = ({
+  edges,
+  eligibleUserIds = [],
+  maxMatchesPerUser = 2,
+}) => {
   const sortedEdges = [...(edges || [])].sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
     return getPairKey(a.userId1, a.userId2).localeCompare(
       getPairKey(b.userId1, b.userId2),
     );
   });
-  const userIds = new Set();
+  const userIds = new Set(
+    (eligibleUserIds || []).map((userId) => getId(userId)).filter(Boolean),
+  );
   for (const edge of sortedEdges) {
     userIds.add(getId(edge.userId1));
     userIds.add(getId(edge.userId2));
@@ -493,7 +499,10 @@ export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
     prefsByUser,
     now,
   });
-  const { selected, unmatchedUserIds } = selectRoomMatchPairs({ edges });
+  const { selected, unmatchedUserIds } = selectRoomMatchPairs({
+    edges,
+    eligibleUserIds: eligibleUsers.map((user) => user._id),
+  });
   for (const userId of unmatchedUserIds) {
     skippedUsers.push({ user: userId, reason: "no_compatible_room_match" });
   }

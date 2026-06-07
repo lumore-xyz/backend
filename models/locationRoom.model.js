@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 
-const MATCH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const MATCH_INTERVAL_MS = 2 * 60 * 1000;
+const LOCATION_ROOM_VISIBILITIES = ["public", "private"];
 
 const locationRoomSchema = new mongoose.Schema(
   {
@@ -28,6 +29,22 @@ const locationRoomSchema = new mongoose.Schema(
       enum: ["active", "archived"],
       default: "active",
       index: true,
+    },
+    visibility: {
+      type: String,
+      enum: LOCATION_ROOM_VISIBILITIES,
+      default: "public",
+      index: true,
+    },
+    imageUrl: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    imagePublicId: {
+      type: String,
+      trim: true,
+      default: "",
     },
     location: {
       type: {
@@ -86,7 +103,9 @@ const locationRoomSchema = new mongoose.Schema(
 
 locationRoomSchema.index({ location: "2dsphere" });
 locationRoomSchema.index({ status: 1, nextMatchAt: 1, isCycleLocked: 1 });
+locationRoomSchema.index({ status: 1, visibility: 1, nextMatchAt: 1 });
 
 export const LOCATION_ROOM_MATCH_INTERVAL_MS = MATCH_INTERVAL_MS;
+export const LOCATION_ROOM_VISIBILITY_OPTIONS = LOCATION_ROOM_VISIBILITIES;
 
 export default mongoose.model("LocationRoom", locationRoomSchema);

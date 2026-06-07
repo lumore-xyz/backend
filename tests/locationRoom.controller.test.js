@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createLocationRoom,
+  getNearbyLocationRooms,
   pinLocationRoom,
   rejoinLocationRoomPool,
   unpinLocationRoom,
@@ -52,6 +53,8 @@ const withRoomControllerMocks = async (
       description: "",
       creator: "user-1",
       status: "active",
+      visibility: "public",
+      imageUrl: "",
       location: {
         type: "Point",
         coordinates: [77.6408, 12.9784],
@@ -75,6 +78,7 @@ const withRoomControllerMocks = async (
 ) => {
   const originals = {
     roomCreate: LocationRoom.create,
+    roomAggregate: LocationRoom.aggregate,
     roomFindOne: LocationRoom.findOne,
     pinFindOneAndUpdate: LocationRoomPin.findOneAndUpdate,
     pinFindOne: LocationRoomPin.findOne,
@@ -105,6 +109,7 @@ const withRoomControllerMocks = async (
     await fn(calls);
   } finally {
     LocationRoom.create = originals.roomCreate;
+    LocationRoom.aggregate = originals.roomAggregate;
     LocationRoom.findOne = originals.roomFindOne;
     LocationRoomPin.findOneAndUpdate = originals.pinFindOneAndUpdate;
     LocationRoomPin.findOne = originals.pinFindOne;
@@ -133,6 +138,7 @@ test("createLocationRoom creates a room and joins the creator to the pool", asyn
       body: {
         title: "Indiranagar",
         description: "Evening people nearby",
+        status: "private",
         latitude: 12.9784,
         longitude: 77.6408,
         formattedAddress: "Indiranagar, Bengaluru",
@@ -144,11 +150,81 @@ test("createLocationRoom creates a room and joins the creator to the pool", asyn
 
     assert.equal(res.statusCode, 201);
     assert.equal(calls.createdRoom.title, "Indiranagar");
+    assert.equal(calls.createdRoom.visibility, "private");
     assert.deepEqual(calls.createdRoom.location.coordinates, [77.6408, 12.9784]);
     assert.equal(calls.pinUpdates[0].update.$set.isPinned, true);
     assert.equal(calls.pinUpdates[0].update.$set.inPool, true);
     assert.equal(res.body.userState.poolStatus, "in_pool");
+    assert.equal(res.body.room.visibility, "private");
   });
+});
+
+test("getNearbyLocationRooms lists public rooms ranked by distance and pool size", async () => {
+  const baseRoom = {
+    title: "Room",
+    description: "",
+    creator: "user-1",
+    status: "active",
+    visibility: "public",
+    imageUrl: "",
+    location: {
+      type: "Point",
+      coordinates: [77.6408, 12.9784],
+      formattedAddress: "Bengaluru",
+    },
+    nextMatchAt: new Date("2026-06-07T00:00:00.000Z"),
+    createdAt: new Date("2026-06-06T00:00:00.000Z"),
+    updatedAt: new Date("2026-06-06T00:00:00.000Z"),
+  };
+  const rooms = [
+    { ...baseRoom, _id: "near-empty", title: "Near Empty", distanceMeters: 500 },
+    { ...baseRoom, _id: "busy-nearby", title: "Busy Nearby", distanceMeters: 900 },
+    { ...baseRoom, _id: "far-busy", title: "Far Busy", distanceMeters: 3000 },
+  ];
+  let aggregatePipeline = null;
+  const originals = {
+    roomAggregate: LocationRoom.aggregate,
+    pinAggregate: LocationRoomPin.aggregate,
+    pinFind: LocationRoomPin.find,
+  };
+
+  LocationRoom.aggregate = async (pipeline) => {
+    aggregatePipeline = pipeline;
+    return rooms;
+  };
+  LocationRoomPin.aggregate = async () => [
+    { _id: "near-empty", pinnedCount: 0, poolCount: 0 },
+    { _id: "busy-nearby", pinnedCount: 7, poolCount: 7 },
+    { _id: "far-busy", pinnedCount: 20, poolCount: 20 },
+  ];
+  LocationRoomPin.find = () => createLeanChain([]);
+
+  try {
+    const req = {
+      user: { _id: "viewer-1" },
+      query: { latitude: 12.9784, longitude: 77.6408, radiusKm: 10 },
+      body: {},
+    };
+    const res = createRes();
+
+    await getNearbyLocationRooms(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body.rooms.map((room) => room._id), [
+      "busy-nearby",
+      "near-empty",
+      "far-busy",
+    ]);
+    assert.deepEqual(aggregatePipeline[0].$geoNear.query, {
+      status: "active",
+      visibility: "public",
+    });
+    assert.equal(res.body.rooms[0].poolCount, 7);
+  } finally {
+    LocationRoom.aggregate = originals.roomAggregate;
+    LocationRoomPin.aggregate = originals.pinAggregate;
+    LocationRoomPin.find = originals.pinFind;
+  }
 });
 
 test("pin, rejoin, and unpin update pool state", async () => {
