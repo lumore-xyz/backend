@@ -1,11 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 
-const DEFAULT_MODEL = [
-  "gemma-3-4b-it",
-  "gemma-3-1b-it",
-  "gemma-3-12b-it",
-  "gemma-3-27b-it",
-];
+const DEFAULT_MODEL = ["gemma-4-31b-it"];
 const LOG_PREFIX = "[matchnote-ai]";
 const MODEL_LIST_TTL_MS = 10 * 60 * 1000;
 let ai = null;

@@ -1,11 +1,11 @@
-import LocationRoomCycle from "../models/locationRoomCycle.model.js";
-import LocationRoomPin from "../models/locationRoomPin.model.js";
 import LocationRoom, {
   LOCATION_ROOM_MATCH_INTERVAL_MS,
 } from "../models/locationRoom.model.js";
+import LocationRoomCycle from "../models/locationRoomCycle.model.js";
+import LocationRoomPin from "../models/locationRoomPin.model.js";
+import UserPreference from "../models/preference.model.js";
 import MatchRoom from "../models/room.model.js";
 import ThisOrThatAnswer from "../models/thisOrThatAnswer.model.js";
-import UserPreference from "../models/preference.model.js";
 import User from "../models/user.model.js";
 import {
   calculateDistanceMeters,
@@ -35,22 +35,24 @@ const getId = (value) => value?._id?.toString?.() || value?.toString?.() || "";
 const getPairKey = (userId1, userId2) =>
   [getId(userId1), getId(userId2)].sort().join(":");
 
-const hasValidLocation = (user) => Boolean(getGeoPointFromLocation(user?.location));
+const hasValidLocation = (user) =>
+  Boolean(getGeoPointFromLocation(user?.location));
 
 const isProfileEligibleForRoom = (user) =>
   Boolean(
     user &&
-      !user.isArchived &&
-      user.credits >= CREDIT_RULES.CONVERSATION_COST &&
-      user.gender &&
-      user.dob &&
-      hasValidLocation(user),
+    !user.isArchived &&
+    user.credits >= CREDIT_RULES.CONVERSATION_COST &&
+    user.gender &&
+    user.dob &&
+    hasValidLocation(user),
   );
 
 const getFailureReason = (user) => {
   if (!user) return "user_not_found";
   if (user.isArchived) return "archived_user";
-  if (user.credits < CREDIT_RULES.CONVERSATION_COST) return "insufficient_credits";
+  if (user.credits < CREDIT_RULES.CONVERSATION_COST)
+    return "insufficient_credits";
   if (!user.gender || !user.dob) return "missing_profile";
   if (!hasValidLocation(user)) return "missing_location";
   return "";
@@ -116,7 +118,12 @@ const buildRoomMatchingNote = ({
   reasons: ["room_pool_compatibility", "mutual_preferences"],
 });
 
-const buildRoomMatchPayload = ({ room, matchRoom, matchedUserId, matchingNote }) => ({
+const buildRoomMatchPayload = ({
+  room,
+  matchRoom,
+  matchedUserId,
+  matchingNote,
+}) => ({
   roomId: matchRoom._id.toString(),
   chatRoomId: matchRoom._id.toString(),
   matchedUser: matchedUserId.toString(),
@@ -166,7 +173,10 @@ export const selectRoomMatchPairs = ({
   for (const edge of sortedEdges) {
     const userId1 = getId(edge.userId1);
     const userId2 = getId(edge.userId2);
-    if ((matchCounts.get(userId1) || 0) === 0 && (matchCounts.get(userId2) || 0) === 0) {
+    if (
+      (matchCounts.get(userId1) || 0) === 0 &&
+      (matchCounts.get(userId2) || 0) === 0
+    ) {
       selectEdge(edge);
     }
   }
@@ -179,8 +189,10 @@ export const selectRoomMatchPairs = ({
       if (usedPairs.has(getPairKey(userId1, userId2))) return false;
       if (userId1 !== userId && userId2 !== userId) return false;
       const otherUserId = userId1 === userId ? userId2 : userId1;
-      return (matchCounts.get(otherUserId) || 0) > 0 &&
-        (matchCounts.get(otherUserId) || 0) < maxMatchesPerUser;
+      return (
+        (matchCounts.get(otherUserId) || 0) > 0 &&
+        (matchCounts.get(otherUserId) || 0) < maxMatchesPerUser
+      );
     });
     if (edge) selectEdge(edge);
   }
@@ -194,7 +206,13 @@ export const selectRoomMatchPairs = ({
   };
 };
 
-const buildCompatibilityEdges = async ({ room, cycle, users, prefsByUser, now }) => {
+const buildCompatibilityEdges = async ({
+  room,
+  cycle,
+  users,
+  prefsByUser,
+  now,
+}) => {
   const userIds = users.map((user) => user._id.toString());
   const [answersByUser, existingActivePairSet] = await Promise.all([
     getAnswersByUser(userIds),
@@ -203,7 +221,11 @@ const buildCompatibilityEdges = async ({ room, cycle, users, prefsByUser, now })
   const edges = [];
 
   for (let leftIndex = 0; leftIndex < users.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < users.length; rightIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < users.length;
+      rightIndex += 1
+    ) {
       const userA = users[leftIndex];
       const userB = users[rightIndex];
       const pairKey = getPairKey(userA._id, userB._id);
@@ -223,7 +245,10 @@ const buildCompatibilityEdges = async ({ room, cycle, users, prefsByUser, now })
       const distanceMeters = getDistanceMetersBetweenUsers(userA, userB);
       const maxDistanceKm = Math.max(
         1,
-        Math.min(Number(prefsA?.distance || 50), Number(prefsB?.distance || 50)),
+        Math.min(
+          Number(prefsA?.distance || 50),
+          Number(prefsB?.distance || 50),
+        ),
       );
       const userBForScore = { ...userB, distance: distanceMeters };
       const userAForScore = { ...userA, distance: distanceMeters };
@@ -236,7 +261,8 @@ const buildCompatibilityEdges = async ({ room, cycle, users, prefsByUser, now })
           now,
           maxDistanceKm,
           seekerAnswers: answersByUser.get(userA._id.toString()) || new Map(),
-          candidateAnswers: answersByUser.get(userB._id.toString()) || new Map(),
+          candidateAnswers:
+            answersByUser.get(userB._id.toString()) || new Map(),
         },
       });
       const scoreBA = scoreCandidate({
@@ -248,7 +274,8 @@ const buildCompatibilityEdges = async ({ room, cycle, users, prefsByUser, now })
           now,
           maxDistanceKm,
           seekerAnswers: answersByUser.get(userB._id.toString()) || new Map(),
-          candidateAnswers: answersByUser.get(userA._id.toString()) || new Map(),
+          candidateAnswers:
+            answersByUser.get(userA._id.toString()) || new Map(),
         },
       });
       const score = (scoreAB.totalScore + scoreBA.totalScore) / 2;
@@ -272,7 +299,13 @@ const buildCompatibilityEdges = async ({ room, cycle, users, prefsByUser, now })
   return edges;
 };
 
-const notifyRoomMatch = async ({ room, matchRoom, userId1, userId2, balances }) => {
+const notifyRoomMatch = async ({
+  room,
+  matchRoom,
+  userId1,
+  userId2,
+  balances,
+}) => {
   const roomId = matchRoom._id.toString();
   const payloadForUser1 = buildRoomMatchPayload({
     room,
@@ -289,8 +322,14 @@ const notifyRoomMatch = async ({ room, matchRoom, userId1, userId2, balances }) 
 
   socketService.emitToUser(userId1, "roomMatchFound", payloadForUser1);
   socketService.emitToUser(userId2, "roomMatchFound", payloadForUser2);
-  socketService.emitToUser(userId1, "inbox_updated", { roomId, status: "active" });
-  socketService.emitToUser(userId2, "inbox_updated", { roomId, status: "active" });
+  socketService.emitToUser(userId1, "inbox_updated", {
+    roomId,
+    status: "active",
+  });
+  socketService.emitToUser(userId2, "inbox_updated", {
+    roomId,
+    status: "active",
+  });
   socketService.emitToUser(userId1, "creditsUpdated", {
     credits: balances?.[userId1.toString()],
     reason: "room_conversation_start",
@@ -329,7 +368,9 @@ const notifyRoomMatch = async ({ room, matchRoom, userId1, userId2, balances }) 
 };
 
 const markInsufficientCreditUsers = async ({ roomId, userIds, now }) => {
-  const users = await User.find({ _id: { $in: userIds } }).select("credits").lean();
+  const users = await User.find({ _id: { $in: userIds } })
+    .select("credits")
+    .lean();
   const insufficientUserIds = users
     .filter((user) => user.credits < CREDIT_RULES.CONVERSATION_COST)
     .map((user) => user._id);
@@ -356,7 +397,10 @@ const createRoomMatches = async ({ room, cycle, pairs, now }) => {
   for (const pair of pairs) {
     const userId1 = pair.userId1;
     const userId2 = pair.userId2;
-    const creditSpend = await spendCreditsForConversationStart(userId1, userId2);
+    const creditSpend = await spendCreditsForConversationStart(
+      userId1,
+      userId2,
+    );
     if (!creditSpend.success) {
       const insufficientUserIds = await markInsufficientCreditUsers({
         roomId: room._id,
@@ -514,7 +558,9 @@ export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
     now,
   });
   const completedAt = new Date();
-  const nextMatchAt = new Date(completedAt.getTime() + LOCATION_ROOM_MATCH_INTERVAL_MS);
+  const nextMatchAt = new Date(
+    completedAt.getTime() + LOCATION_ROOM_MATCH_INTERVAL_MS,
+  );
   const matchedUserCount = created.matchedUserIds.size;
   const finalSkippedUsers = [...skippedUsers, ...created.skippedUsers];
 
@@ -553,7 +599,10 @@ export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
   };
 };
 
-export const processDueLocationRoomCycle = async ({ roomId, now = new Date() }) => {
+export const processDueLocationRoomCycle = async ({
+  roomId,
+  now = new Date(),
+}) => {
   const staleLockBefore = new Date(now.getTime() - ROOM_CYCLE_LOCK_STALE_MS);
   const room = await LocationRoom.findOneAndUpdate(
     {
@@ -610,7 +659,7 @@ export const runDueLocationRoomCycles = async ({
   })
     .select("_id")
     .sort({ nextMatchAt: 1 })
-    .limit(limit)
+    // .limit(limit)
     .lean();
 
   const results = [];
