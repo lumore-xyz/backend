@@ -24,7 +24,7 @@ import {
   CREDIT_RULES,
   spendCreditsForConversationStart,
 } from "./credits.service.js";
-import { generateGeminiMatchNotesByUser } from "./matchNoteAi.service.js";
+import { generateMatchNotesByUser } from "./matchNote.service.js";
 import { getOrCreateMatchRoom } from "./matching.service.js";
 import { findBestMatch } from "./matchmaking.service.js";
 import { sendNotificationToUser } from "./push.service.js";
@@ -110,7 +110,7 @@ const normalizeMessagePayload = (messageDoc, extra = {}) => ({
   ...extra,
 });
 
-const buildAiMatchNote = async ({ seekerId, candidateId, matchingNote }) => {
+const buildMatchNote = async ({ seekerId, candidateId, matchingNote }) => {
   if (!matchingNote || typeof matchingNote !== "object") return matchingNote;
 
   let seeker = null;
@@ -129,30 +129,30 @@ const buildAiMatchNote = async ({ seekerId, candidateId, matchingNote }) => {
     }
   } catch (error) {
     console.error(
-      "[matchnote-ai] Failed to load users:",
+      "[matchnote] Failed to load users:",
       error?.message || error,
     );
   }
 
-  const aiResult = await generateGeminiMatchNotesByUser({
+  const matchNoteResult = await generateMatchNotesByUser({
     seeker,
     candidate,
     matchingNote,
   });
-  console.info("[matchnote-ai] generation result", {
+  console.info("[matchnote] generation result", {
     seekerId: String(seekerId),
     candidateId: String(candidateId),
-    usedFallback: Boolean(aiResult?.meta?.usedFallback),
-    reasons: aiResult?.meta?.reasons || [],
-    model: aiResult?.meta?.model || null,
+    usedFallback: Boolean(matchNoteResult?.meta?.usedFallback),
+    reasons: matchNoteResult?.meta?.reasons || [],
+    model: matchNoteResult?.meta?.model || null,
   });
 
   return {
     ...matchingNote,
-    oneSentenceNote: aiResult.primarySentence,
-    notesByUser: aiResult.notesByUser,
+    oneSentenceNote: matchNoteResult.primarySentence,
+    notesByUser: matchNoteResult.notesByUser,
     aiSummary: {
-      ...aiResult.meta,
+      ...matchNoteResult.meta,
       generatedAt: new Date().toISOString(),
     },
   };
@@ -392,7 +392,7 @@ const handleConnection = (socket) => {
       const match = await findBestMatch({ userId, now: new Date() });
 
       if (match) {
-        const enrichedMatchingNote = await buildAiMatchNote({
+        const enrichedMatchingNote = await buildMatchNote({
           seekerId: userId,
           candidateId: match.uid,
           matchingNote: match.matchingNote || null,
