@@ -1,6 +1,12 @@
 import mongoose from "mongoose";
 import CreditLedger from "../models/creditLedger.model.js";
 import User from "../models/user.model.js";
+import {
+  isTransactionUnsupportedError,
+  runInTransaction,
+} from "../utils/transaction.js";
+
+const CONVERSATION_CREDIT_LOG_PREFIX = "[credits:conversation-start]";
 
 export const CREDIT_RULES = {
   SIGNUP_BONUS: 10,
@@ -37,6 +43,42 @@ export const getNextUtcDayStart = (date = new Date()) => {
 
 export const getRewardedAdWindowStart = (date = new Date()) =>
   new Date(date.getTime() - CREDIT_RULES.REWARDED_AD_WINDOW_MS);
+
+const getMongoConnectionDebugInfo = () => ({
+  readyState: mongoose.connection.readyState,
+  host: mongoose.connection.host || null,
+  name: mongoose.connection.name || null,
+});
+
+const logConversationCreditStep = (stage, details = {}) => {
+  console.info(`${CONVERSATION_CREDIT_LOG_PREFIX} ${stage}`, details);
+};
+
+const buildConversationLedgerEntries = ({
+  initiatorId,
+  partnerId,
+  initiatorBalance,
+  partnerBalance,
+}) => [
+  {
+    user: initiatorId,
+    amount: -CREDIT_RULES.CONVERSATION_COST,
+    type: "conversation_start",
+    balanceAfter: initiatorBalance,
+    referenceType: "user",
+    referenceId: partnerId.toString(),
+    meta: { partnerId: partnerId.toString() },
+  },
+  {
+    user: partnerId,
+    amount: -CREDIT_RULES.CONVERSATION_COST,
+    type: "conversation_start",
+    balanceAfter: partnerBalance,
+    referenceType: "user",
+    referenceId: initiatorId.toString(),
+    meta: { partnerId: initiatorId.toString() },
+  },
+];
 
 export const getRewardedAdQuotaFromClaims = (claims = [], now = new Date()) => {
   const windowStart = getRewardedAdWindowStart(now);
@@ -314,124 +356,231 @@ export const claimRewardedAdCredit = async ({
 export const spendCreditsForConversationStart = async (initiatorId, partnerId) => {
   const initiatorKey = initiatorId.toString();
   const partnerKey = partnerId.toString();
-  const runWithoutTransaction = async () => {
-    const u1 = await User.findOneAndUpdate(
-      { _id: initiatorId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
-      { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
-      { returnDocument: "after" }
-    );
-    if (!u1) {
-      return { success: false, reason: "INSUFFICIENT_CREDITS" };
-    }
+  const runWithoutTransaction = async (fallbackError = null) => {
+    logConversationCreditStep("fallback_start", {
+      initiatorId: initiatorKey,
+      partnerId: partnerKey,
+      connection: getMongoConnectionDebugInfo(),
+      trigger: fallbackError?.message || null,
+    });
 
-    const u2 = await User.findOneAndUpdate(
-      { _id: partnerId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
-      { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
-      { returnDocument: "after" }
-    );
-    if (!u2) {
-      await User.findByIdAndUpdate(initiatorId, {
-        $inc: { credits: CREDIT_RULES.CONVERSATION_COST },
+    let initiatorUser = null;
+    let partnerUser = null;
+    let initiatorLedger = null;
+
+    try {
+      initiatorUser = await User.findOneAndUpdate(
+        { _id: initiatorId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
+        { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
+        { returnDocument: "after" },
+      );
+      if (!initiatorUser) {
+        logConversationCreditStep("fallback_initiator_insufficient", {
+          initiatorId: initiatorKey,
+          partnerId: partnerKey,
+        });
+        return { success: false, reason: "INSUFFICIENT_CREDITS" };
+      }
+
+      logConversationCreditStep("fallback_initiator_debited", {
+        initiatorId: initiatorKey,
+        balanceAfter: initiatorUser.credits,
       });
-      return { success: false, reason: "INSUFFICIENT_CREDITS" };
-    }
 
-    await CreditLedger.insertMany([
-      {
+      partnerUser = await User.findOneAndUpdate(
+        { _id: partnerId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
+        { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
+        { returnDocument: "after" },
+      );
+      if (!partnerUser) {
+        logConversationCreditStep("fallback_partner_insufficient", {
+          initiatorId: initiatorKey,
+          partnerId: partnerKey,
+          initiatorBalanceBeforeRollback: initiatorUser.credits,
+        });
+        await User.findByIdAndUpdate(initiatorId, {
+          $inc: { credits: CREDIT_RULES.CONVERSATION_COST },
+        });
+        logConversationCreditStep("fallback_initiator_rollback_complete", {
+          initiatorId: initiatorKey,
+        });
+        return { success: false, reason: "INSUFFICIENT_CREDITS" };
+      }
+
+      logConversationCreditStep("fallback_partner_debited", {
+        partnerId: partnerKey,
+        balanceAfter: partnerUser.credits,
+      });
+
+      initiatorLedger = await CreditLedger.create({
         user: initiatorId,
         amount: -CREDIT_RULES.CONVERSATION_COST,
         type: "conversation_start",
-        balanceAfter: u1.credits,
+        balanceAfter: initiatorUser.credits,
         referenceType: "user",
         referenceId: partnerKey,
         meta: { partnerId: partnerKey },
-      },
-      {
+      });
+
+      await CreditLedger.create({
         user: partnerId,
         amount: -CREDIT_RULES.CONVERSATION_COST,
         type: "conversation_start",
-        balanceAfter: u2.credits,
+        balanceAfter: partnerUser.credits,
         referenceType: "user",
         referenceId: initiatorKey,
         meta: { partnerId: initiatorKey },
-      },
-    ]);
+      });
 
-    return {
-      success: true,
-      balances: {
-        [initiatorKey]: u1.credits,
-        [partnerKey]: u2.credits,
-      },
-    };
-  };
+      logConversationCreditStep("fallback_ledger_written", {
+        initiatorId: initiatorKey,
+        partnerId: partnerKey,
+      });
 
-  const session = await mongoose.startSession();
-  try {
-    let balances = null;
-    await session.withTransaction(async () => {
-      const [u1, u2] = await Promise.all([
-        User.findOneAndUpdate(
-          { _id: initiatorId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
-          { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
-          { returnDocument: "after", session }
-        ),
-        User.findOneAndUpdate(
-          { _id: partnerId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
-          { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
-          { returnDocument: "after", session }
-        ),
-      ]);
+      return {
+        success: true,
+        balances: {
+          [initiatorKey]: initiatorUser.credits,
+          [partnerKey]: partnerUser.credits,
+        },
+      };
+    } catch (fallbackWriteError) {
+      logConversationCreditStep("fallback_error", {
+        initiatorId: initiatorKey,
+        partnerId: partnerKey,
+        message: fallbackWriteError?.message || "unknown_error",
+      });
 
-      if (!u1 || !u2) {
-        throw new Error("INSUFFICIENT_CREDITS");
+      if (initiatorLedger?._id) {
+        await CreditLedger.deleteOne({ _id: initiatorLedger._id });
+      }
+      if (partnerUser?._id) {
+        await User.findByIdAndUpdate(partnerId, {
+          $inc: { credits: CREDIT_RULES.CONVERSATION_COST },
+        });
+      }
+      if (initiatorUser?._id) {
+        await User.findByIdAndUpdate(initiatorId, {
+          $inc: { credits: CREDIT_RULES.CONVERSATION_COST },
+        });
       }
 
-      await CreditLedger.insertMany(
-        [
-          {
-            user: initiatorId,
-            amount: -CREDIT_RULES.CONVERSATION_COST,
-            type: "conversation_start",
-            balanceAfter: u1.credits,
-            referenceType: "user",
-            referenceId: partnerId.toString(),
-            meta: { partnerId: partnerId.toString() },
-          },
-          {
-            user: partnerId,
-            amount: -CREDIT_RULES.CONVERSATION_COST,
-            type: "conversation_start",
-            balanceAfter: u2.credits,
-            referenceType: "user",
-            referenceId: initiatorId.toString(),
-            meta: { partnerId: initiatorId.toString() },
-          },
-        ],
-        { session }
-      );
+      throw fallbackWriteError;
+    }
+  };
 
-      balances = {
-        [initiatorKey]: u1.credits,
-        [partnerKey]: u2.credits,
-      };
+  logConversationCreditStep("start", {
+    initiatorId: initiatorKey,
+    partnerId: partnerKey,
+    connection: getMongoConnectionDebugInfo(),
+  });
+
+  try {
+    const transactionResult = await runInTransaction(
+      async (session) => {
+        logConversationCreditStep("session_started", {
+          initiatorId: initiatorKey,
+          partnerId: partnerKey,
+          hasSession: Boolean(session),
+          inTransaction: session.inTransaction(),
+        });
+
+        logConversationCreditStep("transaction_begin", {
+          initiatorId: initiatorKey,
+          partnerId: partnerKey,
+          inTransaction: session.inTransaction(),
+        });
+
+        const initiatorUser = await User.findOneAndUpdate(
+          { _id: initiatorId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
+          { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
+          { returnDocument: "after", session },
+        );
+        const partnerUser = await User.findOneAndUpdate(
+          { _id: partnerId, credits: { $gte: CREDIT_RULES.CONVERSATION_COST } },
+          { $inc: { credits: -CREDIT_RULES.CONVERSATION_COST } },
+          { returnDocument: "after", session },
+        );
+
+        logConversationCreditStep("transaction_debit_results", {
+          initiatorId: initiatorKey,
+          partnerId: partnerKey,
+          initiatorDebited: Boolean(initiatorUser),
+          partnerDebited: Boolean(partnerUser),
+          initiatorBalanceAfter: initiatorUser?.credits ?? null,
+          partnerBalanceAfter: partnerUser?.credits ?? null,
+        });
+
+        if (!initiatorUser || !partnerUser) {
+          logConversationCreditStep("transaction_insufficient_credits", {
+            initiatorId: initiatorKey,
+            partnerId: partnerKey,
+            initiatorDebited: Boolean(initiatorUser),
+            partnerDebited: Boolean(partnerUser),
+          });
+          throw new Error("INSUFFICIENT_CREDITS");
+        }
+
+        const createdLedgerEntries = await CreditLedger.create(
+          buildConversationLedgerEntries({
+            initiatorId,
+            partnerId,
+            initiatorBalance: initiatorUser.credits,
+            partnerBalance: partnerUser.credits,
+          }),
+          { session },
+        );
+
+        logConversationCreditStep("transaction_ledger_written", {
+          initiatorId: initiatorKey,
+          partnerId: partnerKey,
+          ledgerCount: createdLedgerEntries.length,
+        });
+
+        return {
+          success: true,
+          balances: {
+            [initiatorKey]: initiatorUser.credits,
+            [partnerKey]: partnerUser.credits,
+          },
+        };
+      },
+      {
+        fallback: async (fallbackError) => {
+          logConversationCreditStep("transaction_fallback_triggered", {
+            initiatorId: initiatorKey,
+            partnerId: partnerKey,
+            message: fallbackError?.message || "unknown_error",
+          });
+          return await runWithoutTransaction(fallbackError);
+        },
+        shouldFallback: isTransactionUnsupportedError,
+      },
+    );
+
+    if (transactionResult?.success) {
+      logConversationCreditStep("transaction_success", {
+        initiatorId: initiatorKey,
+        partnerId: partnerKey,
+        balances: transactionResult.balances,
+      });
+    }
+
+    return transactionResult;
+  } catch (error) {
+    logConversationCreditStep("transaction_error", {
+      initiatorId: initiatorKey,
+      partnerId: partnerKey,
+      message: error?.message || "unknown_error",
+      name: error?.name || null,
+      code: error?.code ?? null,
+      connection: getMongoConnectionDebugInfo(),
     });
 
-    return { success: true, balances };
-  } catch (error) {
     if (error.message === "INSUFFICIENT_CREDITS") {
       return { success: false, reason: "INSUFFICIENT_CREDITS" };
     }
-    const msg = String(error?.message || "");
-    const nonTxnMongo =
-      msg.includes("Transaction numbers are only allowed on a replica set member or mongos") ||
-      msg.includes("Transaction support is not available");
-    if (nonTxnMongo) {
-      return await runWithoutTransaction();
-    }
     throw error;
-  } finally {
-    await session.endSession();
   }
 };
 

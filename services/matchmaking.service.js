@@ -4,6 +4,8 @@ import ThisOrThatAnswer from "../models/thisOrThatAnswer.model.js";
 import User from "../models/user.model.js";
 import { CREDIT_RULES } from "./credits.service.js";
 
+const MATCHMAKING_LOG_PREFIX = "[matchmaking]";
+
 const POOL_MODE = {
   NORMAL: "NORMAL",
   LOW_POOL: "LOW_POOL",
@@ -60,6 +62,13 @@ const DEFAULT_PREFS = {
 const SEEKER_MATCH_SELECT =
   "_id gender dob interests languages religion diet lifestyle isMatching credits matchmakingTimestamp location updatedAt";
 
+const toLoggableUserId = (value) =>
+  value?._id?.toString?.() || value?.toString?.() || null;
+
+const logMatchmakingStep = (stage, details = {}) => {
+  console.info(`${MATCHMAKING_LOG_PREFIX} ${stage}`, details);
+};
+
 export const resolvePoolMode = ({ poolSize, waitMs }) => {
   if (poolSize >= 30) return POOL_MODE.NORMAL;
   if (poolSize >= 8) return POOL_MODE.LOW_POOL;
@@ -69,15 +78,37 @@ export const resolvePoolMode = ({ poolSize, waitMs }) => {
 
 async function getSeekerMatchContext({ userId }) {
   const seeker = await User.findById(userId).select(SEEKER_MATCH_SELECT).lean();
-  if (!seeker) return null;
-  if (!hasValidLocation(seeker)) return null;
-  if (!isSupportedGender(seeker.gender) || !seeker.dob) return null;
+  if (!seeker) {
+    logMatchmakingStep("seeker_context_missing_user", {
+      userId: toLoggableUserId(userId),
+    });
+    return null;
+  }
+  if (!hasValidLocation(seeker)) {
+    logMatchmakingStep("seeker_context_missing_location", {
+      userId: seeker._id.toString(),
+    });
+    return null;
+  }
+  if (!isSupportedGender(seeker.gender) || !seeker.dob) {
+    logMatchmakingStep("seeker_context_incomplete_profile", {
+      userId: seeker._id.toString(),
+      gender: seeker.gender || null,
+      hasDob: Boolean(seeker.dob),
+    });
+    return null;
+  }
 
   const seekerPrefDoc = await UserPreference.findOne({ user: userId }).lean();
   const seekerPrefs = normalizePreference(seekerPrefDoc, {
     userGender: seeker.gender,
   });
-  if (!seekerPrefs.interestedIn.length) return null;
+  if (!seekerPrefs.interestedIn.length) {
+    logMatchmakingStep("seeker_context_missing_interest_preferences", {
+      userId: seeker._id.toString(),
+    });
+    return null;
+  }
 
   return {
     seeker,
@@ -166,161 +197,239 @@ function buildPassConfigs({
 }
 
 export const findBestMatch = async ({ userId, now = new Date() }) => {
-  const seekerContext = await getSeekerMatchContext({ userId });
-  if (!seekerContext) return null;
-
-  const { seeker, seekerId, seekerPrefs, baseDistanceKm } = seekerContext;
-  const waitMs = getWaitMs(seeker.matchmakingTimestamp, now);
-  const matchingPoolCount = await getMatchingPoolCount({ seekerId });
-  const shouldRelaxForSmallPool =
-    matchingPoolCount < SMALL_MATCHING_POOL_THRESHOLD;
-  const firstPassDistanceKm = getFirstPassDistanceKm({
-    baseDistanceKm,
-    shouldRelaxForSmallPool,
+  logMatchmakingStep("find_best_match_start", {
+    userId: toLoggableUserId(userId),
+    now: now.toISOString(),
   });
 
-  const basePool = await getCandidateSet({
-    seeker,
-    seekerPrefs,
-    distanceKm: firstPassDistanceKm,
-    now,
-  });
-
-  const poolMode = resolvePoolMode({
-    poolSize: basePool.selected.length,
-    waitMs,
-  });
-  const minScoreForMode =
-    MIN_SCORE_BY_MODE[poolMode] ?? MIN_SCORE_BY_MODE.NORMAL;
-
-  const passConfigs = buildPassConfigs({
-    firstPassDistanceKm,
-    minScoreForMode,
-    shouldRelaxForSmallPool,
-  });
-
-  const observability = {
-    matching_pool_count: matchingPoolCount,
-    small_pool_relaxation: shouldRelaxForSmallPool,
-    eligible_pool_count: 0,
-    rejected_interest_mismatch: 0,
-    rejected_age_mismatch: 0,
-    fallback_type_used: "none",
-    age_relaxation_years_used: 0,
-    null_match_reason: null,
-  };
-
-  let nullMatchReason = "no_eligible_candidates";
-
-  for (let passIndex = 0; passIndex < passConfigs.length; passIndex += 1) {
-    const pass = passConfigs[passIndex];
-    const candidateSetResult =
-      passIndex === 0
-        ? basePool
-        : await getCandidateSet({
-            seeker,
-            seekerPrefs,
-            distanceKm: pass.distanceKm,
-            ageRelaxationYears: pass.ageRelaxationYears,
-            now,
-          });
-
-    observability.rejected_interest_mismatch +=
-      candidateSetResult.reasonCounts.interest_mismatch || 0;
-    observability.rejected_age_mismatch +=
-      candidateSetResult.reasonCounts.age_out_of_range || 0;
-    observability.eligible_pool_count = Math.max(
-      observability.eligible_pool_count,
-      candidateSetResult.selected.length,
-    );
-
-    if (!candidateSetResult.selected.length) {
-      continue;
+  try {
+    const seekerContext = await getSeekerMatchContext({ userId });
+    if (!seekerContext) {
+      logMatchmakingStep("find_best_match_aborted", {
+        userId: toLoggableUserId(userId),
+        reason: "missing_seeker_context",
+      });
+      return null;
     }
 
-    const candidateSet = candidateSetResult.selected;
-    const [answersByUser, recentRematchSet] = await Promise.all([
-      getAnswersByUser([
-        seekerId,
-        ...candidateSet.map((c) => c.user._id.toString()),
-      ]),
-      getRecentRematchSet(seekerId, now),
-    ]);
-
-    const scored = candidateSet.map(({ user, prefs }) => {
-      const candidateId = user._id.toString();
-      const scoredCandidate = scoreCandidate({
-        seeker,
-        candidate: user,
-        context: {
-          seekerPrefs,
-          candidatePrefs: prefs,
-          now,
-          maxDistanceKm: pass.distanceKm,
-          seekerAnswers: answersByUser.get(seekerId) || new Map(),
-          candidateAnswers: answersByUser.get(candidateId) || new Map(),
-        },
-      });
-
-      return {
-        ...scoredCandidate,
-        user,
-        prefs,
-        candidateId,
-        isRecentRematch: recentRematchSet.has(candidateId),
-        matchmakingTimestamp: user.matchmakingTimestamp || null,
-        distance: Number(user.distance || 0),
-      };
+    const { seeker, seekerId, seekerPrefs, baseDistanceKm } = seekerContext;
+    const waitMs = getWaitMs(seeker.matchmakingTimestamp, now);
+    const matchingPoolCount = await getMatchingPoolCount({ seekerId });
+    const shouldRelaxForSmallPool =
+      matchingPoolCount < SMALL_MATCHING_POOL_THRESHOLD;
+    const firstPassDistanceKm = getFirstPassDistanceKm({
+      baseDistanceKm,
+      shouldRelaxForSmallPool,
     });
 
-    let filtered = scored
-      .map((item) => ({
-        ...item,
-        totalScore: Math.max(
-          0,
-          item.totalScore - (item.isRecentRematch ? REMATCH_PENALTY : 0),
-        ),
-      }))
-      .filter((item) => item.totalScore >= pass.minScore)
-      .sort(compareCandidates);
+    const basePool = await getCandidateSet({
+      seeker,
+      seekerPrefs,
+      distanceKm: firstPassDistanceKm,
+      now,
+    });
 
-    if (!filtered.length) {
-      nullMatchReason = "below_threshold";
-      continue;
-    }
+    const poolMode = resolvePoolMode({
+      poolSize: basePool.selected.length,
+      waitMs,
+    });
+    const minScoreForMode =
+      MIN_SCORE_BY_MODE[poolMode] ?? MIN_SCORE_BY_MODE.NORMAL;
 
-    const winner = filtered[0];
-    const runnerUp = filtered[1] || null;
-    observability.fallback_type_used = pass.fallbackType;
-    observability.age_relaxation_years_used = pass.ageRelaxationYears;
-    observability.null_match_reason = null;
+    const passConfigs = buildPassConfigs({
+      firstPassDistanceKm,
+      minScoreForMode,
+      shouldRelaxForSmallPool,
+    });
 
-    const result = {
-      uid: winner.candidateId,
-      user: winner.user,
-      mode: poolMode,
-      score: winner.totalScore,
-      matchingNote: buildMatchingNote({
-        seeker,
-        seekerId,
-        seekerPrefs,
-        answersByUser,
-        winner,
-        poolMode,
+    logMatchmakingStep("find_best_match_pool_state", {
+      userId: seekerId,
+      waitMs,
+      matchingPoolCount,
+      shouldRelaxForSmallPool,
+      baseDistanceKm,
+      firstPassDistanceKm,
+      poolMode,
+      minScoreForMode,
+      basePoolRawCount: basePool.rawCount,
+      basePoolEligibleCount: basePool.selected.length,
+      basePoolReasonCounts: basePool.reasonCounts,
+      passConfigs,
+    });
+
+    const observability = {
+      matching_pool_count: matchingPoolCount,
+      small_pool_relaxation: shouldRelaxForSmallPool,
+      eligible_pool_count: 0,
+      rejected_interest_mismatch: 0,
+      rejected_age_mismatch: 0,
+      fallback_type_used: "none",
+      age_relaxation_years_used: 0,
+      null_match_reason: null,
+    };
+
+    let nullMatchReason = "no_eligible_candidates";
+
+    for (let passIndex = 0; passIndex < passConfigs.length; passIndex += 1) {
+      const pass = passConfigs[passIndex];
+      const candidateSetResult =
+        passIndex === 0
+          ? basePool
+          : await getCandidateSet({
+              seeker,
+              seekerPrefs,
+              distanceKm: pass.distanceKm,
+              ageRelaxationYears: pass.ageRelaxationYears,
+              now,
+            });
+
+      observability.rejected_interest_mismatch +=
+        candidateSetResult.reasonCounts.interest_mismatch || 0;
+      observability.rejected_age_mismatch +=
+        candidateSetResult.reasonCounts.age_out_of_range || 0;
+      observability.eligible_pool_count = Math.max(
+        observability.eligible_pool_count,
+        candidateSetResult.selected.length,
+      );
+
+      logMatchmakingStep("find_best_match_pass_candidates", {
+        userId: seekerId,
+        passIndex: passIndex + 1,
+        distanceKm: pass.distanceKm,
+        minScore: pass.minScore,
         fallbackType: pass.fallbackType,
-        matchingPoolCount,
-        smallPoolRelaxed: shouldRelaxForSmallPool,
         ageRelaxationYears: pass.ageRelaxationYears,
+        rawCount: candidateSetResult.rawCount,
+        eligibleCount: candidateSetResult.selected.length,
+        reasonCounts: candidateSetResult.reasonCounts,
+      });
+
+      if (!candidateSetResult.selected.length) {
+        continue;
+      }
+
+      const candidateSet = candidateSetResult.selected;
+      const [answersByUser, recentRematchSet] = await Promise.all([
+        getAnswersByUser([
+          seekerId,
+          ...candidateSet.map((c) => c.user._id.toString()),
+        ]),
+        getRecentRematchSet(seekerId, now),
+      ]);
+
+      logMatchmakingStep("find_best_match_pass_context", {
+        userId: seekerId,
+        passIndex: passIndex + 1,
+        candidateCount: candidateSet.length,
+        answerUserCount: answersByUser.size,
+        recentRematchCount: recentRematchSet.size,
+      });
+
+      const scored = candidateSet.map(({ user, prefs }) => {
+        const candidateId = user._id.toString();
+        const scoredCandidate = scoreCandidate({
+          seeker,
+          candidate: user,
+          context: {
+            seekerPrefs,
+            candidatePrefs: prefs,
+            now,
+            maxDistanceKm: pass.distanceKm,
+            seekerAnswers: answersByUser.get(seekerId) || new Map(),
+            candidateAnswers: answersByUser.get(candidateId) || new Map(),
+          },
+        });
+
+        return {
+          ...scoredCandidate,
+          user,
+          prefs,
+          candidateId,
+          isRecentRematch: recentRematchSet.has(candidateId),
+          matchmakingTimestamp: user.matchmakingTimestamp || null,
+          distance: Number(user.distance || 0),
+        };
+      });
+
+      const filtered = scored
+        .map((item) => ({
+          ...item,
+          totalScore: Math.max(
+            0,
+            item.totalScore - (item.isRecentRematch ? REMATCH_PENALTY : 0),
+          ),
+        }))
+        .filter((item) => item.totalScore >= pass.minScore)
+        .sort(compareCandidates);
+
+      logMatchmakingStep("find_best_match_pass_scored", {
+        userId: seekerId,
+        passIndex: passIndex + 1,
+        scoredCount: scored.length,
+        filteredCount: filtered.length,
+        topCandidateId: filtered[0]?.candidateId || null,
+        topCandidateScore: filtered[0]?.totalScore ?? null,
+      });
+
+      if (!filtered.length) {
+        nullMatchReason = "below_threshold";
+        continue;
+      }
+
+      const winner = filtered[0];
+      const runnerUp = filtered[1] || null;
+      observability.fallback_type_used = pass.fallbackType;
+      observability.age_relaxation_years_used = pass.ageRelaxationYears;
+      observability.null_match_reason = null;
+
+      const result = {
+        uid: winner.candidateId,
+        user: winner.user,
+        mode: poolMode,
+        score: winner.totalScore,
+        matchingNote: buildMatchingNote({
+          seeker,
+          seekerId,
+          seekerPrefs,
+          answersByUser,
+          winner,
+          poolMode,
+          fallbackType: pass.fallbackType,
+          matchingPoolCount,
+          smallPoolRelaxed: shouldRelaxForSmallPool,
+          ageRelaxationYears: pass.ageRelaxationYears,
+          candidatePoolSize: filtered.length,
+          runnerUpScore: runnerUp?.totalScore ?? null,
+        }),
+      };
+
+      logMatchmakingStep("find_best_match_winner", {
+        userId: seekerId,
+        winnerId: result.uid,
+        score: result.score,
+        poolMode,
+        passIndex: passIndex + 1,
+        fallbackType: pass.fallbackType,
         candidatePoolSize: filtered.length,
         runnerUpScore: runnerUp?.totalScore ?? null,
-      }),
-    };
-    return result;
-  }
+      });
+      return result;
+    }
 
-  observability.null_match_reason = nullMatchReason;
-  console.info("[matchmaking]", observability);
-  return null;
+    observability.null_match_reason = nullMatchReason;
+    logMatchmakingStep("find_best_match_none", {
+      userId: seekerId,
+      ...observability,
+    });
+    return null;
+  } catch (error) {
+    console.error(`${MATCHMAKING_LOG_PREFIX} find_best_match_error`, {
+      userId: toLoggableUserId(userId),
+      message: error?.message || "unknown_error",
+      stack: error?.stack || null,
+    });
+    throw error;
+  }
 };
 
 export const getPreferenceBasedAvailableCount = async ({

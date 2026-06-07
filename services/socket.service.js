@@ -29,6 +29,8 @@ import { getOrCreateMatchRoom } from "./matching.service.js";
 import { findBestMatch } from "./matchmaking.service.js";
 import { sendNotificationToUser } from "./push.service.js";
 
+const MATCHMAKING_FLOW_LOG_PREFIX = "[matchmaking-flow]";
+
 /**
  * ============================================================
  * Shared Runtime State
@@ -43,6 +45,10 @@ let io = null;
 const userSockets = new Map();
 
 const DEFAULT_REACTION_EMOJI = "\u2764\uFE0F";
+
+const logMatchmakingFlow = (stage, details = {}) => {
+  console.info(`${MATCHMAKING_FLOW_LOG_PREFIX} ${stage}`, details);
+};
 
 const emitToUser = (userId, event, payload) => {
   const socket = userSockets.get(userId?.toString?.() || String(userId || ""));
@@ -111,7 +117,20 @@ const normalizeMessagePayload = (messageDoc, extra = {}) => ({
 });
 
 const buildMatchNote = async ({ seekerId, candidateId, matchingNote }) => {
-  if (!matchingNote || typeof matchingNote !== "object") return matchingNote;
+  if (!matchingNote || typeof matchingNote !== "object") {
+    logMatchmakingFlow("build_match_note_skipped", {
+      seekerId: String(seekerId),
+      candidateId: String(candidateId),
+      reason: "missing_matching_note",
+    });
+    return matchingNote;
+  }
+
+  logMatchmakingFlow("build_match_note_start", {
+    seekerId: String(seekerId),
+    candidateId: String(candidateId),
+    matchingNoteKeys: Object.keys(matchingNote || {}),
+  });
 
   let seeker = null;
   let candidate = null;
@@ -127,6 +146,12 @@ const buildMatchNote = async ({ seekerId, candidateId, matchingNote }) => {
       if (uid === String(seekerId)) seeker = user;
       if (uid === String(candidateId)) candidate = user;
     }
+    logMatchmakingFlow("build_match_note_users_loaded", {
+      seekerId: String(seekerId),
+      candidateId: String(candidateId),
+      seekerFound: Boolean(seeker),
+      candidateFound: Boolean(candidate),
+    });
   } catch (error) {
     console.error(
       "[matchnote] Failed to load users:",
@@ -145,6 +170,12 @@ const buildMatchNote = async ({ seekerId, candidateId, matchingNote }) => {
     usedFallback: Boolean(matchNoteResult?.meta?.usedFallback),
     reasons: matchNoteResult?.meta?.reasons || [],
     model: matchNoteResult?.meta?.model || null,
+  });
+  logMatchmakingFlow("build_match_note_complete", {
+    seekerId: String(seekerId),
+    candidateId: String(candidateId),
+    hasPrimarySentence: Boolean(matchNoteResult?.primarySentence),
+    noteCount: Object.keys(matchNoteResult?.notesByUser || {}).length,
   });
 
   return {
@@ -221,12 +252,31 @@ const initialize = (server) => {
  * - Push notifications are sent regardless of socket state
  */
 const createAndNotifyMatch = async (userId1, userId2, matchingNote = null) => {
+  logMatchmakingFlow("create_match_start", {
+    userId1: String(userId1),
+    userId2: String(userId2),
+    hasMatchingNote: Boolean(matchingNote),
+  });
+
   const creditSpend = await spendCreditsForConversationStart(userId1, userId2);
+  logMatchmakingFlow("create_match_credit_result", {
+    userId1: String(userId1),
+    userId2: String(userId2),
+    success: Boolean(creditSpend?.success),
+    reason: creditSpend?.reason || null,
+    balances: creditSpend?.balances || null,
+  });
   if (!creditSpend.success) {
     return { success: false, reason: creditSpend.reason };
   }
 
   const room = await getOrCreateMatchRoom(userId1, userId2, matchingNote);
+  logMatchmakingFlow("create_match_room_ready", {
+    userId1: String(userId1),
+    userId2: String(userId2),
+    roomId: room?._id?.toString?.() || null,
+    roomStatus: room?.status || null,
+  });
   await User.updateMany(
     { _id: { $in: [userId1, userId2] } },
     {
@@ -240,6 +290,12 @@ const createAndNotifyMatch = async (userId1, userId2, matchingNote = null) => {
 
   const s1 = userSockets.get(userId1);
   const s2 = userSockets.get(userId2);
+  logMatchmakingFlow("create_match_socket_presence", {
+    userId1: String(userId1),
+    userId2: String(userId2),
+    initiatorOnline: Boolean(s1),
+    partnerOnline: Boolean(s2),
+  });
 
   const matchNotificationForUser1 = sendNotificationToUser(userId1, {
     title: "Match found!",
@@ -297,6 +353,11 @@ const createAndNotifyMatch = async (userId1, userId2, matchingNote = null) => {
     matchNotificationForUser1,
     matchNotificationForUser2,
   ]);
+  logMatchmakingFlow("create_match_complete", {
+    userId1: String(userId1),
+    userId2: String(userId2),
+    roomId,
+  });
   return { success: true, roomId, balances: creditSpend.balances };
 };
 
@@ -367,12 +428,28 @@ const handleConnection = (socket) => {
   /* -------- Matchmaking -------- */
   socket.on("startMatchmaking", async () => {
     try {
+      logMatchmakingFlow("start_matchmaking_received", {
+        userId,
+        socketId: socket.id,
+      });
+
       const currentUser = await User.findById(userId).select("credits").lean();
+      logMatchmakingFlow("start_matchmaking_user_loaded", {
+        userId,
+        hasUser: Boolean(currentUser),
+        credits: currentUser?.credits ?? null,
+        requiredCredits: CREDIT_RULES.CONVERSATION_COST,
+      });
 
       if (
         !currentUser ||
         currentUser.credits < CREDIT_RULES.CONVERSATION_COST
       ) {
+        logMatchmakingFlow("start_matchmaking_insufficient_credits", {
+          userId,
+          credits: currentUser?.credits ?? 0,
+          requiredCredits: CREDIT_RULES.CONVERSATION_COST,
+        });
         socket.emit("insufficientCredits", {
           message: "You need at least 1 credit to start matchmaking.",
           credits: currentUser?.credits || 0,
@@ -388,8 +465,19 @@ const handleConnection = (socket) => {
         isMatching: true,
         matchmakingTimestamp: Date.now(),
       });
+      logMatchmakingFlow("start_matchmaking_flagged", {
+        userId,
+      });
 
       const match = await findBestMatch({ userId, now: new Date() });
+      logMatchmakingFlow("start_matchmaking_match_result", {
+        userId,
+        foundMatch: Boolean(match),
+        matchedUserId: match?.uid || null,
+        mode: match?.mode || null,
+        score: match?.score ?? null,
+        candidatePoolSize: match?.matchingNote?.candidatePoolSize ?? null,
+      });
 
       if (match) {
         const enrichedMatchingNote = await buildMatchNote({
@@ -397,11 +485,23 @@ const handleConnection = (socket) => {
           candidateId: match.uid,
           matchingNote: match.matchingNote || null,
         });
+        logMatchmakingFlow("start_matchmaking_note_ready", {
+          userId,
+          matchedUserId: match.uid,
+          hasEnrichedMatchingNote: Boolean(enrichedMatchingNote),
+        });
         const created = await createAndNotifyMatch(
           userId,
           match.uid,
           enrichedMatchingNote || match.matchingNote || null,
         );
+        logMatchmakingFlow("start_matchmaking_create_result", {
+          userId,
+          matchedUserId: match.uid,
+          success: Boolean(created?.success),
+          reason: created?.reason || null,
+          roomId: created?.roomId || null,
+        });
 
         if (!created?.success) {
           await User.findByIdAndUpdate(userId, { isMatching: false });
@@ -410,16 +510,32 @@ const handleConnection = (socket) => {
               "Unable to start conversation due to insufficient credits.",
           });
         }
+      } else {
+        logMatchmakingFlow("start_matchmaking_no_match", {
+          userId,
+        });
       }
     } catch (e) {
+      console.error(`${MATCHMAKING_FLOW_LOG_PREFIX} start_matchmaking_error`, {
+        userId,
+        message: e?.message || "unknown_error",
+        stack: e?.stack || null,
+      });
       socket.emit("matchmakingError", { message: e.message });
     }
   });
 
   socket.on("stopMatchmaking", async () => {
+    logMatchmakingFlow("stop_matchmaking_received", {
+      userId,
+      socketId: socket.id,
+    });
     await User.findByIdAndUpdate(userId, {
       isMatching: false,
       matchmakingTimestamp: null,
+    });
+    logMatchmakingFlow("stop_matchmaking_complete", {
+      userId,
     });
     socket.emit("matchmakingStopped", { message: "Matchmaking stopped" });
   });

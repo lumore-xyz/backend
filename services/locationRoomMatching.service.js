@@ -25,6 +25,7 @@ import { sendNotificationToUser } from "./push.service.js";
 import socketService from "./socket.service.js";
 
 export const ROOM_MIN_COMPATIBILITY_SCORE = 35;
+const ROOM_MATCH_LOG_PREFIX = "[location-room-match]";
 const ROOM_CYCLE_LOCK_STALE_MS = 15 * 60 * 1000;
 const ROOM_CYCLE_RETRY_MS = 15 * 60 * 1000;
 const ROOM_MATCH_SELECT =
@@ -34,6 +35,10 @@ const getId = (value) => value?._id?.toString?.() || value?.toString?.() || "";
 
 const getPairKey = (userId1, userId2) =>
   [getId(userId1), getId(userId2)].sort().join(":");
+
+const logRoomMatchStep = (stage, details = {}) => {
+  console.info(`${ROOM_MATCH_LOG_PREFIX} ${stage}`, details);
+};
 
 const hasValidLocation = (user) =>
   Boolean(getGeoPointFromLocation(user?.location));
@@ -394,13 +399,34 @@ const createRoomMatches = async ({ room, cycle, pairs, now }) => {
   const matchedUserIds = new Set();
   const skippedUsers = [];
 
+  logRoomMatchStep("create_matches_start", {
+    roomId: room._id.toString(),
+    cycleId: cycle._id.toString(),
+    pairCount: pairs.length,
+  });
+
   for (const pair of pairs) {
     const userId1 = pair.userId1;
     const userId2 = pair.userId2;
+    logRoomMatchStep("create_matches_pair_start", {
+      roomId: room._id.toString(),
+      cycleId: cycle._id.toString(),
+      userId1: userId1.toString(),
+      userId2: userId2.toString(),
+      score: pair.score,
+    });
     const creditSpend = await spendCreditsForConversationStart(
       userId1,
       userId2,
     );
+    logRoomMatchStep("create_matches_pair_credit_result", {
+      roomId: room._id.toString(),
+      cycleId: cycle._id.toString(),
+      userId1: userId1.toString(),
+      userId2: userId2.toString(),
+      success: Boolean(creditSpend?.success),
+      reason: creditSpend?.reason || null,
+    });
     if (!creditSpend.success) {
       const insufficientUserIds = await markInsufficientCreditUsers({
         roomId: room._id,
@@ -427,6 +453,13 @@ const createRoomMatches = async ({ room, cycle, pairs, now }) => {
         },
       },
     );
+    logRoomMatchStep("create_matches_pair_room_ready", {
+      roomId: room._id.toString(),
+      cycleId: cycle._id.toString(),
+      chatRoomId: matchRoom._id.toString(),
+      userId1: userId1.toString(),
+      userId2: userId2.toString(),
+    });
     matchedUserIds.add(userId1.toString());
     matchedUserIds.add(userId2.toString());
     await LocationRoomPin.updateMany(
@@ -451,6 +484,11 @@ const createRoomMatches = async ({ room, cycle, pairs, now }) => {
       userId1,
       userId2,
       balances: creditSpend.balances,
+    });
+    logRoomMatchStep("create_matches_pair_notified", {
+      roomId: room._id.toString(),
+      cycleId: cycle._id.toString(),
+      chatRoomId: matchRoom._id.toString(),
     });
   }
 
@@ -480,6 +518,11 @@ const createRoomMatches = async ({ room, cycle, pairs, now }) => {
 };
 
 export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
+  logRoomMatchStep("cycle_start", {
+    roomId: room._id.toString(),
+    roomTitle: room.title,
+    now: now.toISOString(),
+  });
   const cycle = await LocationRoomCycle.create({
     room: room._id,
     status: "running",
@@ -543,9 +586,22 @@ export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
     prefsByUser,
     now,
   });
+  logRoomMatchStep("cycle_edges_built", {
+    roomId: room._id.toString(),
+    cycleId: cycle._id.toString(),
+    poolUserCount: poolUserIds.length,
+    eligibleUserCount: eligibleUsers.length,
+    edgeCount: edges.length,
+  });
   const { selected, unmatchedUserIds } = selectRoomMatchPairs({
     edges,
     eligibleUserIds: eligibleUsers.map((user) => user._id),
+  });
+  logRoomMatchStep("cycle_pairs_selected", {
+    roomId: room._id.toString(),
+    cycleId: cycle._id.toString(),
+    selectedPairCount: selected.length,
+    unmatchedUserCount: unmatchedUserIds.length,
   });
   for (const userId of unmatchedUserIds) {
     skippedUsers.push({ user: userId, reason: "no_compatible_room_match" });
@@ -591,6 +647,15 @@ export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
     matchCount: created.matches.length,
   });
 
+  logRoomMatchStep("cycle_complete", {
+    roomId: room._id.toString(),
+    cycleId: cycle._id.toString(),
+    matchedUserCount,
+    matchCount: created.matches.length,
+    skippedUserCount: finalSkippedUsers.length,
+    nextMatchAt: nextMatchAt.toISOString(),
+  });
+
   return {
     cycle,
     matchCount: created.matches.length,
@@ -622,11 +687,23 @@ export const processDueLocationRoomCycle = async ({
     },
     { returnDocument: "after" },
   );
-  if (!room) return { skipped: true, reason: "not_due_or_locked" };
+  if (!room) {
+    logRoomMatchStep("cycle_skipped", {
+      roomId: roomId.toString(),
+      reason: "not_due_or_locked",
+      now: now.toISOString(),
+    });
+    return { skipped: true, reason: "not_due_or_locked" };
+  }
 
   try {
     return await runLocationRoomCycle({ room, now });
   } catch (error) {
+    console.error(`${ROOM_MATCH_LOG_PREFIX} cycle_error`, {
+      roomId: room._id.toString(),
+      message: error?.message || "unknown_error",
+      stack: error?.stack || null,
+    });
     const retryAt = new Date(Date.now() + ROOM_CYCLE_RETRY_MS);
     await Promise.allSettled([
       LocationRoomCycle.create({
