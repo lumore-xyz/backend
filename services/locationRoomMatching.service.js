@@ -667,13 +667,14 @@ export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
 export const processDueLocationRoomCycle = async ({
   roomId,
   now = new Date(),
+  ignoreSchedule = false,
 }) => {
   const staleLockBefore = new Date(now.getTime() - ROOM_CYCLE_LOCK_STALE_MS);
   const room = await LocationRoom.findOneAndUpdate(
     {
       _id: roomId,
       status: "active",
-      nextMatchAt: { $lte: now },
+      ...(ignoreSchedule ? {} : { nextMatchAt: { $lte: now } }),
       $or: [
         { isCycleLocked: { $ne: true } },
         { cycleLockedAt: { $lt: staleLockBefore } },

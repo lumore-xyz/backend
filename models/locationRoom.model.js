@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-const MATCH_INTERVAL_MS = 2 * 60 * 1000;
+const MATCH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const LOCATION_ROOM_VISIBILITIES = ["public", "private"];
 
 const locationRoomSchema = new mongoose.Schema(

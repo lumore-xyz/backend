@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createLocationRoom,
+  createStartLocationRoomMatchNow,
   getNearbyLocationRooms,
   pinLocationRoom,
   rejoinLocationRoomPool,
   unpinLocationRoom,
+  updateLocationRoom,
 } from "../controllers/locationRoom.controller.js";
 import LocationRoomPin from "../models/locationRoomPin.model.js";
 import LocationRoom from "../models/locationRoom.model.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const createRes = () => {
   const res = {
@@ -80,6 +84,7 @@ const withRoomControllerMocks = async (
     roomCreate: LocationRoom.create,
     roomAggregate: LocationRoom.aggregate,
     roomFindOne: LocationRoom.findOne,
+    roomFindByIdAndUpdate: LocationRoom.findByIdAndUpdate,
     pinFindOneAndUpdate: LocationRoomPin.findOneAndUpdate,
     pinFindOne: LocationRoomPin.findOne,
     pinFind: LocationRoomPin.find,
@@ -87,6 +92,7 @@ const withRoomControllerMocks = async (
   };
   const calls = {
     createdRoom: null,
+    roomUpdates: [],
     pinUpdates: [],
   };
 
@@ -95,6 +101,10 @@ const withRoomControllerMocks = async (
     return { ...room, ...payload, _id: room._id };
   };
   LocationRoom.findOne = () => createLeanChain(room);
+  LocationRoom.findByIdAndUpdate = async (roomId, update) => {
+    calls.roomUpdates.push({ roomId, update });
+    return { ...room, ...update.$set, _id: room._id };
+  };
   LocationRoomPin.findOneAndUpdate = async (filter, update) => {
     calls.pinUpdates.push({ filter, update });
     return { ...pinState, ...update.$set };
@@ -111,6 +121,7 @@ const withRoomControllerMocks = async (
     LocationRoom.create = originals.roomCreate;
     LocationRoom.aggregate = originals.roomAggregate;
     LocationRoom.findOne = originals.roomFindOne;
+    LocationRoom.findByIdAndUpdate = originals.roomFindByIdAndUpdate;
     LocationRoomPin.findOneAndUpdate = originals.pinFindOneAndUpdate;
     LocationRoomPin.findOne = originals.pinFindOne;
     LocationRoomPin.find = originals.pinFind;
@@ -133,6 +144,7 @@ test("createLocationRoom requires a verified user", async () => {
 
 test("createLocationRoom creates a room and joins the creator to the pool", async () => {
   await withRoomControllerMocks({}, async (calls) => {
+    const before = Date.now();
     const req = {
       user: { _id: "user-1", isVerified: true },
       body: {
@@ -147,11 +159,15 @@ test("createLocationRoom creates a room and joins the creator to the pool", asyn
     const res = createRes();
 
     await createLocationRoom(req, res);
+    const after = Date.now();
 
     assert.equal(res.statusCode, 201);
     assert.equal(calls.createdRoom.title, "Indiranagar");
     assert.equal(calls.createdRoom.visibility, "private");
     assert.deepEqual(calls.createdRoom.location.coordinates, [77.6408, 12.9784]);
+    assert.ok(calls.createdRoom.nextMatchAt instanceof Date);
+    assert.ok(calls.createdRoom.nextMatchAt.getTime() >= before + DAY_MS);
+    assert.ok(calls.createdRoom.nextMatchAt.getTime() <= after + DAY_MS);
     assert.equal(calls.pinUpdates[0].update.$set.isPinned, true);
     assert.equal(calls.pinUpdates[0].update.$set.inPool, true);
     assert.equal(res.body.userState.poolStatus, "in_pool");
@@ -255,4 +271,132 @@ test("pin, rejoin, and unpin update pool state", async () => {
       ],
     );
   });
+});
+
+test("updateLocationRoom lets the creator edit room details", async () => {
+  await withRoomControllerMocks({}, async (calls) => {
+    const req = {
+      user: { _id: "user-1", isAdmin: false },
+      params: { roomId: "room-1" },
+      body: {
+        title: "Updated Room",
+        description: "Fresh room description",
+      },
+    };
+    const res = createRes();
+
+    await updateLocationRoom(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(calls.roomUpdates.length, 1);
+    assert.equal(calls.roomUpdates[0].roomId, "room-1");
+    assert.equal(calls.roomUpdates[0].update.$set.title, "Updated Room");
+    assert.equal(
+      calls.roomUpdates[0].update.$set.description,
+      "Fresh room description",
+    );
+    assert.equal(res.body.room.title, "Updated Room");
+    assert.equal(res.body.room.description, "Fresh room description");
+  });
+});
+
+test("updateLocationRoom blocks users who are not the creator or an admin", async () => {
+  await withRoomControllerMocks({}, async (calls) => {
+    const req = {
+      user: { _id: "user-2", isAdmin: false },
+      params: { roomId: "room-1" },
+      body: {
+        title: "Updated Room",
+      },
+    };
+    const res = createRes();
+
+    await updateLocationRoom(req, res);
+
+    assert.equal(res.statusCode, 403);
+    assert.equal(
+      res.body.message,
+      "Only the room creator or an admin can edit this room",
+    );
+    assert.equal(calls.roomUpdates.length, 0);
+  });
+});
+
+test("startLocationRoomMatchNow lets the room creator trigger matching early", async () => {
+  const room = {
+    _id: "room-1",
+    creator: "user-1",
+    status: "active",
+  };
+  const processCalls = [];
+  const startLocationRoomMatchNow = createStartLocationRoomMatchNow({
+    processCycle: async (payload) => {
+      processCalls.push(payload);
+      return {
+        cycle: { nextMatchAt: new Date("2026-06-09T00:00:00.000Z") },
+        matchCount: 2,
+        matchedUserCount: 4,
+        skippedUserCount: 1,
+      };
+    },
+  });
+  const originalFindOne = LocationRoom.findOne;
+  LocationRoom.findOne = () => createLeanChain(room);
+
+  try {
+    const req = {
+      user: { _id: "user-1", isAdmin: false },
+      params: { roomId: "room-1" },
+    };
+    const res = createRes();
+
+    await startLocationRoomMatchNow(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(processCalls.length, 1);
+    assert.equal(processCalls[0].roomId, "room-1");
+    assert.equal(processCalls[0].ignoreSchedule, true);
+    assert.ok(processCalls[0].now instanceof Date);
+    assert.equal(res.body.matchCount, 2);
+    assert.equal(res.body.matchedUserCount, 4);
+    assert.equal(res.body.skippedUserCount, 1);
+  } finally {
+    LocationRoom.findOne = originalFindOne;
+  }
+});
+
+test("startLocationRoomMatchNow blocks users who are not the creator or an admin", async () => {
+  const room = {
+    _id: "room-1",
+    creator: "user-1",
+    status: "active",
+  };
+  let processCalled = false;
+  const startLocationRoomMatchNow = createStartLocationRoomMatchNow({
+    processCycle: async () => {
+      processCalled = true;
+      return null;
+    },
+  });
+  const originalFindOne = LocationRoom.findOne;
+  LocationRoom.findOne = () => createLeanChain(room);
+
+  try {
+    const req = {
+      user: { _id: "user-2", isAdmin: false },
+      params: { roomId: "room-1" },
+    };
+    const res = createRes();
+
+    await startLocationRoomMatchNow(req, res);
+
+    assert.equal(res.statusCode, 403);
+    assert.equal(
+      res.body.message,
+      "Only the room creator or an admin can start matching early",
+    );
+    assert.equal(processCalled, false);
+  } finally {
+    LocationRoom.findOne = originalFindOne;
+  }
 });

@@ -4,8 +4,13 @@ import LocationRoom, {
   LOCATION_ROOM_VISIBILITY_OPTIONS,
 } from "../models/locationRoom.model.js";
 import { buildCanonicalLocation, getGeoPointFromLocation } from "../utils/location.js";
+import { processDueLocationRoomCycle } from "../services/locationRoomMatching.service.js";
 import socketService from "../services/socket.service.js";
-import { uploadImage } from "../services/file.service.js";
+import {
+  deleteFile,
+  extractPublicIdFromUrl,
+  uploadImage,
+} from "../services/file.service.js";
 
 const DEFAULT_NEARBY_RADIUS_KM = 25;
 const MAX_NEARBY_RADIUS_KM = 100;
@@ -62,6 +67,12 @@ const getPublicNearbyVisibilityQuery = () => ({
 });
 
 const isSameId = (first, second) => first?.toString?.() === second?.toString?.();
+
+const canEditRoom = ({ room, user }) =>
+  Boolean(user?.isAdmin || isSameId(room?.creator, user?._id));
+
+const canManuallyStartRoomMatch = ({ room, user }) =>
+  Boolean(user?.isAdmin || isSameId(room?.creator, user?._id));
 
 const canAccessRoom = async ({ room, userId }) => {
   if (getRoomVisibility(room) === "public") return true;
@@ -286,6 +297,94 @@ export const createLocationRoom = async (req, res) => {
   return res.status(201).json({
     room: formatRoomSummary({ room, counts }),
     userState: await getUserState({ roomId: room._id, userId: req.user._id }),
+  });
+};
+
+export const updateLocationRoom = async (req, res) => {
+  const room = await LocationRoom.findOne({
+    _id: req.params.roomId,
+    status: "active",
+  }).lean();
+  if (!room) {
+    return res.status(404).json({ message: "Room not found" });
+  }
+
+  if (!canEditRoom({ room, user: req.user })) {
+    return res.status(403).json({
+      message: "Only the room creator or an admin can edit this room",
+    });
+  }
+
+  const hasTitle = Object.prototype.hasOwnProperty.call(req.body || {}, "title");
+  const hasDescription = Object.prototype.hasOwnProperty.call(
+    req.body || {},
+    "description",
+  );
+  if (!hasTitle && !hasDescription) {
+    return res.status(400).json({ message: "title or description is required" });
+  }
+
+  const title = hasTitle ? String(req.body?.title || "").trim() : room.title;
+  const description = hasDescription
+    ? String(req.body?.description || "").trim()
+    : String(room.description || "");
+
+  if (title.length < 3 || title.length > 80) {
+    return res.status(400).json({ message: "title must be 3-80 characters" });
+  }
+  if (description.length > 500) {
+    return res.status(400).json({ message: "description must be 500 characters or less" });
+  }
+
+  let nextImageUrl = room.imageUrl || "";
+  let nextImagePublicId =
+    room.imagePublicId || extractPublicIdFromUrl(room.imageUrl) || "";
+  if (req.file?.buffer) {
+    try {
+      const uploadedImage = await uploadImage({
+        buffer: req.file.buffer,
+        folder: "location_rooms",
+        publicId: createImagePublicId({ title, userId: req.user._id }),
+        format: "webp",
+        maxWidth: 1600,
+        maxHeight: 1200,
+        optimize: true,
+      });
+      nextImageUrl = uploadedImage?.secure_url || "";
+      nextImagePublicId = uploadedImage?.public_id || "";
+      const previousImagePublicId =
+        room.imagePublicId || extractPublicIdFromUrl(room.imageUrl);
+      if (
+        previousImagePublicId &&
+        previousImagePublicId !== nextImagePublicId
+      ) {
+        deleteFile(previousImagePublicId, "image").catch((error) => {
+          console.error("Error deleting old location room image:", error);
+        });
+      }
+    } catch (error) {
+      console.error("Error uploading updated location room image:", error);
+      return res.status(500).json({ message: "Failed to upload room image" });
+    }
+  }
+
+  const updatedRoom = await LocationRoom.findByIdAndUpdate(
+    room._id,
+    {
+      $set: {
+        title,
+        description,
+        imageUrl: nextImageUrl,
+        imagePublicId: nextImagePublicId,
+      },
+    },
+    { new: true },
+  );
+
+  const counts = (await getRoomCounts(updatedRoom._id)).get(updatedRoom._id.toString());
+  return res.status(200).json({
+    room: formatRoomSummary({ room: updatedRoom, counts }),
+    userState: await getUserState({ roomId: updatedRoom._id, userId: req.user._id }),
   });
 };
 
@@ -516,3 +615,47 @@ export const unpinLocationRoom = async (req, res) => {
     userState: await getUserState({ roomId: req.params.roomId, userId: req.user._id }),
   });
 };
+
+export const createStartLocationRoomMatchNow = ({
+  processCycle = processDueLocationRoomCycle,
+} = {}) => async (req, res) => {
+  const room = await LocationRoom.findOne({
+    _id: req.params.roomId,
+    status: "active",
+  }).lean();
+  if (!room) {
+    return res.status(404).json({ message: "Room not found" });
+  }
+
+  if (!canManuallyStartRoomMatch({ room, user: req.user })) {
+    return res.status(403).json({
+      message: "Only the room creator or an admin can start matching early",
+    });
+  }
+
+  try {
+    const result = await processCycle({
+      roomId: room._id,
+      now: new Date(),
+      ignoreSchedule: true,
+    });
+    if (result?.skipped) {
+      return res.status(409).json({
+        message: "A room match cycle is already running. Please try again shortly.",
+      });
+    }
+
+    return res.status(200).json({
+      roomId: room._id,
+      nextMatchAt: result?.cycle?.nextMatchAt || null,
+      matchCount: result?.matchCount || 0,
+      matchedUserCount: result?.matchedUserCount || 0,
+      skippedUserCount: result?.skippedUserCount || 0,
+    });
+  } catch (error) {
+    console.error("Error starting location room match early:", error);
+    return res.status(500).json({ message: "Failed to start room matching" });
+  }
+};
+
+export const startLocationRoomMatchNow = createStartLocationRoomMatchNow();
