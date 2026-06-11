@@ -25,7 +25,10 @@ import {
   spendCreditsForConversationStart,
 } from "./credits.service.js";
 import { generateMatchNotesByUser } from "./matchNote.service.js";
-import { getOrCreateMatchRoom } from "./matching.service.js";
+import {
+  getOrCreateMatchRoom,
+  hasExistingMatchRoom,
+} from "./matching.service.js";
 import { findBestMatch } from "./matchmaking.service.js";
 import { sendNotificationToUser } from "./push.service.js";
 
@@ -257,6 +260,15 @@ const createAndNotifyMatch = async (userId1, userId2, matchingNote = null) => {
     userId2: String(userId2),
     hasMatchingNote: Boolean(matchingNote),
   });
+
+  const alreadyMatched = await hasExistingMatchRoom(userId1, userId2);
+  if (alreadyMatched) {
+    logMatchmakingFlow("create_match_blocked_existing_room", {
+      userId1: String(userId1),
+      userId2: String(userId2),
+    });
+    return { success: false, reason: "already_matched" };
+  }
 
   const creditSpend = await spendCreditsForConversationStart(userId1, userId2);
   logMatchmakingFlow("create_match_credit_result", {
@@ -507,7 +519,9 @@ const handleConnection = (socket) => {
           await User.findByIdAndUpdate(userId, { isMatching: false });
           socket.emit("matchmakingError", {
             message:
-              "Unable to start conversation due to insufficient credits.",
+              created?.reason === "already_matched"
+                ? "You are already matched with this user."
+                : "Unable to start conversation due to insufficient credits.",
           });
         }
       } else {
@@ -572,10 +586,11 @@ const handleConnection = (socket) => {
     const room = await MatchRoom.findById(roomId);
     if (!room) return;
 
-    if (!room.participants.includes(userId)) return;
+    if (!isParticipant(room, userId)) return;
 
     room.status = "archive";
     room.endedBy = userId;
+    room.archivedAt = room.archivedAt || new Date();
     await room.save();
 
     socket.to(roomId).emit("chatEnded", {

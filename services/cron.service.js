@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import User from "../models/user.model.js";
 import { deleteUserAndActivity } from "./accountDeletion.service.js";
+import { cleanupExpiredArchivedChats } from "./chatCleanup.service.js";
 import { runDueLocationRoomCycles } from "./locationRoomMatching.service.js";
 import { cleanupExpiredImageMessages } from "./messageCleanup.service.js";
 
@@ -46,6 +47,17 @@ export const initializeCronJobs = () => {
       }
     } catch (error) {
       console.error("[Cron] Error cleaning up expired image messages:", error);
+    }
+  });
+
+  cron.schedule("0 3 * * *", async () => {
+    try {
+      const result = await cleanupExpiredArchivedChats();
+      if (result.scanned > 0) {
+        console.log("[Cron] Archived chat cleanup:", result);
+      }
+    } catch (error) {
+      console.error("[Cron] Error cleaning up archived chats:", error);
     }
   });
 

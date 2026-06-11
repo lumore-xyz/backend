@@ -421,6 +421,88 @@ test("available count matches the selected match candidate pool size", async () 
   );
 });
 
+test("active and archived prior matches are excluded from matchmaking", async () => {
+  const seeker = createUser({
+    _id: "seeker-already-matched",
+    gender: "woman",
+    age: 28,
+    interests: ["music", "travel", "books"],
+  });
+  const activeMatchedCandidate = createUser({
+    _id: "candidate-active-match",
+    gender: "man",
+    age: 29,
+    interests: ["music", "travel", "books"],
+  });
+  const archivedMatchedCandidate = createUser({
+    _id: "candidate-archived-match",
+    gender: "man",
+    age: 29,
+    interests: ["music", "travel", "books"],
+  });
+  const availableCandidate = createUser({
+    _id: "candidate-available",
+    gender: "man",
+    age: 30,
+    interests: ["music", "travel"],
+  });
+
+  await withMatchmakingMocks(
+    {
+      seeker,
+      seekerPreference: createPreference({
+        user: seeker._id,
+        interestedIn: "man",
+        ageRange: [26, 34],
+        distance: 10,
+      }),
+      candidates: [
+        activeMatchedCandidate,
+        archivedMatchedCandidate,
+        availableCandidate,
+      ],
+      candidatePreferences: [
+        createPreference({
+          user: activeMatchedCandidate._id,
+          interestedIn: "woman",
+        }),
+        createPreference({
+          user: archivedMatchedCandidate._id,
+          interestedIn: "woman",
+        }),
+        createPreference({
+          user: availableCandidate._id,
+          interestedIn: "woman",
+        }),
+      ],
+      rooms: [
+        {
+          participants: [seeker._id, activeMatchedCandidate._id],
+          status: "active",
+        },
+        {
+          participants: [seeker._id, archivedMatchedCandidate._id],
+          status: "archive",
+        },
+      ],
+    },
+    async () => {
+      const count = await getPreferenceBasedAvailableCount({
+        userId: seeker._id,
+        now: NOW,
+      });
+      const match = await findBestMatch({
+        userId: seeker._id,
+        now: NOW,
+      });
+
+      assert.equal(match?.uid, availableCandidate._id);
+      assert.equal(count, 1);
+      assert.equal(match?.matchingNote?.candidatePoolSize, 1);
+    },
+  );
+});
+
 test("small matching pool expands distance before selecting a match", async () => {
   const seeker = createUser({
     _id: "seeker-small-distance",

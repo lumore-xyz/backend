@@ -3,6 +3,7 @@ import MatchRoom from "../models/room.model.js";
 import ThisOrThatAnswer from "../models/thisOrThatAnswer.model.js";
 import User from "../models/user.model.js";
 import { CREDIT_RULES } from "./credits.service.js";
+import { getMatchedUserIdSet } from "./matching.service.js";
 
 const MATCHMAKING_LOG_PREFIX = "[matchmaking]";
 
@@ -214,7 +215,10 @@ export const findBestMatch = async ({ userId, now = new Date() }) => {
 
     const { seeker, seekerId, seekerPrefs, baseDistanceKm } = seekerContext;
     const waitMs = getWaitMs(seeker.matchmakingTimestamp, now);
-    const matchingPoolCount = await getMatchingPoolCount({ seekerId });
+    const [matchingPoolCount, blockedMatchedUserIds] = await Promise.all([
+      getMatchingPoolCount({ seekerId }),
+      getMatchedUserIdSet({ userId: seekerId }),
+    ]);
     const shouldRelaxForSmallPool =
       matchingPoolCount < SMALL_MATCHING_POOL_THRESHOLD;
     const firstPassDistanceKm = getFirstPassDistanceKm({
@@ -226,6 +230,7 @@ export const findBestMatch = async ({ userId, now = new Date() }) => {
       seeker,
       seekerPrefs,
       distanceKm: firstPassDistanceKm,
+      blockedUserIds: blockedMatchedUserIds,
       now,
     });
 
@@ -246,6 +251,7 @@ export const findBestMatch = async ({ userId, now = new Date() }) => {
       userId: seekerId,
       waitMs,
       matchingPoolCount,
+      blockedMatchedUserCount: blockedMatchedUserIds.size,
       shouldRelaxForSmallPool,
       baseDistanceKm,
       firstPassDistanceKm,
@@ -263,6 +269,7 @@ export const findBestMatch = async ({ userId, now = new Date() }) => {
       eligible_pool_count: 0,
       rejected_interest_mismatch: 0,
       rejected_age_mismatch: 0,
+      rejected_already_matched: 0,
       fallback_type_used: "none",
       age_relaxation_years_used: 0,
       null_match_reason: null,
@@ -280,6 +287,7 @@ export const findBestMatch = async ({ userId, now = new Date() }) => {
               seekerPrefs,
               distanceKm: pass.distanceKm,
               ageRelaxationYears: pass.ageRelaxationYears,
+              blockedUserIds: blockedMatchedUserIds,
               now,
             });
 
@@ -287,6 +295,8 @@ export const findBestMatch = async ({ userId, now = new Date() }) => {
         candidateSetResult.reasonCounts.interest_mismatch || 0;
       observability.rejected_age_mismatch +=
         candidateSetResult.reasonCounts.age_out_of_range || 0;
+      observability.rejected_already_matched +=
+        candidateSetResult.reasonCounts.already_matched || 0;
       observability.eligible_pool_count = Math.max(
         observability.eligible_pool_count,
         candidateSetResult.selected.length,
@@ -504,6 +514,7 @@ async function getCandidateSet({
   seekerPrefs,
   distanceKm,
   ageRelaxationYears = 0,
+  blockedUserIds = new Set(),
   now,
 }) {
   const [lng, lat] = seeker.location.coordinates;
@@ -536,6 +547,7 @@ async function getCandidateSet({
         missing_dob: 0,
         interest_mismatch: 0,
         age_out_of_range: 0,
+        already_matched: 0,
       },
     };
   }
@@ -554,10 +566,17 @@ async function getCandidateSet({
     missing_dob: 0,
     interest_mismatch: 0,
     age_out_of_range: 0,
+    already_matched: 0,
   };
 
   const selected = [];
   for (const candidate of rawCandidates) {
+    const candidateId = candidate?._id?.toString?.() || "";
+    if (candidateId && blockedUserIds.has(candidateId)) {
+      reasonCounts.already_matched += 1;
+      continue;
+    }
+
     const prefs = normalizePreference(
       candidatePrefsMap.get(candidate._id.toString()),
       {

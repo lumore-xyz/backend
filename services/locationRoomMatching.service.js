@@ -4,7 +4,6 @@ import LocationRoom, {
 import LocationRoomCycle from "../models/locationRoomCycle.model.js";
 import LocationRoomPin from "../models/locationRoomPin.model.js";
 import UserPreference from "../models/preference.model.js";
-import MatchRoom from "../models/room.model.js";
 import ThisOrThatAnswer from "../models/thisOrThatAnswer.model.js";
 import User from "../models/user.model.js";
 import {
@@ -15,7 +14,11 @@ import {
   CREDIT_RULES,
   spendCreditsForConversationStart,
 } from "./credits.service.js";
-import { getOrCreateMatchRoom } from "./matching.service.js";
+import {
+  getMatchedPairSet,
+  getOrCreateMatchRoom,
+  hasExistingMatchRoom,
+} from "./matching.service.js";
 import {
   getHardEligibilityResult,
   normalizePreference,
@@ -79,24 +82,6 @@ const getAnswersByUser = async (userIds) => {
   return byUser;
 };
 
-const getExistingActivePairSet = async ({ roomId, userIds }) => {
-  const existingRooms = await MatchRoom.find({
-    source: "location_room",
-    locationRoom: roomId,
-    status: "active",
-    participants: { $in: userIds },
-  })
-    .select("participants")
-    .lean();
-
-  const pairSet = new Set();
-  for (const room of existingRooms) {
-    if (room.participants?.length !== 2) continue;
-    pairSet.add(getPairKey(room.participants[0], room.participants[1]));
-  }
-  return pairSet;
-};
-
 const getDistanceMetersBetweenUsers = (userA, userB) => {
   const pointA = getGeoPointFromLocation(userA?.location);
   const pointB = getGeoPointFromLocation(userB?.location);
@@ -144,6 +129,7 @@ export const selectRoomMatchPairs = ({
   edges,
   eligibleUserIds = [],
   maxMatchesPerUser = 2,
+  blockedPairKeys = new Set(),
 }) => {
   const sortedEdges = [...(edges || [])].sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
@@ -160,7 +146,7 @@ export const selectRoomMatchPairs = ({
   }
 
   const matchCounts = new Map(Array.from(userIds).map((userId) => [userId, 0]));
-  const usedPairs = new Set();
+  const usedPairs = new Set(Array.from(blockedPairKeys || []).map(String));
   const selected = [];
 
   const selectEdge = (edge) => {
@@ -219,9 +205,9 @@ const buildCompatibilityEdges = async ({
   now,
 }) => {
   const userIds = users.map((user) => user._id.toString());
-  const [answersByUser, existingActivePairSet] = await Promise.all([
+  const [answersByUser, existingMatchedPairSet] = await Promise.all([
     getAnswersByUser(userIds),
-    getExistingActivePairSet({ roomId: room._id, userIds }),
+    getMatchedPairSet({ userIds }),
   ]);
   const edges = [];
 
@@ -234,7 +220,7 @@ const buildCompatibilityEdges = async ({
       const userA = users[leftIndex];
       const userB = users[rightIndex];
       const pairKey = getPairKey(userA._id, userB._id);
-      if (existingActivePairSet.has(pairKey)) continue;
+      if (existingMatchedPairSet.has(pairKey)) continue;
 
       const prefsA = prefsByUser.get(userA._id.toString());
       const prefsB = prefsByUser.get(userB._id.toString());
@@ -301,7 +287,10 @@ const buildCompatibilityEdges = async ({
     }
   }
 
-  return edges;
+  return {
+    edges,
+    blockedPairKeys: existingMatchedPairSet,
+  };
 };
 
 const notifyRoomMatch = async ({
@@ -415,6 +404,19 @@ const createRoomMatches = async ({ room, cycle, pairs, now }) => {
       userId2: userId2.toString(),
       score: pair.score,
     });
+    const alreadyMatched = await hasExistingMatchRoom(userId1, userId2);
+    if (alreadyMatched) {
+      logRoomMatchStep("create_matches_pair_blocked_existing_room", {
+        roomId: room._id.toString(),
+        cycleId: cycle._id.toString(),
+        userId1: userId1.toString(),
+        userId2: userId2.toString(),
+      });
+      skippedUsers.push({ user: userId1, reason: "already_matched" });
+      skippedUsers.push({ user: userId2, reason: "already_matched" });
+      continue;
+    }
+
     const creditSpend = await spendCreditsForConversationStart(
       userId1,
       userId2,
@@ -579,7 +581,7 @@ export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
       }),
     ]),
   );
-  const edges = await buildCompatibilityEdges({
+  const { edges, blockedPairKeys } = await buildCompatibilityEdges({
     room,
     cycle,
     users: eligibleUsers,
@@ -592,10 +594,12 @@ export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
     poolUserCount: poolUserIds.length,
     eligibleUserCount: eligibleUsers.length,
     edgeCount: edges.length,
+    blockedPairCount: blockedPairKeys.size,
   });
   const { selected, unmatchedUserIds } = selectRoomMatchPairs({
     edges,
     eligibleUserIds: eligibleUsers.map((user) => user._id),
+    blockedPairKeys,
   });
   logRoomMatchStep("cycle_pairs_selected", {
     roomId: room._id.toString(),

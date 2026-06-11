@@ -44,6 +44,10 @@ const MatchRoomSchema = new mongoose.Schema(
       enum: ["active", "archive"],
       default: "active",
     },
+    archivedAt: {
+      type: Date,
+      default: null,
+    },
 
     lastMessageAt: {
       type: Date,
@@ -108,6 +112,7 @@ const MatchRoomSchema = new mongoose.Schema(
 
 // Index to speed up matching lookups
 MatchRoomSchema.index({ participants: 1 });
+MatchRoomSchema.index({ status: 1, archivedAt: 1, updatedAt: 1 });
 MatchRoomSchema.index({ source: 1, locationRoom: 1, locationRoomCycle: 1 });
 
 export default mongoose.model("MatchRoom", MatchRoomSchema);

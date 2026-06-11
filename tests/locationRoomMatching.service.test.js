@@ -40,6 +40,28 @@ test("selectRoomMatchPairs never creates duplicate pair keys", () => {
   assert.equal(new Set(pairKeys).size, pairKeys.length);
 });
 
+test("selectRoomMatchPairs skips active or archived already-matched pairs", () => {
+  const result = selectRoomMatchPairs({
+    edges: [
+      { userId1: "user-a", userId2: "user-b", score: 95 },
+      { userId1: "user-a", userId2: "user-c", score: 90 },
+      { userId1: "user-b", userId2: "user-c", score: 80 },
+    ],
+    blockedPairKeys: new Set(["user-a:user-b"]),
+  });
+
+  const selectedPairKeys = result.selected.map((edge) =>
+    [edge.userId1, edge.userId2].sort().join(":"),
+  );
+
+  assert.ok(!selectedPairKeys.includes("user-a:user-b"));
+  assert.ok(selectedPairKeys.includes("user-a:user-c"));
+  assert.ok(selectedPairKeys.includes("user-b:user-c"));
+  assert.equal(result.matchCounts.get("user-a"), 1);
+  assert.equal(result.matchCounts.get("user-b"), 1);
+  assert.equal(result.matchCounts.get("user-c"), 2);
+});
+
 test("selectRoomMatchPairs keeps a solo eligible user unmatched", () => {
   const result = selectRoomMatchPairs({
     edges: [],
