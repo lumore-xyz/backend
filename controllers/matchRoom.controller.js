@@ -37,10 +37,15 @@ export const getInbox = async (req, res) => {
   const userId = req.user._id;
   const currentUserId = userId.toString();
   const status = req.query.status;
-  const rooms = await MatchRoom.find({
+  const source = req.query.source;
+  const locationRoom = req.query.locationRoom;
+  const filter = {
     participants: userId,
-    status: status || "",
-  })
+    ...(status ? { status } : {}),
+    ...(source ? { source } : {}),
+    ...(locationRoom ? { locationRoom } : {}),
+  };
+  const rooms = await MatchRoom.find(filter)
     .sort({ lastMessageAt: -1 })
     .populate("participants", "_id username nickname profilePicture")
     .populate("locationRoom", "_id title location")

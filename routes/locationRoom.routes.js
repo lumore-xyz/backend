@@ -4,6 +4,7 @@ import {
   createLocationRoom,
   getLocationRoomDetail,
   getNearbyLocationRooms,
+  leaveLocationRoomPool,
   pinLocationRoom,
   rejoinLocationRoomPool,
   startLocationRoomMatchNow,
@@ -38,6 +39,12 @@ router.post(
   protect,
   validateObjectIdParam("roomId"),
   rejoinLocationRoomPool,
+);
+router.post(
+  "/:roomId/leave-pool",
+  protect,
+  validateObjectIdParam("roomId"),
+  leaveLocationRoomPool,
 );
 router.post("/:roomId/unpin", protect, validateObjectIdParam("roomId"), unpinLocationRoom);
 

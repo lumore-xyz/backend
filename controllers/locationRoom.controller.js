@@ -587,6 +587,27 @@ export const rejoinLocationRoomPool = async (req, res) => {
   });
 };
 
+export const leaveLocationRoomPool = async (req, res) => {
+  const result = await setPinState({
+    roomId: req.params.roomId,
+    userId: req.user._id,
+    state: {
+      isPinned: true,
+      inPool: false,
+      poolStatus: "left",
+      lastPoolError: "",
+    },
+  });
+  if (!result) return res.status(404).json({ message: "Room not found" });
+  if (result === "private") {
+    return res.status(403).json({ message: "This room is private" });
+  }
+
+  return res.status(200).json({
+    userState: await getUserState({ roomId: req.params.roomId, userId: req.user._id }),
+  });
+};
+
 export const unpinLocationRoom = async (req, res) => {
   const room = await LocationRoom.findOne({ _id: req.params.roomId, status: "active" }).lean();
   if (!room) return res.status(404).json({ message: "Room not found" });

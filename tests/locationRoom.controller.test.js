@@ -4,6 +4,7 @@ import {
   createLocationRoom,
   createStartLocationRoomMatchNow,
   getNearbyLocationRooms,
+  leaveLocationRoomPool,
   pinLocationRoom,
   rejoinLocationRoomPool,
   unpinLocationRoom,
@@ -247,7 +248,7 @@ test("getNearbyLocationRooms lists public rooms ranked by distance and pool size
   }
 });
 
-test("pin, rejoin, and unpin update pool state", async () => {
+test("pin, rejoin, leave pool, and unpin update pool state", async () => {
   await withRoomControllerMocks({}, async (calls) => {
     const baseReq = {
       user: { _id: "user-1" },
@@ -256,6 +257,7 @@ test("pin, rejoin, and unpin update pool state", async () => {
 
     await pinLocationRoom(baseReq, createRes());
     await rejoinLocationRoomPool(baseReq, createRes());
+    await leaveLocationRoomPool(baseReq, createRes());
     await unpinLocationRoom(baseReq, createRes());
 
     assert.deepEqual(
@@ -267,6 +269,7 @@ test("pin, rejoin, and unpin update pool state", async () => {
       [
         { isPinned: true, inPool: true, poolStatus: "in_pool" },
         { isPinned: true, inPool: true, poolStatus: "in_pool" },
+        { isPinned: true, inPool: false, poolStatus: "left" },
         { isPinned: false, inPool: false, poolStatus: "left" },
       ],
     );
