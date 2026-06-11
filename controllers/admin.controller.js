@@ -12,6 +12,178 @@ import {
   splitUserAndPreferenceFilters,
 } from "../utils/userFilters.js";
 
+const LEDGER_ANALYTICS_PERIODS = {
+  daily: {
+    dateFormat: "%Y-%m-%d",
+    defaultLimit: 30,
+    maxLimit: 90,
+  },
+  monthly: {
+    dateFormat: "%Y-%m",
+    defaultLimit: 12,
+    maxLimit: 36,
+  },
+  yearly: {
+    dateFormat: "%Y",
+    defaultLimit: 5,
+    maxLimit: 10,
+  },
+};
+
+const MONTH_LABELS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+const padDatePart = (value) => String(value).padStart(2, "0");
+
+const getUtcBucketStart = (date, period) => {
+  if (period === "yearly") {
+    return new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  }
+
+  if (period === "monthly") {
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+  }
+
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
+};
+
+const addUtcBuckets = (date, period, amount) => {
+  const next = new Date(date.getTime());
+
+  if (period === "yearly") {
+    next.setUTCFullYear(next.getUTCFullYear() + amount);
+  } else if (period === "monthly") {
+    next.setUTCMonth(next.getUTCMonth() + amount);
+  } else {
+    next.setUTCDate(next.getUTCDate() + amount);
+  }
+
+  return next;
+};
+
+const getBucketKey = (date, period) => {
+  const year = date.getUTCFullYear();
+  const month = padDatePart(date.getUTCMonth() + 1);
+  const day = padDatePart(date.getUTCDate());
+
+  if (period === "yearly") return String(year);
+  if (period === "monthly") return `${year}-${month}`;
+  return `${year}-${month}-${day}`;
+};
+
+const getBucketLabel = (date, period) => {
+  const year = date.getUTCFullYear();
+  const month = MONTH_LABELS[date.getUTCMonth()];
+
+  if (period === "yearly") return String(year);
+  if (period === "monthly") return `${month} ${year}`;
+  return `${month} ${date.getUTCDate()}`;
+};
+
+const getLedgerAnalyticsWindow = (period, limit) => {
+  const currentBucketStart = getUtcBucketStart(new Date(), period);
+  const startAt = addUtcBuckets(currentBucketStart, period, -(limit - 1));
+  const endAt = addUtcBuckets(currentBucketStart, period, 1);
+  const buckets = [];
+
+  for (let index = 0; index < limit; index += 1) {
+    const date = addUtcBuckets(startAt, period, index);
+    buckets.push({
+      key: getBucketKey(date, period),
+      label: getBucketLabel(date, period),
+      count: 0,
+    });
+  }
+
+  return { buckets, startAt, endAt };
+};
+
+const getSafeAnalyticsLimit = (rawLimit, config) => {
+  const parsed = Number(rawLimit);
+  const requested = Number.isFinite(parsed) ? parsed : config.defaultLimit;
+  return Math.min(Math.max(Math.floor(requested), 1), config.maxLimit);
+};
+
+const mergeBucketCounts = (buckets, rows, getCount = (row) => row.count) => {
+  const counts = new Map(
+    rows.map((row) => [row._id, Math.max(Number(getCount(row)) || 0, 0)]),
+  );
+
+  return buckets.map((bucket) => ({
+    ...bucket,
+    count: counts.get(bucket.key) || 0,
+  }));
+};
+
+const getLedgerCountsByPeriod = ({
+  type,
+  dateFormat,
+  startAt,
+  endAt,
+  distinctUsers = false,
+}) => {
+  const bucketExpression = {
+    $dateToString: {
+      format: dateFormat,
+      date: "$createdAt",
+      timezone: "UTC",
+    },
+  };
+
+  const pipeline = [
+    {
+      $match: {
+        type,
+        createdAt: { $gte: startAt, $lt: endAt },
+      },
+    },
+  ];
+
+  if (distinctUsers) {
+    pipeline.push(
+      {
+        $group: {
+          _id: {
+            bucket: bucketExpression,
+            user: "$user",
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$_id.bucket",
+          count: { $sum: 1 },
+        },
+      },
+    );
+  } else {
+    pipeline.push({
+      $group: {
+        _id: bucketExpression,
+        count: { $sum: 1 },
+      },
+    });
+  }
+
+  pipeline.push({ $sort: { _id: 1 } });
+
+  return CreditLedger.aggregate(pipeline);
+};
+
 export const getAdminStats = async (req, res) => {
   try {
     const now = new Date();
@@ -596,6 +768,81 @@ export const getCreditLedgerAdmin = async (req, res) => {
     });
   } catch (error) {
     console.error("[admin] getCreditLedgerAdmin failed:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const getCreditLedgerAnalyticsAdmin = async (req, res) => {
+  try {
+    const period = String(req.query.period || "daily").toLowerCase();
+    const config = LEDGER_ANALYTICS_PERIODS[period];
+
+    if (!config) {
+      return res.status(400).json({
+        success: false,
+        message: "period must be daily, monthly or yearly",
+      });
+    }
+
+    const limit = getSafeAnalyticsLimit(req.query.limit, config);
+    const { buckets, startAt, endAt } = getLedgerAnalyticsWindow(period, limit);
+
+    const [dailyActiveRows, signupRows, conversationRows] = await Promise.all([
+      getLedgerCountsByPeriod({
+        type: "daily_active",
+        dateFormat: config.dateFormat,
+        startAt,
+        endAt,
+        distinctUsers: true,
+      }),
+      getLedgerCountsByPeriod({
+        type: "signup_bonus",
+        dateFormat: config.dateFormat,
+        startAt,
+        endAt,
+      }),
+      getLedgerCountsByPeriod({
+        type: "conversation_start",
+        dateFormat: config.dateFormat,
+        startAt,
+        endAt,
+      }),
+    ]);
+
+    const dailyActive = mergeBucketCounts(buckets, dailyActiveRows);
+    const signups = mergeBucketCounts(buckets, signupRows);
+    const conversations = mergeBucketCounts(
+      buckets,
+      conversationRows,
+      (row) => Math.ceil((Number(row.count) || 0) / 2),
+    );
+
+    const totalCount = (series) =>
+      series.reduce((sum, bucket) => sum + bucket.count, 0);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        period,
+        timezone: "UTC",
+        range: {
+          startAt,
+          endAt,
+        },
+        series: {
+          dailyActive,
+          signups,
+          conversations,
+        },
+        totals: {
+          dailyActive: totalCount(dailyActive),
+          signups: totalCount(signups),
+          conversations: totalCount(conversations),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("[admin] getCreditLedgerAnalyticsAdmin failed:", error);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };

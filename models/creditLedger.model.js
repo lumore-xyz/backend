@@ -50,6 +50,7 @@ const creditLedgerSchema = new mongoose.Schema(
 
 creditLedgerSchema.index({ user: 1, createdAt: -1 });
 creditLedgerSchema.index({ user: 1, type: 1, createdAt: -1 });
+creditLedgerSchema.index({ type: 1, createdAt: -1 });
 creditLedgerSchema.index(
   { user: 1, type: 1, referenceType: 1, referenceId: 1 },
   {

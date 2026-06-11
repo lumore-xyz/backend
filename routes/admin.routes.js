@@ -2,6 +2,7 @@ import express from "express";
 import {
   getAdminStats,
   getAdminUsers,
+  getCreditLedgerAnalyticsAdmin,
   getCreditLedgerAdmin,
   getPendingThisOrThatQuestions,
   getReportedUsersAdmin,
@@ -32,6 +33,7 @@ router.get("/stats", getAdminStats);
 router.get("/users", getAdminUsers);
 router.patch("/users/:userId/archive", validateObjectIdParam("userId"), updateUserArchiveStatus);
 router.get("/games/this-or-that/pending", getPendingThisOrThatQuestions);
+router.get("/credits/analytics", getCreditLedgerAnalyticsAdmin);
 router.get("/credits/ledger", getCreditLedgerAdmin);
 router.get("/reported-users", getReportedUsersAdmin);
 router.get("/options", getAdminOptions);
