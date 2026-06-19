@@ -14,7 +14,10 @@ import {
   extractLocationTags,
   syncUserProfileTagsToOneSignal,
 } from "../services/onesignalUserTags.service.js";
+import { applyVerificationAutoRevoke } from "../services/verificationAutoRevoke.service.js";
 import { getGeoPointFromLocation } from "../utils/location.js";
+
+
 
 const VALID_INTERESTED_IN = new Set(["man", "woman"]);
 const FORBIDDEN_LOCATION_FIELDS = new Set([
@@ -161,6 +164,13 @@ export const createUpdateProfile = async (req, res) => {
         return obj;
       }, {});
 
+    // Snapshot the current values of identity-shape fields so we can detect
+    // changes after the update. Verification must be revoked if the user
+    // changes profile picture / DOB / gender / religion.
+    const previousIdentity = await User.findById(userId)
+      .select("profilePicture dob gender religion isVerified verificationStatus")
+      .lean();
+
     // Update the user profile and return updated data
     const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
       returnDocument: "after", // Return updated user
@@ -170,6 +180,21 @@ export const createUpdateProfile = async (req, res) => {
 
     if (!updatedUser)
       return res.status(404).json({ message: "User not found" });
+
+    await applyVerificationAutoRevoke({
+      userId,
+      previousUser: previousIdentity || {},
+      nextPatch: updateData,
+    });
+
+    // If the revoke hook mutated the DB row directly via User.updateOne, the
+    // in-memory `updatedUser` document is stale. Re-fetch so subsequent
+    // mutations (e.g. updateLastActive -> save) don't write stale verification
+    // fields back to the DB.
+    const refreshedUser = await User.findById(userId).select("-password -__v");
+    if (refreshedUser) {
+      Object.assign(updatedUser, refreshedUser.toObject());
+    }
 
     await updatedUser.updateLastActive();
     if (shouldSyncOneSignalProfileTagsFromUpdateData(updateData)) {
@@ -416,6 +441,7 @@ export const updateProfilePicture = async (req, res) => {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const oldPublicId = extractPublicIdFromUrl(user.profilePicture);
+    const previousPictureUrl = user.profilePicture || "";
 
     const result = await uploadImage({
       buffer: file.buffer,
@@ -428,6 +454,21 @@ export const updateProfilePicture = async (req, res) => {
 
     user.profilePicture = result.secure_url;
     await user.save();
+
+    // Profile picture is an identity-shape field — if it changed, any prior
+    // verification no longer corresponds to the current profile, so we must
+    // require the user to re-verify.
+    if (previousPictureUrl !== result.secure_url) {
+      await applyVerificationAutoRevoke({
+        userId,
+        previousUser: {
+          profilePicture: previousPictureUrl,
+          isVerified: user.isVerified,
+          verificationStatus: user.verificationStatus,
+        },
+        nextPatch: { profilePicture: result.secure_url },
+      });
+    }
 
     if (oldPublicId && oldPublicId !== result.public_id) {
       try {

@@ -10,6 +10,12 @@ import {
   updateUserArchiveStatus,
 } from "../controllers/admin.controller.js";
 import {
+  createAdminAppVersionController,
+  deleteAdminAppVersionController,
+  listAdminAppVersionsController,
+  updateAdminAppVersionController,
+} from "../controllers/mobileAppVersion.controller.js";
+import {
   getAdminMobileConfig,
   patchAdminMobileConfig,
 } from "../controllers/mobileRuntimeConfig.controller.js";
@@ -53,6 +59,19 @@ router.patch(
   "/reported-users/:reportId/status",
   validateObjectIdParam("reportId"),
   updateReportedUserStatusAdmin,
+);
+
+router.get("/app-version", listAdminAppVersionsController);
+router.post("/app-version", createAdminAppVersionController);
+router.put(
+  "/app-version/:id",
+  validateObjectIdParam("id"),
+  updateAdminAppVersionController,
+);
+router.delete(
+  "/app-version/:id",
+  validateObjectIdParam("id"),
+  deleteAdminAppVersionController,
 );
 
 export default router;

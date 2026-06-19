@@ -8,6 +8,7 @@ import connectDB from "./config/db.js";
 import { errorHandler, notFound } from "./middleware/error.middleware.js";
 import adminRoutes from "./routes/admin.routes.js";
 import adminAuthRoutes from "./routes/adminAuth.routes.js";
+import appVersionRoutes from "./routes/appVersion.routes.js";
 import authRoutes from "./routes/auth.routes.js";
 import creditsRoutes from "./routes/credits.routes.js";
 import diditRoutes from "./routes/didit.routes.js";
@@ -120,6 +121,7 @@ app.get("/", (req, res) => {
 // Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/status", statusRoutes);
+app.use("/api/app-version", appVersionRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/post", postRoutes);
 app.use("/api/prompt", promptRoutes);
