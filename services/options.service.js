@@ -152,6 +152,7 @@ const normalizeOptionIcon = (rawIcon) => {
   const library = String(rawIcon.library || "").trim();
   const name = String(rawIcon.name || "").trim();
   if (!library || !name) return null;
+
   return { library, name };
 };
 

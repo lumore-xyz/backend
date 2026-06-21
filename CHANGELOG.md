@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+- `GET /api/admin/options/icon-catalog` and the entire `libs/iconCatalog.js` module (the catalog is now bundled with the admin app, so the backend no longer needs to ship a Lucide name list, expose it via HTTP, or validate icon names server-side). The `lucide` npm dependency was dropped.
+
+### Changed
+- `options.service.js#normalizeOptionIcon` no longer validates the icon against a known library/name list — it only trims and rejects empty/malformed icons. Whatever library/name the admin sends is stored as-is.
+
 ## [1.1.0] – In-app notifications, AI match notes for community rooms, admin icon picker, hardening
 
 ### Added
@@ -28,8 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - This-or-That submission approved/rejected → `GAME_SUBMISSION_APPROVED` / `REJECTED`.
   - Community room created by user → `COMMUNITY_JOINED` for the creator.
   - Admin push/email campaign → `SYSTEM_MESSAGE` per recipient.
-- **Option icons for admin-managed dropdowns.** Each option in `AppOptions` may carry `icon: { library: "Ionicons", name: "heart-outline" }`. Admin endpoints validate the shape and the mobile renderer safely ignores unknown names.
-- **Curated Ionicons catalog** at `libs/iconCatalog.js` (~250 outline icons in 13 categories) exposed via `GET /api/admin/options/icon-catalog` for the admin picker.
+- **Option icons for admin-managed dropdowns.** Each option in `AppOptions` may carry `icon: { library: "Ionicons", name: "heart-outline" }`. The mobile renderer safely ignores unknown names.
 - **AI match notes for community-room matches.** Extracted `buildMatchNote` into `matchNote.service.js` and reused it in both explore and community matching flows so every fresh community match now ships an AI-generated `oneSentenceNote`, per-user `notesByUser`, and `aiSummary` metadata. The community `matchingNote` now includes `common.{interests, languages, goals, religion, diet, lifestyle}`, `thisOrThat.{sharedAnswers, matchedAnswers, matchRate}`, full `components`, `distanceKm`, and `reasons`. AI envelope fields are stripped from the persisted `MatchRoom.matchingNote` and attached only to the live socket payload (mobile sees the same field names as explore).
 
 ### Changed

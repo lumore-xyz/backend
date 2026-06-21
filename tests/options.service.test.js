@@ -2,13 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { normalizeOptionsPayload } from "../services/options.service.js";
-import {
-  IONICON_CATALOG,
-  IONICON_CATEGORY_ORDER,
-  IONICON_FLAT_LIST,
-  isKnownIoniconName,
-  isSupportedIconLibrary,
-} from "../libs/iconCatalog.js";
 
 test("normalizeOptionsPayload preserves icon when valid", () => {
   const out = normalizeOptionsPayload({
@@ -16,7 +9,7 @@ test("normalizeOptionsPayload preserves icon when valid", () => {
       {
         label: "Music",
         value: "music",
-        icon: { library: "Ionicons", name: "musical-notes-outline" },
+        icon: { library: "Lucide", name: "music" },
       },
       { label: "Travel", value: "travel" },
     ],
@@ -24,29 +17,60 @@ test("normalizeOptionsPayload preserves icon when valid", () => {
 
   assert.equal(out.interestOptions.length, 2);
   assert.deepEqual(out.interestOptions[0].icon, {
-    library: "Ionicons",
-    name: "musical-notes-outline",
+    library: "Lucide",
+    name: "music",
   });
   assert.equal(out.interestOptions[1].icon, undefined);
 });
 
-test("normalizeOptionsPayload drops invalid icon", () => {
+test("normalizeOptionsPayload keeps any library+name pair (no catalog validation)", () => {
   const out = normalizeOptionsPayload({
     interestOptions: [
       {
-        label: "Music",
-        value: "music",
+        label: "Custom",
+        value: "custom",
+        icon: { library: "Ionicons", name: "heart-outline" },
+      },
+      {
+        label: "Lucide",
+        value: "lucide",
+        icon: { library: "Lucide", name: "nonexistent-icon" },
+      },
+    ],
+  });
+
+  assert.deepEqual(out.interestOptions[0].icon, {
+    library: "Ionicons",
+    name: "heart-outline",
+  });
+  assert.deepEqual(out.interestOptions[1].icon, {
+    library: "Lucide",
+    name: "nonexistent-icon",
+  });
+});
+
+test("normalizeOptionsPayload drops malformed icon", () => {
+  const out = normalizeOptionsPayload({
+    interestOptions: [
+      {
+        label: "EmptyLib",
+        value: "emptylib",
         icon: { library: "", name: "heart-outline" },
       },
       {
-        label: "Travel",
-        value: "travel",
+        label: "EmptyName",
+        value: "emptyname",
         icon: { library: "Ionicons" },
       },
       {
-        label: "Reading",
-        value: "reading",
+        label: "RawString",
+        value: "rawstring",
         icon: "heart-outline",
+      },
+      {
+        label: "Array",
+        value: "array",
+        icon: ["Lucide", "music"],
       },
     ],
   });
@@ -74,36 +98,4 @@ test("normalizeOptionsPayload de-duplicates by value", () => {
     ],
   });
   assert.equal(out.interestOptions.length, 1);
-});
-
-test("IONICON_CATEGORY_ORDER is stable", () => {
-  assert.ok(Array.isArray(IONICON_CATEGORY_ORDER));
-  assert.ok(IONICON_CATEGORY_ORDER.length >= 5);
-});
-
-test("IONICON_CATALOG only contains known icon names", () => {
-  for (const [category, icons] of Object.entries(IONICON_CATALOG)) {
-    assert.ok(Array.isArray(icons));
-    for (const icon of icons) {
-      assert.equal(icon.library, "Ionicons", `bad library in ${category}`);
-      assert.ok(icon.name.endsWith("-outline"), `bad name in ${category}: ${icon.name}`);
-    }
-  }
-});
-
-test("IONICON_FLAT_LIST is unique", () => {
-  const seen = new Set();
-  for (const icon of IONICON_FLAT_LIST) {
-    const key = `${icon.library}:${icon.name}`;
-    assert.ok(!seen.has(key), `duplicate icon ${key}`);
-    seen.add(key);
-  }
-});
-
-test("isKnownIoniconName + isSupportedIconLibrary", () => {
-  assert.equal(isKnownIoniconName("heart-outline"), true);
-  assert.equal(isKnownIoniconName("nonexistent-icon"), false);
-  assert.equal(isSupportedIconLibrary("Ionicons"), true);
-  assert.equal(isSupportedIconLibrary("ionicons"), true);
-  assert.equal(isSupportedIconLibrary("MaterialCommunityIcons"), false);
 });
