@@ -3,6 +3,10 @@ import UserPreference from "../models/preference.model.js";
 import User from "../models/user.model.js";
 import UserGroup from "../models/userGroup.model.js";
 import { getOrCreateGlobalOptions } from "../services/options.service.js";
+import {
+  buildSystemMessageDoc,
+  createManyNotifications,
+} from "../services/notification.service.js";
 import { sendEmailViaNodemailer } from "../services/nodemailer.service.js";
 import { sendNotificationToUser } from "../services/push.service.js";
 import {
@@ -136,6 +140,8 @@ const buildTargetUserIds = async ({
 
   return resolveUserIds({ userIds, usernames });
 };
+
+const MAX_NOTIFICATION_RECIPIENTS = 5000;
 
 const PLACEHOLDER_PATTERN = /\{([a-zA-Z0-9_]+)\}/g;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -474,6 +480,13 @@ export const sendAdminCampaign = async (req, res) => {
       });
     }
 
+    if (recipients.length > MAX_NOTIFICATION_RECIPIENTS) {
+      return res.status(400).json({
+        success: false,
+        message: `Recipient count ${recipients.length} exceeds the per-request maximum of ${MAX_NOTIFICATION_RECIPIENTS}`,
+      });
+    }
+
     const recipientUsers = await User.find({
       _id: { $in: recipients },
     })
@@ -499,6 +512,24 @@ export const sendAdminCampaign = async (req, res) => {
         }),
       );
 
+      const pushNotificationDocs = recipientUsers
+        .map((user) =>
+          buildSystemMessageDoc({
+            userId: user._id,
+            actorId: req.user?._id,
+            title: applyTemplateVariables(title, buildTemplateVariables(user)),
+            message: applyTemplateVariables(body, buildTemplateVariables(user)),
+            entityType: "system",
+            metadata: {
+              campaignId: req.body?.campaignId || null,
+              channel: "push",
+            },
+          }),
+        )
+        .filter(Boolean);
+
+      await createManyNotifications(pushNotificationDocs);
+
       return res.status(200).json({
         success: true,
         message: "Push notification sent",
@@ -516,6 +547,29 @@ export const sendAdminCampaign = async (req, res) => {
         message: "No users with email found in selected target",
       });
     }
+
+    const emailNotificationDocs = usersWithEmail
+      .map((user) => {
+        const variables = buildTemplateVariables(user);
+        return buildSystemMessageDoc({
+          userId: user._id,
+          actorId: req.user?._id,
+          title: applyTemplateVariables(
+            emailSubject || title || "Lumore",
+            variables,
+          ),
+          message: applyTemplateVariables(body, variables),
+          entityType: "system",
+          metadata: {
+            campaignId: req.body?.campaignId || null,
+            channel: "email",
+            emailCampaignType,
+          },
+        });
+      })
+      .filter(Boolean);
+
+    await createManyNotifications(emailNotificationDocs);
 
     if (emailCampaignType === "campaign") {
       const emails = usersWithEmail

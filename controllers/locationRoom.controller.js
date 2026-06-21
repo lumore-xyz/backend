@@ -5,6 +5,7 @@ import LocationRoom, {
 } from "../models/locationRoom.model.js";
 import { buildCanonicalLocation, getGeoPointFromLocation } from "../utils/location.js";
 import { processDueLocationRoomCycle } from "../services/locationRoomMatching.service.js";
+import { notifyCommunityJoined } from "../services/notification.service.js";
 import socketService from "../services/socket.service.js";
 import {
   deleteFile,
@@ -294,6 +295,16 @@ export const createLocationRoom = async (req, res) => {
   );
 
   const counts = (await getRoomCounts(room._id)).get(room._id.toString());
+  notifyCommunityJoined({
+    userId: req.user._id,
+    communityId: room._id,
+    communityName: room.title,
+  }).catch((error) => {
+    console.error(
+      "[location-room] community_joined_notification_failed:",
+      error?.message || error,
+    );
+  });
   return res.status(201).json({
     room: formatRoomSummary({ room, counts }),
     userState: await getUserState({ roomId: room._id, userId: req.user._id }),

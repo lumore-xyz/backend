@@ -1,6 +1,7 @@
 import RejectedProfile from "../models/reject.model.js";
 import Report from "../models/report.model.js";
 import MatchRoom from "../models/room.model.js";
+import { buildFeedbackDoc, createNotification } from "../services/notification.service.js";
 
 const getOtherParticipantId = (room, userId) => {
   if (!room?.participants?.length) return null;
@@ -146,6 +147,24 @@ export const submitChatFeedback = async (req, res) => {
       setDefaultsOnInsert: true,
     }
   );
+
+  if (payload.feedback) {
+    const feedbackDoc = buildFeedbackDoc({
+      userId: rejectedUser,
+      actorId: userId,
+      roomId: roomId ? roomId.toString() : null,
+      rating: payload.rating,
+      reason: payload.reason,
+    });
+    if (feedbackDoc) {
+      createNotification(feedbackDoc).catch((error) => {
+        console.error(
+          "[feedback] notification_create_failed",
+          error?.message || error,
+        );
+      });
+    }
+  }
 
   res.status(200).json(saved);
 };

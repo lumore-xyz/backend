@@ -145,6 +145,16 @@ const DEFAULT_OPTIONS = {
   ],
 };
 
+const normalizeOptionIcon = (rawIcon) => {
+  if (rawIcon === null || rawIcon === undefined) return null;
+  if (typeof rawIcon !== "object" || Array.isArray(rawIcon)) return null;
+
+  const library = String(rawIcon.library || "").trim();
+  const name = String(rawIcon.name || "").trim();
+  if (!library || !name) return null;
+  return { library, name };
+};
+
 const normalizeOptionList = (list = []) => {
   if (!Array.isArray(list)) {
     throw new Error("Each option field must be an array");
@@ -163,7 +173,11 @@ const normalizeOptionList = (list = []) => {
 
     if (seen.has(value)) continue;
     seen.add(value);
-    normalized.push({ label, value });
+
+    const icon = normalizeOptionIcon(entry?.icon);
+    const item = { label, value };
+    if (icon) item.icon = icon;
+    normalized.push(item);
   }
 
   return normalized;

@@ -1,6 +1,26 @@
 import axios from "axios";
 
 const MATCH_NOTE_LOG_PREFIX = "[matchnote]";
+
+const toUserIdString = (value) => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (value.toString) return value.toString();
+  return String(value);
+};
+
+const logEnrichedBuild = ({
+  seekerId,
+  candidateId,
+  stage,
+  details = {},
+}) => {
+  console.info(`${MATCH_NOTE_LOG_PREFIX} ${stage}`, {
+    seekerId: toUserIdString(seekerId),
+    candidateId: toUserIdString(candidateId),
+    ...details,
+  });
+};
 const MATCH_NOTE_PROVIDER_FALLBACK = "fallback";
 const MATCH_NOTE_PROVIDER_NVIDIA = "nvidia";
 const MATCH_NOTE_STRATEGY_FALLBACK = "deterministic_template";
@@ -680,5 +700,99 @@ export const generateMatchNotesByUser = async ({
       seekerId: seekerId || null,
       candidateId: candidateId || null,
     }),
+  };
+};
+
+/**
+ * Loads both users and runs the AI pair generation. Returns a matchingNote
+ * envelope with `oneSentenceNote` (primary, seeker POV), `notesByUser` (per
+ * user), and `aiSummary` (provider/model/reasons metadata). If the AI cannot
+ * generate a sentence, falls back to the deterministic template so the
+ * chat room always has something useful to show.
+ *
+ * Both the explore and the community matching flows call this so the AI
+ * pipeline is shared and the surface area on mobile stays consistent.
+ */
+export const buildMatchNote = async ({
+  seekerId,
+  candidateId,
+  matchingNote,
+  loadUsers,
+}) => {
+  if (!matchingNote || typeof matchingNote !== "object") {
+    logEnrichedBuild({
+      seekerId,
+      candidateId,
+      stage: "build_match_note_skipped",
+      details: { reason: "missing_matching_note" },
+    });
+    return matchingNote;
+  }
+
+  logEnrichedBuild({
+    seekerId,
+    candidateId,
+    stage: "build_match_note_start",
+    details: { matchingNoteKeys: Object.keys(matchingNote || {}) },
+  });
+
+  let seeker = null;
+  let candidate = null;
+  try {
+    const users = (await loadUsers({ seekerId, candidateId })) || [];
+    for (const user of users) {
+      const uid = user?._id?.toString?.();
+      if (!uid) continue;
+      if (uid === toUserIdString(seekerId)) seeker = user;
+      if (uid === toUserIdString(candidateId)) candidate = user;
+    }
+    logEnrichedBuild({
+      seekerId,
+      candidateId,
+      stage: "build_match_note_users_loaded",
+      details: {
+        seekerFound: Boolean(seeker),
+        candidateFound: Boolean(candidate),
+      },
+    });
+  } catch (error) {
+    console.error(
+      `${MATCH_NOTE_LOG_PREFIX} user_load_failed`,
+      error?.message || error,
+    );
+  }
+
+  const matchNoteResult = await generateMatchNotesByUser({
+    seeker,
+    candidate,
+    matchingNote,
+  });
+
+  console.info(`${MATCH_NOTE_LOG_PREFIX} generation_result`, {
+    seekerId: toUserIdString(seekerId),
+    candidateId: toUserIdString(candidateId),
+    usedFallback: Boolean(matchNoteResult?.meta?.usedFallback),
+    reasons: matchNoteResult?.meta?.reasons || [],
+    model: matchNoteResult?.meta?.model || null,
+  });
+
+  logEnrichedBuild({
+    seekerId,
+    candidateId,
+    stage: "build_match_note_complete",
+    details: {
+      hasPrimarySentence: Boolean(matchNoteResult?.primarySentence),
+      noteCount: Object.keys(matchNoteResult?.notesByUser || {}).length,
+    },
+  });
+
+  return {
+    ...matchingNote,
+    oneSentenceNote: matchNoteResult.primarySentence,
+    notesByUser: matchNoteResult.notesByUser,
+    aiSummary: {
+      ...matchNoteResult.meta,
+      generatedAt: new Date().toISOString(),
+    },
   };
 };

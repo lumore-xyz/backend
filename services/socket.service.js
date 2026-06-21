@@ -25,11 +25,23 @@ import {
   spendCreditsForConversationStart,
 } from "./credits.service.js";
 import { generateMatchNotesByUser } from "./matchNote.service.js";
+// Removed local `buildMatchNote` in favor of the shared helper exported from
+// `matchNote.service.js`. We re-bind it via `buildMatchNoteShared` so the
+// local reference below stays short while still going through the shared
+// module (and so future callers can inject a different `loadUsers` impl).
+void generateMatchNotesByUser; // kept for backwards-compat re-exports
 import {
   getOrCreateMatchRoom,
   hasExistingMatchRoom,
 } from "./matching.service.js";
 import { findBestMatch } from "./matchmaking.service.js";
+import {
+  buildMatchNote as buildMatchNoteShared,
+} from "./matchNote.service.js";
+import {
+  createManyNotifications,
+  buildMatchDoc,
+} from "./notification.service.js";
 import { sendNotificationToUser } from "./push.service.js";
 
 const MATCHMAKING_FLOW_LOG_PREFIX = "[matchmaking-flow]";
@@ -119,78 +131,16 @@ const normalizeMessagePayload = (messageDoc, extra = {}) => ({
   ...extra,
 });
 
-const buildMatchNote = async ({ seekerId, candidateId, matchingNote }) => {
-  if (!matchingNote || typeof matchingNote !== "object") {
-    logMatchmakingFlow("build_match_note_skipped", {
-      seekerId: String(seekerId),
-      candidateId: String(candidateId),
-      reason: "missing_matching_note",
-    });
-    return matchingNote;
-  }
-
-  logMatchmakingFlow("build_match_note_start", {
-    seekerId: String(seekerId),
-    candidateId: String(candidateId),
-    matchingNoteKeys: Object.keys(matchingNote || {}),
-  });
-
-  let seeker = null;
-  let candidate = null;
-  try {
-    const users = await User.find({
-      _id: { $in: [seekerId, candidateId] },
-    })
-      .select("_id username nickname")
-      .lean();
-    for (const user of users) {
-      const uid = user?._id?.toString?.();
-      if (!uid) continue;
-      if (uid === String(seekerId)) seeker = user;
-      if (uid === String(candidateId)) candidate = user;
-    }
-    logMatchmakingFlow("build_match_note_users_loaded", {
-      seekerId: String(seekerId),
-      candidateId: String(candidateId),
-      seekerFound: Boolean(seeker),
-      candidateFound: Boolean(candidate),
-    });
-  } catch (error) {
-    console.error(
-      "[matchnote] Failed to load users:",
-      error?.message || error,
-    );
-  }
-
-  const matchNoteResult = await generateMatchNotesByUser({
-    seeker,
-    candidate,
+const buildMatchNote = ({ seekerId, candidateId, matchingNote }) =>
+  buildMatchNoteShared({
+    seekerId,
+    candidateId,
     matchingNote,
+    loadUsers: async ({ seekerId: sId, candidateId: cId }) =>
+      User.find({ _id: { $in: [sId, cId] } })
+        .select("_id username nickname")
+        .lean(),
   });
-  console.info("[matchnote] generation result", {
-    seekerId: String(seekerId),
-    candidateId: String(candidateId),
-    usedFallback: Boolean(matchNoteResult?.meta?.usedFallback),
-    reasons: matchNoteResult?.meta?.reasons || [],
-    model: matchNoteResult?.meta?.model || null,
-  });
-  logMatchmakingFlow("build_match_note_complete", {
-    seekerId: String(seekerId),
-    candidateId: String(candidateId),
-    hasPrimarySentence: Boolean(matchNoteResult?.primarySentence),
-    noteCount: Object.keys(matchNoteResult?.notesByUser || {}).length,
-  });
-
-  return {
-    ...matchingNote,
-    oneSentenceNote: matchNoteResult.primarySentence,
-    notesByUser: matchNoteResult.notesByUser,
-    aiSummary: {
-      ...matchNoteResult.meta,
-      generatedAt: new Date().toISOString(),
-    },
-  };
-};
 
 /* ============================================================
  * AUTHENTICATION MIDDLEWARE
@@ -308,6 +258,28 @@ const createAndNotifyMatch = async (userId1, userId2, matchingNote = null) => {
     initiatorOnline: Boolean(s1),
     partnerOnline: Boolean(s2),
   });
+
+  const matchDocForUser1 = buildMatchDoc({
+    userId: userId1,
+    matchedUserId: userId2,
+    roomId,
+  });
+  const matchDocForUser2 = buildMatchDoc({
+    userId: userId2,
+    matchedUserId: userId1,
+    roomId,
+  });
+
+  if (matchDocForUser1 && matchDocForUser2) {
+    createManyNotifications([matchDocForUser1, matchDocForUser2]).catch(
+      (error) => {
+        console.error(
+          `${MATCHMAKING_FLOW_LOG_PREFIX} create_match_notification_failed`,
+          error?.message || error,
+        );
+      },
+    );
+  }
 
   const matchNotificationForUser1 = sendNotificationToUser(userId1, {
     title: "Match found!",

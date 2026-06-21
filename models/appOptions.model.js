@@ -1,5 +1,21 @@
 import mongoose from "mongoose";
 
+const optionItemIconSchema = new mongoose.Schema(
+  {
+    library: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+  },
+  { _id: false },
+);
+
 const optionItemSchema = new mongoose.Schema(
   {
     label: {
@@ -11,6 +27,10 @@ const optionItemSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+    },
+    icon: {
+      type: optionItemIconSchema,
+      default: null,
     },
   },
   { _id: false },
@@ -54,9 +74,15 @@ appOptionsSchema.path("options").validate(function validateOptionsShape(value) {
         item &&
         typeof item === "object" &&
         typeof item.label === "string" &&
-        typeof item.value === "string",
+        typeof item.value === "string" &&
+        (item.icon === undefined ||
+          item.icon === null ||
+          (item.icon &&
+            typeof item.icon === "object" &&
+            typeof item.icon.library === "string" &&
+            typeof item.icon.name === "string")),
     );
   });
-}, "options must be an object of option arrays with {label,value} items");
+}, "options must be an object of option arrays with {label,value} items (icon optional)");
 
 export default mongoose.model("AppOptions", appOptionsSchema);

@@ -3,6 +3,7 @@ import ThisOrThatAnswer from "../models/thisOrThatAnswer.model.js";
 import ThisOrThatQuestion from "../models/thisOrThatQuestion.model.js";
 import { awardCreditsForThisOrThatApproval } from "../services/credits.service.js";
 import { uploadImage } from "../services/file.service.js";
+import { notifyGameSubmissionStatusChange } from "../services/notification.service.js";
 
 const DEFAULT_QUESTIONS = [
   {
@@ -354,6 +355,23 @@ export const updateThisOrThatQuestionStatus = async (req, res) => {
       creditResult = await awardCreditsForThisOrThatApproval({
         userId: question.submittedBy,
         questionId: question._id,
+      });
+    }
+
+    if (
+      question.submittedBy &&
+      previousStatus !== status &&
+      (status === "approved" || status === "rejected")
+    ) {
+      notifyGameSubmissionStatusChange({
+        userId: question.submittedBy,
+        status,
+        questionId: question._id,
+      }).catch((error) => {
+        console.error(
+          "[this-or-that] notification_create_failed:",
+          error?.message || error,
+        );
       });
     }
 

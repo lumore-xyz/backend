@@ -14,6 +14,9 @@
  */
 
 import User from "../models/user.model.js";
+import {
+  notifyVerificationStatusChange,
+} from "./notification.service.js";
 
 export const IDENTITY_REVOKE_FIELDS = Object.freeze([
   "profilePicture",
@@ -91,6 +94,14 @@ export const applyVerificationAutoRevoke = async ({
       ",",
     )} status=${REVOKED_STATUS}`,
   );
+
+  await notifyVerificationStatusChange({
+    userId,
+    status: REVOKED_STATUS,
+    previousStatus: previousUser?.verificationStatus,
+    source: "identity_field_change",
+    metadata: { changedFields },
+  });
 
   return {
     revoked: true,

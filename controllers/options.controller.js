@@ -1,4 +1,9 @@
 import {
+  IONICON_CATALOG,
+  IONICON_CATEGORY_ORDER,
+  IONICON_FLAT_LIST,
+} from "../libs/iconCatalog.js";
+import {
   getOrCreateGlobalOptions,
   updateGlobalOptions,
 } from "../services/options.service.js";
@@ -96,6 +101,30 @@ export const patchAdminOptions = async (req, res) => {
     return res.status(400).json({
       success: false,
       message,
+    });
+  }
+};
+
+export const getOptionIconCatalog = async (_req, res) => {
+  try {
+    const grouped = IONICON_CATEGORY_ORDER.map((category) => ({
+      category,
+      icons: IONICON_CATALOG[category] || [],
+    })).filter((group) => group.icons.length > 0);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        libraries: ["Ionicons"],
+        grouped,
+        flat: IONICON_FLAT_LIST,
+      },
+    });
+  } catch (error) {
+    console.error("[options] getOptionIconCatalog failed:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch icon catalog",
     });
   }
 };

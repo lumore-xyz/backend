@@ -3,6 +3,9 @@ import crypto from "crypto";
 import express from "express";
 import User from "../models/user.model.js";
 import { awardReferralBonusForVerifiedUser } from "../services/credits.service.js";
+import {
+  notifyVerificationStatusChange,
+} from "../services/notification.service.js";
 
 const router = express.Router();
 
@@ -68,6 +71,11 @@ router.get("/didit/callback", async (req, res) => {
 
     if (verificationSessionId) {
       const statusPatch = mapVerificationStatus("", status);
+      const previousUser = await User.findOne({
+        verificationSessionId: String(verificationSessionId),
+      })
+        .select("verificationStatus isVerified")
+        .lean();
       const updatedUser = await User.findOneAndUpdate(
         { verificationSessionId: String(verificationSessionId) },
         {
@@ -83,6 +91,14 @@ router.get("/didit/callback", async (req, res) => {
           now: new Date(),
         });
       }
+
+      await notifyVerificationStatusChange({
+        userId: updatedUser?._id,
+        status: updatedUser?.verificationStatus,
+        previousStatus: previousUser?.verificationStatus,
+        source: "didit_browser_callback",
+        metadata: { sessionId: String(verificationSessionId) },
+      });
     }
 
     return res.redirect(302, `${frontendBaseUrl()}/app/profile`);
@@ -123,6 +139,9 @@ router.post("/didit/callback", async (req, res) => {
     if (userId) {
       const statusPatch = mapVerificationStatus(eventType, rawStatus);
 
+      const previousUser = await User.findById(userId)
+        .select("verificationStatus isVerified")
+        .lean();
       const updatedUser = await User.findByIdAndUpdate(userId, {
         verificationMethod: "didit",
         verificationSessionId: sessionId,
@@ -135,6 +154,14 @@ router.post("/didit/callback", async (req, res) => {
           now: new Date(),
         });
       }
+
+      await notifyVerificationStatusChange({
+        userId: updatedUser?._id,
+        status: updatedUser?.verificationStatus,
+        previousStatus: previousUser?.verificationStatus,
+        source: "didit_webhook",
+        metadata: { sessionId, eventType },
+      });
     }
 
     return res.sendStatus(200);

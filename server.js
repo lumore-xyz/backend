@@ -14,6 +14,10 @@ import creditsRoutes from "./routes/credits.routes.js";
 import diditRoutes from "./routes/didit.routes.js";
 import matchRoomRoutes from "./routes/matchRoom.routes.js";
 import messagesRoutes from "./routes/message.routes.js";
+import {
+  adminNotificationRouter,
+  default as notificationRoutes,
+} from "./routes/notification.routes.js";
 import postRoutes from "./routes/post.routes.js";
 import profileRoutes from "./routes/profile.routes.js";
 import promptRoutes from "./routes/prompt.routes.js";
@@ -128,6 +132,7 @@ app.use("/api/prompt", promptRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/messages", messagesRoutes);
 app.use("/api/inbox", matchRoomRoutes);
+app.use("/api/notifications", notificationRoutes);
 app.use("/api/rooms", locationRoomRoutes);
 app.use("/api/didit", diditRoutes);
 app.use("/api/games/this-or-that", thisOrThatRoutes);
@@ -135,6 +140,7 @@ app.use("/api/credits", creditsRoutes);
 app.use("/api/referral", referralRoutes);
 app.use("/api/admin/auth", adminAuthRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/admin/notifications", adminNotificationRouter);
 
 // Error handling middleware
 app.use(notFound);

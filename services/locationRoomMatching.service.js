@@ -24,6 +24,11 @@ import {
   normalizePreference,
   scoreCandidate,
 } from "./matchmaking.service.js";
+import {
+  buildCommunityMatchDoc,
+  createManyNotifications,
+} from "./notification.service.js";
+import { buildMatchNote as buildMatchNoteShared } from "./matchNote.service.js";
 import { sendNotificationToUser } from "./push.service.js";
 import socketService from "./socket.service.js";
 
@@ -88,25 +93,127 @@ const getDistanceMetersBetweenUsers = (userA, userB) => {
   return calculateDistanceMeters(pointA, pointB) || 0;
 };
 
+const round2 = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.round(num * 100) / 100;
+};
+
+const toStringList = (value) =>
+  Array.isArray(value)
+    ? value
+        .map((entry) => String(entry || "").trim())
+        .filter(Boolean)
+    : [];
+
+const getIntersection = (a = [], b = []) => {
+  const setB = new Set((b || []).map((item) => String(item)));
+  return Array.from(new Set((a || []).map((item) => String(item)))).filter(
+    (item) => setB.has(item),
+  );
+};
+
+const getExactMatchValue = (a, b) => {
+  const left = String(a || "")
+    .trim()
+    .toLowerCase();
+  const right = String(b || "")
+    .trim()
+    .toLowerCase();
+  if (!left || !right) return null;
+  return left === right ? left : null;
+};
+
+const getCommonalityBreakdown = ({ seeker, candidate }) => ({
+  goals: getIntersection(toStringList(seeker?.interests?.goals || []), toStringList(candidate?.interests?.goals || [])),
+  interests: getIntersection(toStringList(seeker?.interests), toStringList(candidate?.interests)),
+  languages: getIntersection(toStringList(seeker?.languages), toStringList(candidate?.languages)),
+  religion: getExactMatchValue(seeker?.religion, candidate?.religion),
+  diet: getExactMatchValue(seeker?.diet, candidate?.diet),
+  lifestyle: {
+    drinking: getExactMatchValue(
+      seeker?.lifestyle?.drinking,
+      candidate?.lifestyle?.drinking,
+    ),
+    smoking: getExactMatchValue(
+      seeker?.lifestyle?.smoking,
+      candidate?.lifestyle?.smoking,
+    ),
+    pets: getExactMatchValue(
+      seeker?.lifestyle?.pets,
+      candidate?.lifestyle?.pets,
+    ),
+  },
+});
+
+const getThisOrThatStats = ({ seekerAnswers, candidateAnswers }) => {
+  let sharedAnswers = 0;
+  let matchedAnswers = 0;
+  for (const [questionId, seekerSelection] of seekerAnswers.entries()) {
+    if (!candidateAnswers.has(questionId)) continue;
+    sharedAnswers += 1;
+    if (candidateAnswers.get(questionId) === seekerSelection) {
+      matchedAnswers += 1;
+    }
+  }
+  return {
+    sharedAnswers,
+    matchedAnswers,
+    matchRate: sharedAnswers
+      ? round2((matchedAnswers / sharedAnswers) * 100)
+      : 0,
+  };
+};
+
 const buildRoomMatchingNote = ({
   room,
   cycle,
   score,
   seekerScore,
   candidateScore,
-}) => ({
-  version: "location_room",
-  source: "location_room",
-  locationRoomId: room._id.toString(),
-  locationRoomTitle: room.title,
-  locationRoomCycleId: cycle._id.toString(),
-  totalScore: Math.round(score * 100) / 100,
-  components: {
-    seekerScore: Math.round(seekerScore.totalScore * 100) / 100,
-    candidateScore: Math.round(candidateScore.totalScore * 100) / 100,
-  },
-  reasons: ["room_pool_compatibility", "mutual_preferences"],
-});
+  seekerUser,
+  candidateUser,
+  seekerAnswers,
+  candidateAnswers,
+  distanceKm,
+}) => {
+  const common = getCommonalityBreakdown({
+    seeker: seekerUser,
+    candidate: candidateUser,
+  });
+  const thisOrThat = getThisOrThatStats({
+    seekerAnswers: seekerAnswers || new Map(),
+    candidateAnswers: candidateAnswers || new Map(),
+  });
+
+  const reasons = ["room_pool_compatibility"];
+  if (common.interests.length) reasons.push("shared_interests");
+  if (common.languages.length) reasons.push("shared_languages");
+  if (common.religion) reasons.push("shared_religion");
+  if (common.diet) reasons.push("shared_diet");
+  if (thisOrThat.matchedAnswers > 0) reasons.push("this_or_that_similarity");
+
+  return {
+    version: "location_room",
+    source: "location_room",
+    locationRoomId: room._id.toString(),
+    locationRoomTitle: room.title,
+    locationRoomCycleId: cycle._id.toString(),
+    totalScore: round2(score),
+    components: {
+      seekerScore: round2(seekerScore?.totalScore),
+      candidateScore: round2(candidateScore?.totalScore),
+      profileScore: round2(seekerScore?.componentScores?.profileScore),
+      intentScore: round2(seekerScore?.componentScores?.intentScore),
+      thisOrThatScore: round2(seekerScore?.componentScores?.thisOrThatScore),
+      distanceScore: round2(seekerScore?.componentScores?.distanceScore),
+    },
+    distanceKm: Number.isFinite(distanceKm) ? round2(distanceKm) : null,
+    common,
+    thisOrThat,
+    reasons,
+  };
+};
 
 const buildRoomMatchPayload = ({
   room,
@@ -282,6 +389,13 @@ const buildCompatibilityEdges = async ({
           score,
           seekerScore: scoreAB,
           candidateScore: scoreBA,
+          seekerUser: userA,
+          candidateUser: userB,
+          seekerAnswers: answersByUser.get(userA._id.toString()),
+          candidateAnswers: answersByUser.get(userB._id.toString()),
+          distanceKm: Number.isFinite(distanceMeters)
+            ? distanceMeters / 1000
+            : null,
         }),
       });
     }
@@ -441,10 +555,70 @@ const createRoomMatches = async ({ room, cycle, pairs, now }) => {
       continue;
     }
 
+    // Enrich the structural matchingNote with an AI-generated
+    // one-sentence opener ("why you matched") for each participant, mirroring
+    // the explore matchmaking flow. If the AI call fails the deterministic
+    // fallback inside `buildMatchNote` keeps the room usable.
+    const enrichMatchNote = async () => {
+      try {
+        const enriched = await buildMatchNoteShared({
+          seekerId: userId1,
+          candidateId: userId2,
+          matchingNote: pair.matchingNote,
+          loadUsers: async ({ seekerId, candidateId }) =>
+            User.find({
+              _id: { $in: [seekerId, candidateId] },
+            })
+              .select("_id username nickname")
+              .lean(),
+        });
+        logRoomMatchStep("create_matches_pair_ai_ready", {
+          roomId: room._id.toString(),
+          cycleId: cycle._id.toString(),
+          userId1: userId1.toString(),
+          userId2: userId2.toString(),
+          hasAiSentence: Boolean(enriched?.oneSentenceNote),
+          usedFallback: Boolean(enriched?.aiSummary?.usedFallback),
+        });
+        return enriched || pair.matchingNote;
+      } catch (error) {
+        logRoomMatchStep("create_matches_pair_ai_failed", {
+          roomId: room._id.toString(),
+          cycleId: cycle._id.toString(),
+          userId1: userId1.toString(),
+          userId2: userId2.toString(),
+          message: error?.message || error,
+        });
+        return pair.matchingNote;
+      }
+    };
+
+    // Strip the AI envelope fields when persisting so the canonical record
+    // keeps only the deterministic structural note.
+    const stripAiEnvelope = (note) => {
+      if (!note || typeof note !== "object") return note;
+      const {
+        oneSentenceNote: _omitOneSentenceNote,
+        notesByUser: _omitNotesByUser,
+        aiSummary: _omitAiSummary,
+        ...rest
+      } = note;
+      void _omitOneSentenceNote;
+      void _omitNotesByUser;
+      void _omitAiSummary;
+      return rest;
+    };
+
+    // Look up whether a chat room already exists for this pair BEFORE we
+    // generate an AI sentence. If `alreadyMatched` above returned true the
+    // whole pair would have been skipped; reaching here means this is a fresh
+    // pair, so we always generate the AI envelope.
+    const enrichedMatchingNote = await enrichMatchNote();
+
     const matchRoom = await getOrCreateMatchRoom(
       userId1,
       userId2,
-      pair.matchingNote,
+      stripAiEnvelope(enrichedMatchingNote || pair.matchingNote),
       {
         source: "location_room",
         locationRoom: room._id,
@@ -455,6 +629,12 @@ const createRoomMatches = async ({ room, cycle, pairs, now }) => {
         },
       },
     );
+    // Re-attach the AI envelope onto the in-memory doc so the socket payload
+    // emitted in this process carries the personalised opener. Persisted docs
+    // continue to expose the structural note via the existing API surface.
+    if (enrichedMatchingNote?.oneSentenceNote) {
+      matchRoom.matchingNote = enrichedMatchingNote;
+    }
     logRoomMatchStep("create_matches_pair_room_ready", {
       roomId: room._id.toString(),
       cycleId: cycle._id.toString(),
@@ -480,6 +660,33 @@ const createRoomMatches = async ({ room, cycle, pairs, now }) => {
       matchRoom: matchRoom._id,
       score: pair.score,
     });
+
+    const communityMatchDocs = [
+      buildCommunityMatchDoc({
+        userId: userId1,
+        matchedUserId: userId2,
+        roomId: matchRoom._id,
+        locationRoomId: room._id,
+        communityName: room.title,
+      }),
+      buildCommunityMatchDoc({
+        userId: userId2,
+        matchedUserId: userId1,
+        roomId: matchRoom._id,
+        locationRoomId: room._id,
+        communityName: room.title,
+      }),
+    ].filter(Boolean);
+
+    if (communityMatchDocs.length) {
+      createManyNotifications(communityMatchDocs).catch((error) => {
+        console.error(
+          `${ROOM_MATCH_LOG_PREFIX} notification_create_failed`,
+          error?.message || error,
+        );
+      });
+    }
+
     await notifyRoomMatch({
       room,
       matchRoom,
@@ -763,4 +970,15 @@ export const runDueLocationRoomCycles = async ({
     processed: results.filter((result) => !result?.skipped).length,
     results,
   };
+};
+
+// Exposed for unit tests so the matchingNote shape is verifiable without
+// having to spin up the full matching pipeline.
+export const __testHelpers = {
+  buildRoomMatchingNote,
+  getCommonalityBreakdown,
+  getThisOrThatStats,
+  getIntersection,
+  getExactMatchValue,
+  round2,
 };

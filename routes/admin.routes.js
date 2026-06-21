@@ -27,6 +27,7 @@ import {
   sendAdminCampaign,
   updateAdminUserGroupMembers,
 } from "../controllers/engagement.controller.js";
+import { getOptionIconCatalog } from "../controllers/options.controller.js";
 import { protect } from "../middleware/auth.middleware.js";
 import { requireAdmin } from "../middleware/admin.middleware.js";
 import { validateObjectIdParam } from "../middleware/validate.middleware.js";
@@ -55,6 +56,7 @@ router.patch(
 );
 router.get("/notifications/config", getAdminCampaignConfig);
 router.post("/notifications/send", sendAdminCampaign);
+router.get("/options/icon-catalog", getOptionIconCatalog);
 router.patch(
   "/reported-users/:reportId/status",
   validateObjectIdParam("reportId"),
