@@ -109,7 +109,7 @@ test("applyVerificationAutoRevoke revokes when verified user changes profile pic
       profilePicture: "old",
       isVerified: true,
       verificationStatus: "approved",
-      verificationMethod: "didit",
+      verificationMethod: "halokyc",
       verificationSessionId: "sess-123",
     },
     nextPatch: { profilePicture: "new" },

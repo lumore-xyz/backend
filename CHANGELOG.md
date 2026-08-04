@@ -71,4 +71,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - 111 backend tests pass (was 81 prior to this release).
 
 ## [1.0.0] – Initial public API baseline
-- Initial release. Express + Mongoose API with JWT auth, MongoDB models, Socket.io `/api/chat` namespace, didit verification webhooks, credits + matchmaking + chat-room + location-room pipelines, cron jobs, file uploads, OneSignal push notifications, nodemailer campaigns.
+- Initial release. Express + Mongoose API with JWT auth, MongoDB models, Socket.io `/api/chat` namespace, identity-verification webhooks, credits + matchmaking + chat-room + location-room pipelines, cron jobs, file uploads, OneSignal push notifications, nodemailer campaigns.

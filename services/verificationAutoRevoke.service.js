@@ -2,7 +2,7 @@
  * Auto-revoke verification when a user changes identity-shape fields
  * (profile picture / DOB / gender / religion).
  *
- * Rationale: identity verification (Didit) is bound to the user's
+ * Rationale: identity verification (HaloKYC) is bound to the user's
  * submitted selfie + ID at a point in time. If any identity-shape field
  * changes after verification, the previously captured verification no
  * longer corresponds to the current profile, so we must require the

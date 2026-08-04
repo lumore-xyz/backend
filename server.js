@@ -11,7 +11,7 @@ import adminAuthRoutes from "./routes/adminAuth.routes.js";
 import appVersionRoutes from "./routes/appVersion.routes.js";
 import authRoutes from "./routes/auth.routes.js";
 import creditsRoutes from "./routes/credits.routes.js";
-import diditRoutes from "./routes/didit.routes.js";
+import halokycRoutes from "./routes/halokyc.routes.js";
 import matchRoomRoutes from "./routes/matchRoom.routes.js";
 import messagesRoutes from "./routes/message.routes.js";
 import {
@@ -134,7 +134,7 @@ app.use("/api/messages", messagesRoutes);
 app.use("/api/inbox", matchRoomRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/rooms", locationRoomRoutes);
-app.use("/api/didit", diditRoutes);
+app.use("/api/halokyc", halokycRoutes);
 app.use("/api/games/this-or-that", thisOrThatRoutes);
 app.use("/api/credits", creditsRoutes);
 app.use("/api/referral", referralRoutes);
