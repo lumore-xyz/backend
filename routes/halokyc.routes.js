@@ -28,11 +28,25 @@ router.post("/create-verification", protect, async (req, res) => {
       });
     }
 
-    const parsedDob = user.dob ? new Date(user.dob) : null;
-    const dob =
-      parsedDob && !Number.isNaN(parsedDob.getTime())
-        ? parsedDob.toISOString().slice(0, 10)
-        : undefined;
+    let dob;
+    if (user.dob) {
+      const dobStr = String(user.dob).slice(0, 10);
+      const parts = dobStr.split("-");
+      const y = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10);
+      const d = parseInt(parts[2], 10);
+      if (
+        !Number.isNaN(y) &&
+        !Number.isNaN(m) &&
+        !Number.isNaN(d) &&
+        m >= 1 &&
+        m <= 12 &&
+        d >= 1 &&
+        d <= 31
+      ) {
+        dob = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      }
+    }
     const gender =
       typeof user.gender === "string"
         ? user.gender.trim().toLowerCase()
