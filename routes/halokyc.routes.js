@@ -34,7 +34,7 @@ router.post("/create-verification", protect, async (req, res) => {
           dob: user.dob,
           gender: user.gender,
         },
-        completion_url: "lumore://profile",
+        completion_url: "https://lumore.xyz/verification/complete",
       },
       {
         headers: {
