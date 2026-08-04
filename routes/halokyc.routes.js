@@ -5,6 +5,10 @@ import User from "../models/user.model.js";
 
 const router = express.Router();
 
+router.get("/complete", (_req, res) => {
+  return res.redirect(302, "lumore://profile");
+});
+
 router.post("/create-verification", protect, async (req, res) => {
   try {
     const userId = req.user?.id;
@@ -44,7 +48,7 @@ router.post("/create-verification", protect, async (req, res) => {
           dob,
           gender,
         },
-        completion_url: "https://lumore.xyz/verification/complete",
+        completion_url: "https://api.lumore.xyz/api/halokyc/complete",
       },
       {
         headers: {
