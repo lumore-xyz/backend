@@ -24,6 +24,16 @@ router.post("/create-verification", protect, async (req, res) => {
       });
     }
 
+    const parsedDob = user.dob ? new Date(user.dob) : null;
+    const dob =
+      parsedDob && !Number.isNaN(parsedDob.getTime())
+        ? parsedDob.toISOString().slice(0, 10)
+        : undefined;
+    const gender =
+      typeof user.gender === "string"
+        ? user.gender.trim().toLowerCase()
+        : undefined;
+
     const { data } = await axios.post(
       `${process.env.HALOKYC_API_URL}/api/v1/verifications/start`,
       {
@@ -31,8 +41,8 @@ router.post("/create-verification", protect, async (req, res) => {
         workflow_id: process.env.HALOKYC_WORKFLOW_ID,
         metadata: {
           name: user.realName,
-          dob: user.dob,
-          gender: user.gender,
+          dob,
+          gender,
         },
         completion_url: "https://lumore.xyz/verification/complete",
       },
