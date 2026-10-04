@@ -1,7 +1,5 @@
-import {
-  buildNotificationDoc,
-  isValidObjectId,
-} from "./notification.helpers.js";
+import { isValidObjectId } from "../utils/objectId.js";
+import { isPlainObject } from "../utils/object.js";
 
 const GAME_STATUS_TYPE_MAP = {
   approved: "GAME_SUBMISSION_APPROVED",
@@ -14,8 +12,8 @@ const COMMUNITY_TYPES = {
   ROLE_UPDATED: "COMMUNITY_ROLE_UPDATED",
 };
 
-const safeInput = (input) =>
-  input && typeof input === "object" ? input : null;
+const buildForValidUser = (input) =>
+  isValidObjectId(input?.userId) ? input : null;
 
 const buildSystemMessageInput = ({
   userId,
@@ -26,7 +24,7 @@ const buildSystemMessageInput = ({
   entityId = null,
   metadata = {},
 }) =>
-  buildNotificationDoc({
+  buildForValidUser({
     userId,
     actorId,
     type: "SYSTEM_MESSAGE",
@@ -38,8 +36,7 @@ const buildSystemMessageInput = ({
   });
 
 export const buildMatchNotification = ({ userId, matchedUserId, roomId }) => {
-  if (!isValidObjectId(userId)) return null;
-  return buildNotificationDoc({
+  return buildForValidUser({
     userId,
     actorId: matchedUserId || null,
     type: "MATCH_CREATED",
@@ -59,8 +56,7 @@ export const buildCommunityMatchNotification = ({
   locationRoomId,
   communityName,
 }) => {
-  if (!isValidObjectId(userId)) return null;
-  return buildNotificationDoc({
+  return buildForValidUser({
     userId,
     actorId: matchedUserId || null,
     type: "MATCH_CREATED_FROM_COMMUNITY",
@@ -82,8 +78,7 @@ export const buildFeedbackNotification = ({
   rating,
   reason,
 }) => {
-  if (!isValidObjectId(userId)) return null;
-  return buildNotificationDoc({
+  return buildForValidUser({
     userId,
     actorId: actorId || null,
     type: "FEEDBACK_RECEIVED",
@@ -98,11 +93,10 @@ export const buildFeedbackNotification = ({
 };
 
 export const buildGameSubmissionNotification = ({ userId, status, questionId }) => {
-  if (!isValidObjectId(userId)) return null;
   const normalized = String(status || "").toLowerCase();
   const type = GAME_STATUS_TYPE_MAP[normalized];
   if (!type) return null;
-  return buildNotificationDoc({
+  return buildForValidUser({
     userId,
     type,
     entityType: "game",
@@ -116,8 +110,7 @@ export const buildCommunityJoinedNotification = ({
   communityId,
   communityName,
 }) => {
-  if (!isValidObjectId(userId)) return null;
-  return buildNotificationDoc({
+  return buildForValidUser({
     userId,
     type: COMMUNITY_TYPES.JOINED,
     entityType: "community",
@@ -132,8 +125,7 @@ export const buildCommunityInviteNotification = ({
   communityId,
   communityName,
 }) => {
-  if (!isValidObjectId(userId)) return null;
-  return buildNotificationDoc({
+  return buildForValidUser({
     userId,
     actorId: actorId || null,
     type: COMMUNITY_TYPES.INVITE_RECEIVED,
@@ -149,8 +141,7 @@ export const buildCommunityRoleUpdatedNotification = ({
   communityName,
   role,
 }) => {
-  if (!isValidObjectId(userId)) return null;
-  return buildNotificationDoc({
+  return buildForValidUser({
     userId,
     type: COMMUNITY_TYPES.ROLE_UPDATED,
     entityType: "community",
@@ -160,7 +151,7 @@ export const buildCommunityRoleUpdatedNotification = ({
 };
 
 export const buildSystemMessageNotification = (input) => {
-  const safe = safeInput(input);
+  const safe = isPlainObject(input) ? input : null;
   if (!safe) return null;
   return buildSystemMessageInput({
     userId: safe.userId,

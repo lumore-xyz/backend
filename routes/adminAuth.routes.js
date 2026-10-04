@@ -1,9 +1,9 @@
 import express from "express";
-import rateLimit from "express-rate-limit";
 import { adminGoogleLoginWeb } from "../controllers/adminAuth.controller.js";
+import { createRateLimiter } from "../middleware/rateLimit.middleware.js";
 
 const router = express.Router();
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
+const loginLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 10 });
 
 router.post("/google-signin-web", loginLimiter, adminGoogleLoginWeb);
 

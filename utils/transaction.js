@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { logError } from "./logError.js";
 
 const UNSUPPORTED_TRANSACTION_MESSAGE_PATTERNS = [
   "transaction numbers are only allowed on a replica set member or mongos",
@@ -7,7 +8,7 @@ const UNSUPPORTED_TRANSACTION_MESSAGE_PATTERNS = [
   "only server in a shared cluster can start a new transaction at the active transaction number",
 ];
 
-export const isTransactionUnsupportedError = (error) => {
+const isTransactionUnsupportedError = (error) => {
   const message = String(error?.message || "").toLowerCase();
 
   if (
@@ -24,18 +25,12 @@ export const isTransactionUnsupportedError = (error) => {
   );
 };
 
-export async function runInTransaction(work, options = {}) {
-  const {
-    fallback = null,
-    shouldFallback = isTransactionUnsupportedError,
-    transactionOptions = undefined,
-  } = options;
-
+export async function runInTransaction(work, { fallback = null } = {}) {
   const session = await mongoose.startSession();
   let transactionStarted = false;
 
   try {
-    session.startTransaction(transactionOptions);
+    session.startTransaction();
     transactionStarted = true;
 
     const result = await work(session);
@@ -46,13 +41,13 @@ export async function runInTransaction(work, options = {}) {
       try {
         await session.abortTransaction();
       } catch (abortError) {
-        if (!shouldFallback(error)) {
+        if (!isTransactionUnsupportedError(error)) {
           error.abortTransactionError = abortError;
         }
       }
     }
 
-    if (fallback && shouldFallback(error)) {
+    if (fallback && isTransactionUnsupportedError(error)) {
       return await fallback(error);
     }
 
@@ -61,9 +56,7 @@ export async function runInTransaction(work, options = {}) {
     try {
       await session.endSession();
     } catch (endSessionError) {
-      console.error("[transaction] failed to end session", {
-        message: endSessionError?.message || "unknown_error",
-      });
+      logError("[transaction] failed_to_end_session", endSessionError);
     }
   }
 }

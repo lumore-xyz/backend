@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  createUpdateProfile,
-  updateUserLocation,
-} from "../controllers/profile.controller.js";
+import { createUpdateProfile } from "../controllers/profile.controller.js";
+import { updateFieldVisibility } from "../controllers/profileVisibility.controller.js";
+import { updateUserLocation } from "../controllers/profileLocation.controller.js";
 import User from "../models/user.model.js";
 
 const createRes = () => {
@@ -56,6 +55,33 @@ test("createUpdateProfile rejects raw location writes on the generic profile end
     assert.equal(wasCalled, false);
   } finally {
     User.findByIdAndUpdate = originalFindByIdAndUpdate;
+  }
+});
+
+test("updateFieldVisibility saves visibility and activity together", async () => {
+  const originalFindById = User.findById;
+  let saves = 0;
+  const user = {
+    fieldVisibility: { bio: "public" },
+    updateLastActive: async function () {
+      this.lastActive = new Date();
+      saves += 1;
+    },
+  };
+  User.findById = async () => user;
+
+  try {
+    const res = createRes();
+    await updateFieldVisibility(
+      { user: { id: "user-1" }, body: { fields: { bio: "private" } } },
+      res,
+    );
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(user.fieldVisibility, { bio: "private" });
+    assert.equal(saves, 1);
+  } finally {
+    User.findById = originalFindById;
   }
 });
 

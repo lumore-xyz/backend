@@ -2,18 +2,24 @@ import {
   createAdminAppVersion,
   deleteAdminAppVersion,
   getActiveAppVersionForPlatform,
-  getAdminAppVersionById,
   listAdminAppVersions,
   normalizePlatform,
   sanitizeAdminAppVersion,
   sanitizePublicAppVersion,
   updateAdminAppVersion,
 } from "../services/mobileAppVersion.service.js";
+import { logError } from "../utils/logError.js";
 
-const handleError = (error, fallbackMessage) => {
-  const message = error instanceof Error ? error.message : fallbackMessage;
+const respondWithError = (res, error, fallbackMessage) => {
   const statusCode = Number(error?.statusCode) || 500;
-  return { statusCode, message };
+  const message = statusCode >= 500
+    ? fallbackMessage
+    : error instanceof Error
+      ? error.message
+      : fallbackMessage;
+
+  if (statusCode >= 500) logError("App version request failed", error);
+  return res.status(statusCode).json({ success: false, message });
 };
 
 export const getPublicAppVersion = async (req, res) => {
@@ -34,11 +40,7 @@ export const getPublicAppVersion = async (req, res) => {
       data: sanitizePublicAppVersion(doc),
     });
   } catch (error) {
-    const { statusCode, message } = handleError(error, "Failed to fetch app version");
-    return res.status(statusCode).json({
-      success: false,
-      message,
-    });
+    return respondWithError(res, error, "Failed to fetch app version");
   }
 };
 
@@ -50,11 +52,7 @@ export const listAdminAppVersionsController = async (req, res) => {
       data: docs.map((doc) => sanitizeAdminAppVersion(doc)).filter(Boolean),
     });
   } catch (error) {
-    const { statusCode, message } = handleError(error, "Failed to list app versions");
-    return res.status(statusCode).json({
-      success: false,
-      message,
-    });
+    return respondWithError(res, error, "Failed to list app versions");
   }
 };
 
@@ -70,24 +68,12 @@ export const createAdminAppVersionController = async (req, res) => {
       data: sanitizeAdminAppVersion(created),
     });
   } catch (error) {
-    const { statusCode, message } = handleError(error, "Failed to create app version");
-    return res.status(statusCode).json({
-      success: false,
-      message,
-    });
+    return respondWithError(res, error, "Failed to create app version");
   }
 };
 
 export const updateAdminAppVersionController = async (req, res) => {
   try {
-    const existing = await getAdminAppVersionById(req.params?.id);
-    if (!existing) {
-      return res.status(404).json({
-        success: false,
-        message: "App version config not found",
-      });
-    }
-
     const updated = await updateAdminAppVersion({
       id: req.params.id,
       payload: req.body,
@@ -107,11 +93,7 @@ export const updateAdminAppVersionController = async (req, res) => {
       data: sanitizeAdminAppVersion(updated),
     });
   } catch (error) {
-    const { statusCode, message } = handleError(error, "Failed to update app version");
-    return res.status(statusCode).json({
-      success: false,
-      message,
-    });
+    return respondWithError(res, error, "Failed to update app version");
   }
 };
 
@@ -130,10 +112,6 @@ export const deleteAdminAppVersionController = async (req, res) => {
       data: { id: deleted._id },
     });
   } catch (error) {
-    const { statusCode, message } = handleError(error, "Failed to delete app version");
-    return res.status(statusCode).json({
-      success: false,
-      message,
-    });
+    return respondWithError(res, error, "Failed to delete app version");
   }
 };

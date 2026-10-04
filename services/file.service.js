@@ -1,30 +1,23 @@
-import cloudinary from "../utils/cloudinary.js";
+import cloudinary from "../config/cloudinary.js";
+import sharp from "sharp";
 
 const DEFAULT_MAX_WIDTH = 1200;
 const DEFAULT_MAX_HEIGHT = 1200;
 
-const getSharp = async () => {
-  try {
-    const mod = await import("sharp");
-    return mod.default ?? mod;
-  } catch (error) {
-    return null;
-  }
-};
+const uploadToCloudinary = (buffer, options) =>
+  new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(options, (error, result) => {
+      if (error) return reject(error);
+      resolve(result);
+    });
+    stream.end(buffer);
+  });
 
-export const optimizeImageBuffer = async (
+const optimizeImageBuffer = async (
   buffer,
-  {
-    maxWidth = DEFAULT_MAX_WIDTH,
-    maxHeight = DEFAULT_MAX_HEIGHT,
-    quality = 80,
-    format = "webp",
-  } = {},
-) => {
-  const sharp = await getSharp();
-  if (!sharp) return { buffer, optimized: false };
-
-  const optimizedBuffer = await sharp(buffer)
+  { maxWidth = DEFAULT_MAX_WIDTH, maxHeight = DEFAULT_MAX_HEIGHT } = {},
+) =>
+  sharp(buffer)
     .rotate()
     .resize({
       width: maxWidth,
@@ -32,57 +25,33 @@ export const optimizeImageBuffer = async (
       fit: "inside",
       withoutEnlargement: true,
     })
-    .toFormat(format, { quality })
+    .toFormat("webp", { quality: 80 })
     .toBuffer();
-
-  return { buffer: optimizedBuffer, optimized: true };
-};
 
 export const uploadImage = async ({
   buffer,
   folder,
   publicId,
-  resourceType = "image",
-  format = "webp",
-  transformation,
-  optimize = true,
   maxWidth = DEFAULT_MAX_WIDTH,
   maxHeight = DEFAULT_MAX_HEIGHT,
-  quality = 80,
 } = {}) => {
   if (!buffer) throw new Error("Missing file buffer");
 
-  const { buffer: uploadBuffer } = optimize
-    ? await optimizeImageBuffer(buffer, {
-        maxWidth,
-        maxHeight,
-        quality,
-        format,
-      })
-    : { buffer };
+  const uploadBuffer = await optimizeImageBuffer(buffer, {
+    maxWidth,
+    maxHeight,
+  });
 
-  const defaultTransform = [
-    { fetch_format: "auto" },
-    { quality: "auto" },
-    { crop: "limit", width: maxWidth, height: maxHeight },
-  ];
-
-  return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      {
-        resource_type: resourceType,
-        folder,
-        public_id: publicId,
-        format,
-        transformation: transformation ?? defaultTransform,
-      },
-      (error, result) => {
-        if (error) return reject(error);
-        resolve(result);
-      },
-    );
-
-    stream.end(uploadBuffer);
+  return uploadToCloudinary(uploadBuffer, {
+    resource_type: "image",
+    folder,
+    public_id: publicId,
+    format: "webp",
+    transformation: [
+      { fetch_format: "auto" },
+      { quality: "auto" },
+      { crop: "limit", width: maxWidth, height: maxHeight },
+    ],
   });
 };
 
@@ -96,20 +65,10 @@ export const deleteFile = async (publicId, resourceType = "image") => {
 export const uploadAudio = async ({ buffer, folder, publicId } = {}) => {
   if (!buffer) throw new Error("Missing file buffer");
 
-  return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      {
-        resource_type: "video",
-        folder,
-        public_id: publicId,
-      },
-      (error, result) => {
-        if (error) return reject(error);
-        resolve(result);
-      },
-    );
-
-    stream.end(buffer);
+  return uploadToCloudinary(buffer, {
+    resource_type: "video",
+    folder,
+    public_id: publicId,
   });
 };
 
@@ -120,8 +79,13 @@ export const extractPublicIdFromUrl = (url) => {
     const uploadIndex = parsed.pathname.indexOf("/upload/");
     if (uploadIndex === -1) return null;
 
-    let publicId = parsed.pathname.slice(uploadIndex + "/upload/".length);
-    publicId = publicId.replace(/^v\d+\//, "");
+    const pathSegments = parsed.pathname
+      .slice(uploadIndex + "/upload/".length)
+      .split("/")
+      .filter(Boolean);
+    const versionIndex = pathSegments.findIndex((segment) => /^v\d+$/.test(segment));
+    if (versionIndex !== -1) pathSegments.splice(0, versionIndex + 1);
+    let publicId = pathSegments.join("/");
     publicId = publicId.replace(/\.[^/.]+$/, "");
     return publicId || null;
   } catch {

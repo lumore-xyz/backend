@@ -62,7 +62,6 @@ const mobileAppVersionSchema = new mongoose.Schema(
     isActive: {
       type: Boolean,
       default: true,
-      index: true,
     },
     lastUpdatedBy: {
       type: mongoose.Schema.Types.ObjectId,

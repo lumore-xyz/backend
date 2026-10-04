@@ -1,79 +1,78 @@
 import cron from "node-cron";
-import User from "../models/user.model.js";
-import { deleteUserAndActivity } from "./accountDeletion.service.js";
+import { deleteScheduledAccounts } from "./accountDeletion.service.js";
 import { cleanupExpiredArchivedChats } from "./chatCleanup.service.js";
-import { runDueLocationRoomCycles } from "./locationRoomMatching.service.js";
-import { cleanupExpiredImageMessages } from "./messageCleanup.service.js";
+import { runDueLocationRoomCycles } from "./locationRoomScheduler.service.js";
+import { cleanupExpiredMediaMessages } from "./messageCleanup.service.js";
+import { logError } from "../utils/logError.js";
+
+const scheduleTask = (expression, errorMessage, task, reportResult) => {
+  let running = false;
+  return cron.schedule(expression, async () => {
+    if (running) return;
+    running = true;
+    try {
+      reportResult(await task());
+    } catch (error) {
+      logError(errorMessage, error);
+    } finally {
+      running = false;
+    }
+  });
+};
 
 /**
  * Initialize all cron jobs
  */
 export const initializeCronJobs = () => {
-  // Delete archived accounts that passed scheduledDeletionAt
-  cron.schedule("30 2 * * *", async () => {
-    try {
-      const now = new Date();
-      const usersToDelete = await User.find({
-        isArchived: true,
-        scheduledDeletionAt: { $lte: now },
-      }).select("_id");
-
-      if (!usersToDelete.length) {
-        return;
-      }
-
-      const userIds = usersToDelete.map((user) => user._id);
-      for (const userId of userIds) {
-        const result = await deleteUserAndActivity({ userId });
-        if (result.success) {
-          continue;
-        }
-        console.error("[Cron] Failed to fully delete user:", {
-          userId: userId.toString(),
-          reason: result.reason,
+  scheduleTask(
+    "30 2 * * *",
+    "[Cron] Error deleting archived accounts:",
+    deleteScheduledAccounts,
+    (results) => {
+      const failures = results.filter(({ success }) => !success).length;
+      if (failures) {
+        console.error("[Cron] Failed to fully delete archived accounts", {
+          failures,
         });
       }
-    } catch (error) {
-      console.error("[Cron] Error deleting archived accounts:", error);
-    }
-  });
+    },
+  );
 
-  // Clean up image messages before TTL deletion so cloud files are not orphaned.
-  cron.schedule("*/10 * * * *", async () => {
-    try {
-      const result = await cleanupExpiredImageMessages();
+  scheduleTask(
+    "*/10 * * * *",
+    "[Cron] Error cleaning up expired message media:",
+    cleanupExpiredMediaMessages,
+    (result) => {
       if (result.scanned > 0) {
-        console.log("[Cron] Message image cleanup:", result);
+        console.log("[Cron] Message media cleanup:", result);
       }
-    } catch (error) {
-      console.error("[Cron] Error cleaning up expired image messages:", error);
-    }
-  });
+    },
+  );
 
-  cron.schedule("0 3 * * *", async () => {
-    try {
-      const result = await cleanupExpiredArchivedChats();
+  scheduleTask(
+    "0 3 * * *",
+    "[Cron] Error cleaning up archived chats:",
+    cleanupExpiredArchivedChats,
+    (result) => {
       if (result.scanned > 0) {
         console.log("[Cron] Archived chat cleanup:", result);
       }
-    } catch (error) {
-      console.error("[Cron] Error cleaning up archived chats:", error);
-    }
-  });
+    },
+  );
 
-  cron.schedule("* * * * *", async () => {
-    try {
-      const result = await runDueLocationRoomCycles();
+  scheduleTask(
+    "* * * * *",
+    "[Cron] Error running location room cycles:",
+    runDueLocationRoomCycles,
+    (result) => {
       if (result.processed > 0) {
         console.log("[Cron] Location room cycles:", {
           scanned: result.scanned,
           processed: result.processed,
         });
       }
-    } catch (error) {
-      console.error("[Cron] Error running location room cycles:", error);
-    }
-  });
+    },
+  );
 
   console.log("[Cron] All cron jobs initialized");
 };

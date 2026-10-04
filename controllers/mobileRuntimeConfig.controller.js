@@ -3,70 +3,55 @@ import {
   sanitizePublicRuntimeConfig,
   updateMobileRuntimeConfig,
 } from "../services/mobileRuntimeConfig.service.js";
+import { logError } from "../utils/logError.js";
 
-const pickEnvironment = (req) => req.query?.environment || process.env.NODE_ENV;
+const respondWithServerError = (res, error, action, message) => {
+  logError(`[mobile-config] ${action} failed`, error);
+  return res.status(500).json({ success: false, message });
+};
 
-export const getPublicMobileConfig = async (req, res) => {
+const toConfigData = (doc, isAdmin = false) => ({
+  ...(isAdmin && {
+    key: doc?.key || null,
+    environment: doc?.environment || null,
+  }),
+  config: sanitizePublicRuntimeConfig(doc?.config || {}),
+  version: doc?.version || null,
+  updatedAt: doc?.updatedAt || null,
+  ...(isAdmin && { lastUpdatedBy: doc?.lastUpdatedBy || null }),
+});
+
+const getMobileConfig = async (req, res, isAdmin) => {
+  const action = isAdmin ? "getAdminMobileConfig" : "getPublicMobileConfig";
+  const errorMessage = isAdmin
+    ? "Failed to fetch admin mobile config"
+    : "Failed to fetch mobile config";
+
   try {
     const doc = await getOrCreateMobileRuntimeConfig({
-      environment: pickEnvironment(req),
+      environment: req.query?.environment,
     });
 
     return res.status(200).json({
       success: true,
-      data: {
-        config: sanitizePublicRuntimeConfig(doc?.config || {}),
-        version: doc?.version || null,
-        updatedAt: doc?.updatedAt || null,
-      },
+      data: toConfigData(doc, isAdmin),
     });
   } catch (error) {
-    console.error("[mobile-config] getPublicMobileConfig failed:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch mobile config",
-    });
+    return respondWithServerError(res, error, action, errorMessage);
   }
 };
 
-export const getAdminMobileConfig = async (req, res) => {
-  try {
-    const doc = await getOrCreateMobileRuntimeConfig({
-      environment: pickEnvironment(req),
-    });
+export const getPublicMobileConfig = (req, res) =>
+  getMobileConfig(req, res, false);
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        key: doc?.key || null,
-        environment: doc?.environment || null,
-        config: sanitizePublicRuntimeConfig(doc?.config || {}),
-        version: doc?.version || null,
-        updatedAt: doc?.updatedAt || null,
-        lastUpdatedBy: doc?.lastUpdatedBy || null,
-      },
-    });
-  } catch (error) {
-    console.error("[mobile-config] getAdminMobileConfig failed:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch admin mobile config",
-    });
-  }
-};
+export const getAdminMobileConfig = (req, res) =>
+  getMobileConfig(req, res, true);
 
 export const patchAdminMobileConfig = async (req, res) => {
   try {
     const configPatch = req.body?.config ?? req.body;
-    if (!configPatch || typeof configPatch !== "object" || Array.isArray(configPatch)) {
-      return res.status(400).json({
-        success: false,
-        message: "config payload must be an object",
-      });
-    }
-
     const updated = await updateMobileRuntimeConfig({
-      environment: pickEnvironment(req),
+      environment: req.query?.environment,
       configPatch,
       userId: req.user?._id,
     });
@@ -74,21 +59,13 @@ export const patchAdminMobileConfig = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Mobile config updated",
-      data: {
-        key: updated?.key || null,
-        environment: updated?.environment || null,
-        config: sanitizePublicRuntimeConfig(updated?.config || {}),
-        version: updated?.version || null,
-        updatedAt: updated?.updatedAt || null,
-        lastUpdatedBy: updated?.lastUpdatedBy || null,
-      },
+      data: toConfigData(updated, true),
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to update mobile config";
+    if (error?.statusCode !== 400) throw error;
     return res.status(400).json({
       success: false,
-      message,
+      message: error.message,
     });
   }
 };

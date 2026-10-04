@@ -1,101 +1,25 @@
-import MatchRoom from "../models/room.model.js";
-import Message from "../models/message.model.js";
-import { deleteFile, uploadAudio, uploadImage } from "../services/file.service.js";
-
-const isRoomParticipant = (room, userId) =>
-  room?.participants?.some((id) => id.toString() === userId.toString());
+import {
+  getMessagesForRoom,
+} from "../services/messageApi.service.js";
+import {
+  deleteTemporaryRoomMedia,
+  uploadRoomAudio as saveRoomAudio,
+  uploadRoomImage as saveRoomImage,
+} from "../services/messageMedia.service.js";
+import { logError } from "../utils/logError.js";
 
 const getUserId = (req) => req.user?._id?.toString();
-
-const getAuthorizedRoom = async (roomId, userId, { requireActive = false } = {}) => {
-  const room = await MatchRoom.findById(roomId).lean();
-  if (!room || !isRoomParticipant(room, userId)) return null;
-  if (requireActive && room.status !== "active") return "inactive";
-  return room;
-};
-
-const normalizeMessageForResponse = (msg) => {
-  const normalizeReply = (reply) => {
-    if (!reply) return null;
-    return {
-      _id: reply._id,
-      sender: reply.sender,
-      messageType: reply.messageType || "text",
-      message: reply?.message || "",
-      imageUrl: reply.imageUrl || null,
-      audioUrl: reply.audioUrl || null,
-      audioDurationMs: reply.audioDurationMs || null,
-      audioWaveform: Array.isArray(reply.audioWaveform)
-        ? reply.audioWaveform
-        : [],
-      editedAt: reply.editedAt || null,
-      createdAt: reply.createdAt || null,
-    };
-  };
-
-  return {
-    _id: msg?._id,
-    sender: msg?.sender,
-    receiver: msg?.receiver,
-    roomId: msg?.roomId,
-    messageType: msg?.messageType || "text",
-    message: msg?.message || "",
-    imageUrl: msg?.imageUrl || null,
-    imagePublicId: msg?.imagePublicId || null,
-    audioUrl: msg?.audioUrl || null,
-    audioPublicId: msg?.audioPublicId || null,
-    audioDurationMs: msg?.audioDurationMs || null,
-    audioWaveform: Array.isArray(msg?.audioWaveform) ? msg.audioWaveform : [],
-    reactions: (msg?.reactions || []).map((reaction) => ({
-      user: reaction.user,
-      emoji: reaction.emoji || "\u2764\uFE0F",
-    })),
-    replyTo: normalizeReply(msg?.replyTo),
-    editedAt: msg?.editedAt || null,
-    deliveredAt: msg?.deliveredAt || null,
-    readAt: msg?.readAt || null,
-    createdAt: msg?.createdAt,
-    updatedAt: msg?.updatedAt,
-  };
-};
 
 export const getRoomMessages = async (req, res) => {
   try {
     const { roomId } = req.params;
-
-    if (!roomId) {
-      return res
-        .status(400)
-        .json({ message: "Invalid request: roomId required" });
-    }
-
-    const userId = getUserId(req);
-    const room = await MatchRoom.findById(roomId).select("participants").lean();
-
-    if (!room || !isRoomParticipant(room, userId)) {
+    const messages = await getMessagesForRoom({ roomId, userId: getUserId(req) });
+    if (!messages) {
       return res.status(403).json({ message: "Not authorized for this room" });
     }
-
-    await MatchRoom.findByIdAndUpdate(roomId, {
-      $set: { [`unreadCounts.${userId}`]: 0 },
-    });
-
-    const messages = await Message.find({ roomId })
-      .populate("sender", "_id name avatar")
-      .populate("receiver", "_id name avatar")
-      .populate({
-        path: "replyTo",
-        select: "_id sender messageType message imageUrl audioUrl audioDurationMs audioWaveform editedAt createdAt",
-        populate: {
-          path: "sender",
-          select: "_id name avatar",
-        },
-      })
-      .sort({ createdAt: 1 });
-
-    return res.status(200).json(messages.map(normalizeMessageForResponse));
+    return res.status(200).json(messages);
   } catch (error) {
-    console.error("Error fetching room messages:", error);
+    logError("Error fetching room messages", error);
     return res.status(500).json({ message: "Server error" });
   }
 };
@@ -104,38 +28,27 @@ export const uploadRoomImage = async (req, res) => {
   try {
     const { roomId } = req.params;
     const userId = getUserId(req);
-
-    if (!roomId) {
-      return res.status(400).json({ message: "roomId is required" });
-    }
-
     if (!req.file?.buffer) {
       return res.status(400).json({ message: "Image file is required" });
     }
 
-    const room = await getAuthorizedRoom(roomId, userId, { requireActive: true });
-    if (!room) {
+    const result = await saveRoomImage({
+      roomId,
+      userId,
+      buffer: req.file.buffer,
+    });
+    if (result.error === "NOT_AUTHORIZED") {
       return res.status(403).json({ message: "Not authorized for this room" });
     }
-    if (room === "inactive") {
+    if (result.error === "ROOM_INACTIVE") {
       return res.status(400).json({ message: "Room is not active" });
     }
-
-    const uploaded = await uploadImage({
-      buffer: req.file.buffer,
-      folder: `chat/${userId}`,
-      publicId: `${roomId}-${Date.now()}`,
-      format: "webp",
-      optimize: true,
-    });
-
     return res.status(200).json({
       message: "Image uploaded successfully",
-      imageUrl: uploaded?.secure_url,
-      imagePublicId: uploaded?.public_id,
+      ...result,
     });
   } catch (error) {
-    console.error("Error uploading room image:", error);
+    logError("Error uploading room image", error);
     return res.status(500).json({ message: "Failed to upload image" });
   }
 };
@@ -145,88 +58,53 @@ export const uploadRoomAudio = async (req, res) => {
     const { roomId } = req.params;
     const userId = getUserId(req);
     const durationMs = Number(req.body?.durationMs || 0);
-
-    if (!roomId) {
-      return res.status(400).json({ message: "roomId is required" });
-    }
-
     if (!req.file?.buffer) {
       return res.status(400).json({ message: "Audio file is required" });
     }
-
     if (!Number.isFinite(durationMs) || durationMs <= 0) {
       return res.status(400).json({ message: "durationMs is required" });
     }
 
-    const room = await getAuthorizedRoom(roomId, userId, { requireActive: true });
-    if (!room) {
+    const result = await saveRoomAudio({
+      roomId,
+      userId,
+      buffer: req.file.buffer,
+      durationMs,
+    });
+    if (result.error === "NOT_AUTHORIZED") {
       return res.status(403).json({ message: "Not authorized for this room" });
     }
-    if (room === "inactive") {
+    if (result.error === "ROOM_INACTIVE") {
       return res.status(400).json({ message: "Room is not active" });
     }
-
-    const uploaded = await uploadAudio({
-      buffer: req.file.buffer,
-      folder: `chat-audio/${userId}`,
-      publicId: `${roomId}-${Date.now()}`,
-    });
-
     return res.status(200).json({
       message: "Audio uploaded successfully",
-      audioUrl: uploaded?.secure_url,
-      audioPublicId: uploaded?.public_id,
-      audioDurationMs: Math.round(durationMs),
+      ...result,
     });
   } catch (error) {
-    console.error("Error uploading room audio:", error);
+    logError("Error uploading room audio", error);
     return res.status(500).json({ message: "Failed to upload audio" });
   }
 };
 
-export const deleteTempRoomImage = async (req, res) => {
+const deleteTempMedia = async (req, res, type) => {
+  const noun = type === "audio" ? "audio" : "image";
+  const title = noun[0].toUpperCase() + noun.slice(1);
   try {
     const userId = getUserId(req);
     const { publicId } = req.body || {};
-
     if (!publicId) {
       return res.status(400).json({ message: "publicId is required" });
     }
-
-    const expectedPrefix = `chat/${userId}/`;
-    if (!publicId.startsWith(expectedPrefix)) {
-      return res.status(403).json({ message: "Not authorized to delete this image" });
+    if (!(await deleteTemporaryRoomMedia({ userId, publicId, type }))) {
+      return res.status(403).json({ message: `Not authorized to delete this ${noun}` });
     }
-
-    await deleteFile(publicId, "image");
-
-    return res.status(200).json({ message: "Image deleted successfully" });
+    return res.status(200).json({ message: `${title} deleted successfully` });
   } catch (error) {
-    console.error("Error deleting temp room image:", error);
-    return res.status(500).json({ message: "Failed to delete image" });
+    logError(`Error deleting temp room ${noun}`, error);
+    return res.status(500).json({ message: `Failed to delete ${noun}` });
   }
 };
 
-export const deleteTempRoomAudio = async (req, res) => {
-  try {
-    const userId = getUserId(req);
-    const { publicId } = req.body || {};
-
-    if (!publicId) {
-      return res.status(400).json({ message: "publicId is required" });
-    }
-
-    const expectedPrefix = `chat-audio/${userId}/`;
-    if (!publicId.startsWith(expectedPrefix)) {
-      return res.status(403).json({ message: "Not authorized to delete this audio" });
-    }
-
-    await deleteFile(publicId, "video");
-
-    return res.status(200).json({ message: "Audio deleted successfully" });
-  } catch (error) {
-    console.error("Error deleting temp room audio:", error);
-    return res.status(500).json({ message: "Failed to delete audio" });
-  }
-};
-
+export const deleteTempRoomImage = (req, res) => deleteTempMedia(req, res, "image");
+export const deleteTempRoomAudio = (req, res) => deleteTempMedia(req, res, "audio");

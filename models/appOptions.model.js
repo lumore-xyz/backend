@@ -1,48 +1,11 @@
 import mongoose from "mongoose";
 
-const optionItemIconSchema = new mongoose.Schema(
-  {
-    library: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    name: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-  },
-  { _id: false },
-);
-
-const optionItemSchema = new mongoose.Schema(
-  {
-    label: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    value: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    icon: {
-      type: optionItemIconSchema,
-      default: null,
-    },
-  },
-  { _id: false },
-);
-
 const appOptionsSchema = new mongoose.Schema(
   {
     key: {
       type: String,
       default: "global",
       unique: true,
-      index: true,
     },
     options: {
       type: mongoose.Schema.Types.Mixed,

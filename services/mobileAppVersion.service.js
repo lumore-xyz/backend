@@ -1,21 +1,18 @@
 import MobileAppVersion, { PLATFORMS } from "../models/mobileAppVersion.model.js";
+import { isPlainObject } from "../utils/object.js";
+import { normalizeString } from "../utils/strings.js";
 
 const SEMVER_PART = String.raw`\d+`;
 const SEMVER_CORE = new RegExp(
   `^(${SEMVER_PART})(?:\\.(${SEMVER_PART}))?(?:\\.(${SEMVER_PART}))?(?:\\.(${SEMVER_PART}))?(?:[-+][0-9A-Za-z.-]+)?$`,
 );
 
-const isPlainObject = (value) =>
-  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const badRequest = (message) => Object.assign(new Error(message), { statusCode: 400 });
 
 const normalizePlatform = (platform) => {
-  const normalized = String(platform || "")
-    .trim()
-    .toLowerCase();
+  const normalized = normalizeString(platform);
   if (!PLATFORMS.includes(normalized)) {
-    const error = new Error(`Invalid platform. Expected one of: ${PLATFORMS.join(", ")}`);
-    error.statusCode = 400;
-    throw error;
+    throw badRequest(`Invalid platform. Expected one of: ${PLATFORMS.join(", ")}`);
   }
   return normalized;
 };
@@ -23,31 +20,21 @@ const normalizePlatform = (platform) => {
 const normalizeVersionString = (value, { fieldName, required = true }) => {
   if (value === undefined || value === null) {
     if (!required) return undefined;
-    const error = new Error(`${fieldName} is required`);
-    error.statusCode = 400;
-    throw error;
+    throw badRequest(`${fieldName} is required`);
   }
 
   if (typeof value !== "string") {
-    const error = new Error(`${fieldName} must be a string`);
-    error.statusCode = 400;
-    throw error;
+    throw badRequest(`${fieldName} must be a string`);
   }
 
   const trimmed = value.trim();
   if (!trimmed) {
     if (!required) return "";
-    const error = new Error(`${fieldName} is required`);
-    error.statusCode = 400;
-    throw error;
+    throw badRequest(`${fieldName} is required`);
   }
 
   if (!SEMVER_CORE.test(trimmed)) {
-    const error = new Error(
-      `${fieldName} must be a semantic-style version (e.g. 1.0.1)`,
-    );
-    error.statusCode = 400;
-    throw error;
+    throw badRequest(`${fieldName} must be a semantic-style version (e.g. 1.0.1)`);
   }
 
   return trimmed;
@@ -56,17 +43,11 @@ const normalizeVersionString = (value, { fieldName, required = true }) => {
 const normalizeOptionalString = (value, { maxLength, fieldName }) => {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "string") {
-    const error = new Error(`${fieldName} must be a string`);
-    error.statusCode = 400;
-    throw error;
+    throw badRequest(`${fieldName} must be a string`);
   }
   const trimmed = value.trim();
   if (maxLength && trimmed.length > maxLength) {
-    const error = new Error(
-      `${fieldName} must be at most ${maxLength} characters`,
-    );
-    error.statusCode = 400;
-    throw error;
+    throw badRequest(`${fieldName} must be at most ${maxLength} characters`);
   }
   return trimmed;
 };
@@ -74,40 +55,31 @@ const normalizeOptionalString = (value, { maxLength, fieldName }) => {
 const normalizeOptionalUrl = (value, { fieldName, required = false }) => {
   if (value === undefined || value === null) {
     if (required) {
-      const error = new Error(`${fieldName} is required`);
-      error.statusCode = 400;
-      throw error;
+      throw badRequest(`${fieldName} is required`);
     }
     return undefined;
   }
 
   if (typeof value !== "string") {
-    const error = new Error(`${fieldName} must be a string URL`);
-    error.statusCode = 400;
-    throw error;
+    throw badRequest(`${fieldName} must be a string URL`);
   }
 
   const trimmed = value.trim();
   if (!trimmed) {
     if (required) {
-      const error = new Error(`${fieldName} is required`);
-      error.statusCode = 400;
-      throw error;
+      throw badRequest(`${fieldName} is required`);
     }
     return "";
   }
 
+  let parsed;
   try {
-    const parsed = new URL(trimmed);
-    if (!["http:", "https:"].includes(parsed.protocol)) {
-      const error = new Error(`${fieldName} must use http or https`);
-      error.statusCode = 400;
-      throw error;
-    }
+    parsed = new URL(trimmed);
   } catch {
-    const error = new Error(`${fieldName} must be a valid http(s) URL`);
-    error.statusCode = 400;
-    throw error;
+    throw badRequest(`${fieldName} must be a valid http(s) URL`);
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw badRequest(`${fieldName} must use http or https`);
   }
 
   return trimmed;
@@ -118,16 +90,12 @@ const normalizeOptionalBoolean = (value, { fieldName }) => {
   if (typeof value === "boolean") return value;
   if (value === "true") return true;
   if (value === "false") return false;
-  const error = new Error(`${fieldName} must be a boolean`);
-  error.statusCode = 400;
-  throw error;
+  throw badRequest(`${fieldName} must be a boolean`);
 };
 
 const normalizeVersionPayload = (input, { partial = false } = {}) => {
   if (!isPlainObject(input)) {
-    const error = new Error("payload must be an object");
-    error.statusCode = 400;
-    throw error;
+    throw badRequest("payload must be an object");
   }
 
   const payload = {};
@@ -216,10 +184,6 @@ export const listAdminAppVersions = async () => {
   return MobileAppVersion.find({}).sort({ platform: 1, updatedAt: -1 }).lean();
 };
 
-export const getAdminAppVersionById = async (id) => {
-  return MobileAppVersion.findById(id).lean();
-};
-
 export const createAdminAppVersion = async ({ payload, userId }) => {
   const normalized = normalizeVersionPayload(payload, { partial: false });
 
@@ -263,20 +227,24 @@ export const deleteAdminAppVersion = async (id) => {
   return deleted;
 };
 
+const sanitizeAppVersionFields = (doc, versionFallback) => ({
+  platform: doc.platform || null,
+  latestVersion: doc.latestVersion || versionFallback,
+  minimumSupportedVersion: doc.minimumSupportedVersion || versionFallback,
+  forceUpdate: Boolean(doc.forceUpdate),
+  playStoreUrl: doc.playStoreUrl || "",
+  appStoreUrl: doc.appStoreUrl || "",
+  updateTitle: doc.updateTitle || "Update available",
+  updateMessage:
+    doc.updateMessage ||
+    "A new version of the app is available. Please update for the best experience.",
+  isActive: doc.isActive !== false,
+});
+
 export const sanitizePublicAppVersion = (doc) => {
   if (!doc) return null;
   return {
-    platform: doc.platform || null,
-    latestVersion: doc.latestVersion || null,
-    minimumSupportedVersion: doc.minimumSupportedVersion || null,
-    forceUpdate: Boolean(doc.forceUpdate),
-    playStoreUrl: doc.playStoreUrl || "",
-    appStoreUrl: doc.appStoreUrl || "",
-    updateTitle: doc.updateTitle || "Update available",
-    updateMessage:
-      doc.updateMessage ||
-      "A new version of the app is available. Please update for the best experience.",
-    isActive: doc.isActive !== false,
+    ...sanitizeAppVersionFields(doc, null),
     updatedAt: doc.updatedAt || null,
   };
 };
@@ -285,18 +253,7 @@ export const sanitizeAdminAppVersion = (doc) => {
   if (!doc) return null;
   return {
     _id: doc._id,
-    platform: doc.platform || null,
-    latestVersion: doc.latestVersion || "",
-    minimumSupportedVersion: doc.minimumSupportedVersion || "",
-    forceUpdate: Boolean(doc.forceUpdate),
-    playStoreUrl: doc.playStoreUrl || "",
-    appStoreUrl: doc.appStoreUrl || "",
-    updateTitle:
-      doc.updateTitle || "Update available",
-    updateMessage:
-      doc.updateMessage ||
-      "A new version of the app is available. Please update for the best experience.",
-    isActive: doc.isActive !== false,
+    ...sanitizeAppVersionFields(doc, ""),
     lastUpdatedBy: doc.lastUpdatedBy || null,
     createdAt: doc.createdAt || null,
     updatedAt: doc.updatedAt || null,

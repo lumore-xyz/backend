@@ -1,13 +1,5 @@
 import { model, Schema } from "mongoose";
 
-// export type PromptCategory =
-//   | "fun"
-//   | "deep"
-//   | "flirty"
-//   | "thoughtful"
-//   | "quirky"
-//   | "values";
-
 const PromptSchema = new Schema(
   {
     text: {

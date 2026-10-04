@@ -1,5 +1,7 @@
 import AppOptions from "../models/appOptions.model.js";
 
+const GLOBAL_KEY = "global";
+
 const DEFAULT_OPTIONS = {
   campaignFromEmailOptions: [
     { label: "noreply@lumore.xyz", value: "noreply@lumore.xyz" },
@@ -145,6 +147,9 @@ const DEFAULT_OPTIONS = {
   ],
 };
 
+const invalidOptions = (message) =>
+  Object.assign(new Error(message), { statusCode: 400 });
+
 const normalizeOptionIcon = (rawIcon) => {
   if (rawIcon === null || rawIcon === undefined) return null;
   if (typeof rawIcon !== "object" || Array.isArray(rawIcon)) return null;
@@ -158,7 +163,7 @@ const normalizeOptionIcon = (rawIcon) => {
 
 const normalizeOptionList = (list = []) => {
   if (!Array.isArray(list)) {
-    throw new Error("Each option field must be an array");
+    throw invalidOptions("Each option field must be an array");
   }
 
   const seen = new Set();
@@ -169,7 +174,7 @@ const normalizeOptionList = (list = []) => {
     const value = String(entry?.value || "").trim();
 
     if (!label || !value) {
-      throw new Error("Each option must contain non-empty label and value");
+      throw invalidOptions("Each option must contain non-empty label and value");
     }
 
     if (seen.has(value)) continue;
@@ -186,7 +191,7 @@ const normalizeOptionList = (list = []) => {
 
 export const normalizeOptionsPayload = (payload = {}) => {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new Error("options payload must be an object");
+    throw invalidOptions("options payload must be an object");
   }
 
   const normalized = {};
@@ -198,12 +203,12 @@ export const normalizeOptionsPayload = (payload = {}) => {
 };
 
 export const getOrCreateGlobalOptions = async () => {
-  let doc = await AppOptions.findOne({ key: "global" }).lean();
+  let doc = await AppOptions.findOne({ key: GLOBAL_KEY }).lean();
   if (doc) {
     const nextOptions = { ...DEFAULT_OPTIONS, ...(doc.options || {}) };
     if (JSON.stringify(nextOptions) !== JSON.stringify(doc.options || {})) {
       const patched = await AppOptions.findOneAndUpdate(
-        { key: "global" },
+        { key: GLOBAL_KEY },
         { $set: { options: nextOptions } },
         { returnDocument: "after" },
       ).lean();
@@ -212,13 +217,12 @@ export const getOrCreateGlobalOptions = async () => {
     return doc;
   }
 
-  await AppOptions.create({
-    key: "global",
+  const created = await AppOptions.create({
+    key: GLOBAL_KEY,
     options: DEFAULT_OPTIONS,
     version: new Date().toISOString(),
   });
-
-  return AppOptions.findOne({ key: "global" }).lean();
+  return created.toObject();
 };
 
 export const updateGlobalOptions = async ({ optionsPatch, userId }) => {
@@ -233,7 +237,7 @@ export const updateGlobalOptions = async ({ optionsPatch, userId }) => {
   const nextVersion = new Date().toISOString();
 
   const updated = await AppOptions.findOneAndUpdate(
-    { key: "global" },
+    { key: GLOBAL_KEY },
     {
       $set: {
         options: mergedOptions,

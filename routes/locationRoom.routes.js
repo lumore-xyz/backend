@@ -4,48 +4,45 @@ import {
   createLocationRoom,
   getLocationRoomDetail,
   getNearbyLocationRooms,
+  startLocationRoomMatchNow,
+  updateLocationRoom,
+} from "../controllers/locationRoom.controller.js";
+import {
   leaveLocationRoomPool,
   pinLocationRoom,
   rejoinLocationRoomPool,
-  startLocationRoomMatchNow,
   unpinLocationRoom,
-  updateLocationRoom,
-} from "../controllers/locationRoom.controller.js";
+} from "../controllers/locationRoomPool.controller.js";
 import { protect } from "../middleware/auth.middleware.js";
 import { upload } from "../middleware/upload.middleware.js";
 import { validateObjectIdParam } from "../middleware/validate.middleware.js";
 
 const router = express.Router();
 
-router.post("/", protect, upload.single("image"), createLocationRoom);
-router.get("/nearby", protect, getNearbyLocationRooms);
-router.get("/:roomId", protect, validateObjectIdParam("roomId"), getLocationRoomDetail);
+router.use(protect);
+router.param("roomId", validateObjectIdParam("roomId"));
+
+router.post("/", upload.single("image"), createLocationRoom);
+router.get("/nearby", getNearbyLocationRooms);
+router.get("/:roomId", getLocationRoomDetail);
 router.patch(
   "/:roomId",
-  protect,
-  validateObjectIdParam("roomId"),
   upload.single("image"),
   updateLocationRoom,
 );
 router.post(
   "/:roomId/start-match",
-  protect,
-  validateObjectIdParam("roomId"),
   startLocationRoomMatchNow,
 );
-router.post("/:roomId/pin", protect, validateObjectIdParam("roomId"), pinLocationRoom);
+router.post("/:roomId/pin", pinLocationRoom);
 router.post(
   "/:roomId/rejoin",
-  protect,
-  validateObjectIdParam("roomId"),
   rejoinLocationRoomPool,
 );
 router.post(
   "/:roomId/leave-pool",
-  protect,
-  validateObjectIdParam("roomId"),
   leaveLocationRoomPool,
 );
-router.post("/:roomId/unpin", protect, validateObjectIdParam("roomId"), unpinLocationRoom);
+router.post("/:roomId/unpin", unpinLocationRoom);
 
 export default router;

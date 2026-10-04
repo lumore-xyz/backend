@@ -6,11 +6,14 @@ import {
 } from "../controllers/push.controller.js";
 
 import { protect } from "../middleware/auth.middleware.js";
+import { requireAdmin } from "../middleware/admin.middleware.js";
 
 const router = express.Router();
 
-router.post("/subscribe", protect, subscribe);
-router.post("/unsubscribe", protect, unsubscribe);
-router.post("/send", protect, sendNotification);
+router.use(protect);
+
+router.post("/subscribe", subscribe);
+router.post("/unsubscribe", unsubscribe);
+router.post("/send", requireAdmin, sendNotification);
 
 export default router;

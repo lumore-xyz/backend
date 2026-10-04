@@ -1,4 +1,5 @@
 import { Schema, Types, model } from "mongoose";
+import { THIS_OR_THAT_ANSWER_CHOICES } from "../utils/thisOrThat.js";
 
 const thisOrThatAnswerSchema = new Schema(
   {
@@ -16,7 +17,7 @@ const thisOrThatAnswerSchema = new Schema(
     },
     selection: {
       type: String,
-      enum: ["left", "right"],
+      enum: THIS_OR_THAT_ANSWER_CHOICES,
       required: true,
     },
   },

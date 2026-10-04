@@ -1,3 +1,11 @@
+import { escapeRegex } from "./regex.js";
+import { getDateOfBirthRange } from "./age.js";
+import { formattedAddressPartsExpression } from "./location.js";
+import {
+  normalizeString as normalizeLowercaseString,
+  trimString,
+} from "./strings.js";
+
 const USER_STRING_FILTER_KEYS = [
   "username",
   "email",
@@ -83,14 +91,10 @@ const FILTER_KEYS = [
   ...PREFERENCE_ARRAY_FILTER_KEYS,
 ];
 
-const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-const normalizeString = (value) => String(value || "").trim();
-
 const parseBoolean = (value) => {
   if (typeof value === "boolean") return value;
   if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeLowercaseString(value);
   if (["true", "1", "yes"].includes(normalized)) return true;
   if (["false", "0", "no"].includes(normalized)) return false;
   return null;
@@ -108,7 +112,7 @@ const parseNumber = (value) => {
 const parseStringArray = (value) => {
   if (Array.isArray(value)) {
     return value
-      .map((item) => normalizeString(item))
+      .map((item) => trimString(item || ""))
       .filter(Boolean);
   }
 
@@ -122,7 +126,8 @@ const parseStringArray = (value) => {
   return null;
 };
 
-const hasAnyFilter = (filters) => Object.keys(filters || {}).length > 0;
+export const hasAnySupportedFilters = (filters) =>
+  Object.keys(filters || {}).some((key) => FILTER_KEYS.includes(key));
 
 const buildRegexEquals = (value) => new RegExp(`^${escapeRegex(value)}$`, "i");
 
@@ -144,7 +149,7 @@ export const sanitizeUserFilters = (rawFilters) => {
     if (rawValue === undefined || rawValue === null || rawValue === "") continue;
 
     if (USER_STRING_FILTER_KEYS.includes(key) || PREFERENCE_STRING_FILTER_KEYS.includes(key)) {
-      const value = normalizeString(rawValue);
+      const value = trimString(rawValue || "");
       if (!value) continue;
       filters[key] = value;
       continue;
@@ -213,16 +218,14 @@ export const buildUserFilterClauses = (filters = {}) => {
               $trim: {
                 input: {
                   $arrayElemAt: [
-                    {
-                      $split: [{ $trim: { input: "$location.formattedAddress" } }, ","],
-                    },
+                    formattedAddressPartsExpression(),
                     -1,
                   ],
                 },
               },
             },
           },
-          filters.country.trim().toLowerCase(),
+          normalizeLowercaseString(filters.country),
         ],
       },
     });
@@ -238,21 +241,7 @@ export const buildUserFilterClauses = (filters = {}) => {
   }
 
   if (filters.minAge !== undefined || filters.maxAge !== undefined) {
-    const now = new Date();
-    const dobRange = {};
-
-    if (filters.maxAge !== undefined) {
-      const minDob = new Date(now);
-      minDob.setFullYear(now.getFullYear() - Number(filters.maxAge) - 1);
-      dobRange.$gte = minDob;
-    }
-    if (filters.minAge !== undefined) {
-      const maxDob = new Date(now);
-      maxDob.setFullYear(now.getFullYear() - Number(filters.minAge));
-      dobRange.$lte = maxDob;
-    }
-
-    clauses.push({ dob: dobRange });
+    clauses.push({ dob: getDateOfBirthRange(filters) });
   }
 
   if (filters.minHeight !== undefined || filters.maxHeight !== undefined) {
@@ -380,5 +369,3 @@ export const buildPreferenceFilter = (filters = {}) => {
 
 export const hasPreferenceFilters = (filters = {}) =>
   Object.keys(filters).some((key) => key.startsWith("pref"));
-
-export const hasAnySupportedFilters = hasAnyFilter;

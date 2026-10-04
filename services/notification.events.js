@@ -1,6 +1,7 @@
 import socketService from "./socket.service.js";
+import { logError } from "../utils/logError.js";
 
-export const NOTIFICATION_SOCKET_EVENTS = Object.freeze({
+const NOTIFICATION_SOCKET_EVENTS = Object.freeze({
   CREATED: "notification_created",
   UPDATED: "notification_updated",
   DELETED: "notification_deleted",
@@ -15,24 +16,29 @@ const safeEmit = (event, userId, payload) => {
     // Never let socket failures cascade into HTTP errors; notifications are
     // already persisted and the mobile client will pick the change up on
     // its next refetch.
-    console.error(
-      `[notifications] emit_failed event=${event}`,
-      error?.message || error,
-    );
+    logError(`[notifications] emit_failed event=${event}`, error);
   }
 };
 
 export const emitNotificationCreated = (notification, unreadCount) => {
-  if (!notification?.userId) return;
-  safeEmit(NOTIFICATION_SOCKET_EVENTS.CREATED, notification.userId, notification);
-  safeEmit(NOTIFICATION_SOCKET_EVENTS.UNREAD_COUNT, notification.userId, {
+  emitNotificationWithUnreadCount(
+    NOTIFICATION_SOCKET_EVENTS.CREATED,
+    notification,
     unreadCount,
-  });
+  );
 };
 
 export const emitNotificationUpdated = (notification, unreadCount) => {
+  emitNotificationWithUnreadCount(
+    NOTIFICATION_SOCKET_EVENTS.UPDATED,
+    notification,
+    unreadCount,
+  );
+};
+
+const emitNotificationWithUnreadCount = (event, notification, unreadCount) => {
   if (!notification?.userId) return;
-  safeEmit(NOTIFICATION_SOCKET_EVENTS.UPDATED, notification.userId, notification);
+  safeEmit(event, notification.userId, notification);
   safeEmit(NOTIFICATION_SOCKET_EVENTS.UNREAD_COUNT, notification.userId, {
     unreadCount,
   });

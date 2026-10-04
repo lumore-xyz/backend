@@ -1,4 +1,3 @@
-// /routes/profileRoutes.js
 import express from "express";
 
 import {
@@ -10,13 +9,16 @@ import {
 } from "../controllers/message.controller.js";
 import { protect } from "../middleware/auth.middleware.js";
 import { upload, uploadAudio } from "../middleware/upload.middleware.js";
+import { validateObjectIdParam } from "../middleware/validate.middleware.js";
 
 const router = express.Router();
+router.use(protect);
+router.param("roomId", validateObjectIdParam("roomId"));
 
-router.get("/:roomId", protect, getRoomMessages);
-router.post("/:roomId/image", protect, upload.single("image"), uploadRoomImage);
-router.post("/:roomId/audio", protect, uploadAudio.single("audio"), uploadRoomAudio);
-router.delete("/image-temp", protect, deleteTempRoomImage);
-router.delete("/audio-temp", protect, deleteTempRoomAudio);
+router.get("/:roomId", getRoomMessages);
+router.post("/:roomId/image", upload.single("image"), uploadRoomImage);
+router.post("/:roomId/audio", uploadAudio.single("audio"), uploadRoomAudio);
+router.delete("/image-temp", deleteTempRoomImage);
+router.delete("/audio-temp", deleteTempRoomAudio);
 
 export default router;

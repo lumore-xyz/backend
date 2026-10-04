@@ -3,10 +3,9 @@ import test from "node:test";
 
 import { Types } from "mongoose";
 
-import { __testHelpers } from "../services/locationRoomMatching.service.js";
-
-const { buildRoomMatchingNote, getCommonalityBreakdown, getThisOrThatStats } =
-  __testHelpers;
+import { getThisOrThatStats } from "../services/matchingAnswers.service.js";
+import { getCommonalityBreakdown } from "../services/matchingPolicy.service.js";
+import { buildRoomMatchingNote } from "../services/locationRoomCompatibility.service.js";
 
 const buildRoom = () => ({
   _id: new Types.ObjectId("64a0000000000000000000a1"),

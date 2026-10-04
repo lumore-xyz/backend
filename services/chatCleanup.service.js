@@ -1,30 +1,21 @@
 import Message from "../models/message.model.js";
 import MatchRoom from "../models/room.model.js";
+import { getBatchSize } from "../utils/batch.js";
+import { MATCH_ROOM_STATUS } from "../utils/matchRoom.js";
 import { deleteFile } from "./file.service.js";
+import { deleteMessageMedia } from "./messageMediaCleanup.service.js";
 
-export const ARCHIVED_CHAT_RETENTION_DAYS = 7;
-
-const DEFAULT_BATCH_SIZE = 100;
-
-const getBatchSize = () =>
-  Math.max(
-    1,
-    Number(process.env.ARCHIVED_CHAT_CLEANUP_BATCH_SIZE || DEFAULT_BATCH_SIZE),
-  );
+const ARCHIVED_CHAT_RETENTION_DAYS = 7;
 
 export const getArchivedChatCleanupCutoff = (now = new Date()) =>
   new Date(now.getTime() - ARCHIVED_CHAT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
-export const buildExpiredArchivedRoomQuery = (cutoff) => ({
-  status: "archive",
+const buildExpiredArchivedRoomQuery = (cutoff) => ({
+  status: MATCH_ROOM_STATUS.ARCHIVE,
   $or: [
     { archivedAt: { $lte: cutoff } },
     {
       archivedAt: null,
-      updatedAt: { $lte: cutoff },
-    },
-    {
-      archivedAt: { $exists: false },
       updatedAt: { $lte: cutoff },
     },
   ],
@@ -35,61 +26,32 @@ const getRoomIdStrings = (rooms) =>
 
 const getRoomIds = (rooms) => rooms.map((room) => room._id);
 
-const deleteMessageMedia = async ({ roomIdStrings, deleteMediaFile }) => {
-  const mediaMessages = await Message.find({
+const getRoomMediaMessages = async (roomIdStrings) =>
+  Message.find({
     roomId: { $in: roomIdStrings },
     $or: [
       {
         messageType: "image",
-        imagePublicId: { $exists: true, $ne: null },
+        $or: [
+          { imagePublicId: { $exists: true, $ne: null } },
+          { imageUrl: { $exists: true, $ne: null } },
+        ],
       },
       {
         messageType: "audio",
-        audioPublicId: { $exists: true, $ne: null },
+        $or: [
+          { audioPublicId: { $exists: true, $ne: null } },
+          { audioUrl: { $exists: true, $ne: null } },
+        ],
       },
     ],
   })
-    .select("_id messageType imagePublicId audioPublicId")
+    .select("_id roomId messageType imagePublicId imageUrl audioPublicId audioUrl")
     .lean();
-
-  let deletedImages = 0;
-  let deletedAudio = 0;
-  let failedImages = 0;
-  let failedAudio = 0;
-
-  for (const message of mediaMessages) {
-    const isAudio = message.messageType === "audio";
-    const publicId = isAudio ? message.audioPublicId : message.imagePublicId;
-    if (!publicId) continue;
-
-    try {
-      await deleteMediaFile(publicId, isAudio ? "video" : "image");
-      if (isAudio) deletedAudio += 1;
-      else deletedImages += 1;
-    } catch (error) {
-      if (isAudio) failedAudio += 1;
-      else failedImages += 1;
-      console.error("[ChatCleanup] Failed deleting archived chat media:", {
-        messageId: message._id?.toString?.() || message._id,
-        publicId,
-        resourceType: isAudio ? "video" : "image",
-        error: error?.message || error,
-      });
-    }
-  }
-
-  return {
-    scannedMediaMessages: mediaMessages.length,
-    deletedImages,
-    deletedAudio,
-    failedImages,
-    failedAudio,
-  };
-};
 
 export const cleanupExpiredArchivedChats = async ({
   now = new Date(),
-  batchSize = getBatchSize(),
+  batchSize = getBatchSize("ARCHIVED_CHAT_CLEANUP_BATCH_SIZE"),
   deleteMediaFile = deleteFile,
 } = {}) => {
   const cutoff = getArchivedChatCleanupCutoff(now);
@@ -114,22 +76,34 @@ export const cleanupExpiredArchivedChats = async ({
 
   const roomIds = getRoomIds(rooms);
   const roomIdStrings = getRoomIdStrings(rooms);
-  const mediaResult = await deleteMessageMedia({
-    roomIdStrings,
+  const mediaMessages = await getRoomMediaMessages(roomIdStrings);
+  const { failedMessageIds = [], ...mediaResult } = await deleteMessageMedia(mediaMessages, {
     deleteMediaFile,
+    logPrefix: "[ChatCleanup]",
   });
-  const messageDeleteResult = await Message.deleteMany({
-    roomId: { $in: roomIdStrings },
-  });
-  const roomDeleteResult = await MatchRoom.deleteMany({
-    _id: { $in: roomIds },
-    status: "archive",
-  });
+  const failedIds = new Set(failedMessageIds.map(String));
+  const blockedRoomIds = new Set(
+    mediaMessages
+      .filter(({ _id }) => failedIds.has(String(_id)))
+      .map(({ roomId }) => String(roomId)),
+  );
+  const deletableRoomIds = roomIds.filter((id) => !blockedRoomIds.has(String(id)));
+  const deletableRoomIdStrings = deletableRoomIds.map(String);
+  const messageDeleteResult = deletableRoomIds.length
+    ? await Message.deleteMany({ roomId: { $in: deletableRoomIdStrings } })
+    : { deletedCount: 0 };
+  const roomDeleteResult = deletableRoomIds.length
+    ? await MatchRoom.deleteMany({
+        _id: { $in: deletableRoomIds },
+        status: MATCH_ROOM_STATUS.ARCHIVE,
+      })
+    : { deletedCount: 0 };
 
   return {
     scanned: rooms.length,
     deletedRooms: roomDeleteResult.deletedCount || 0,
     deletedMessages: messageDeleteResult.deletedCount || 0,
+    scannedMediaMessages: mediaMessages.length,
     ...mediaResult,
   };
 };

@@ -1,8 +1,5 @@
-import crypto from "crypto";
-
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-export const PASSWORD_PATTERN =
-  /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!#%*?&])[A-Za-z\d@$#!%*?&]{8,25}$/;
+import crypto from "node:crypto";
+import { normalizeEmail } from "../utils/credentials.js";
 
 const DEFAULT_PASSWORD_RESET_EXPIRY_MINUTES = 30;
 const DEFAULT_PASSWORD_RESET_URL = "lumore://reset-password";
@@ -13,16 +10,6 @@ const toInteger = (value, fallbackValue) => {
   return Number.isFinite(parsed) ? parsed : fallbackValue;
 };
 
-export const normalizeEmail = (value) =>
-  String(value || "")
-    .trim()
-    .toLowerCase();
-
-export const isValidEmail = (value) => EMAIL_PATTERN.test(normalizeEmail(value));
-
-export const isStrongPassword = (value) =>
-  PASSWORD_PATTERN.test(String(value || ""));
-
 export const getPasswordResetExpiryMinutes = () => {
   const minutes = toInteger(
     process.env.PASSWORD_RESET_EXPIRY_MINUTES,
@@ -31,24 +18,23 @@ export const getPasswordResetExpiryMinutes = () => {
   return minutes > 0 ? minutes : DEFAULT_PASSWORD_RESET_EXPIRY_MINUTES;
 };
 
-export const getPasswordResetExpiryMs = () =>
+const getPasswordResetExpiryMs = () =>
   getPasswordResetExpiryMinutes() * 60 * 1000;
 
 const appendQueryParams = (baseUrl, params) => {
-  const entries = Object.entries(params || {}).filter(([, value]) =>
-    Boolean(String(value || "").trim()),
-  );
+  const query = new URLSearchParams(
+    Object.entries(params || {}).filter(([, value]) =>
+      String(value || "").trim(),
+    ),
+  ).toString();
+  if (!query) return baseUrl;
 
-  if (!entries.length) return baseUrl;
-
-  const query = entries
-    .map(
-      ([key, value]) =>
-        `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`,
-    )
-    .join("&");
-
-  return `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}${query}`;
+  const separator = /[?&]$/.test(baseUrl)
+    ? ""
+    : baseUrl.includes("?")
+      ? "&"
+      : "?";
+  return `${baseUrl}${separator}${query}`;
 };
 
 export const buildPasswordResetLink = ({ token, email }) => {

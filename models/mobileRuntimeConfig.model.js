@@ -6,7 +6,6 @@ const mobileRuntimeConfigSchema = new mongoose.Schema(
       type: String,
       default: "global",
       trim: true,
-      index: true,
     },
     environment: {
       type: String,

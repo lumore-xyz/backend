@@ -4,12 +4,14 @@ import {
   createLocationRoom,
   createStartLocationRoomMatchNow,
   getNearbyLocationRooms,
+  updateLocationRoom,
+} from "../controllers/locationRoom.controller.js";
+import {
   leaveLocationRoomPool,
   pinLocationRoom,
   rejoinLocationRoomPool,
   unpinLocationRoom,
-  updateLocationRoom,
-} from "../controllers/locationRoom.controller.js";
+} from "../controllers/locationRoomPool.controller.js";
 import LocationRoomPin from "../models/locationRoomPin.model.js";
 import LocationRoom from "../models/locationRoom.model.js";
 

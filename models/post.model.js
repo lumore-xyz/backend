@@ -1,7 +1,6 @@
 import { model, Schema, Types } from "mongoose";
-
-// export type PostType = "PROMPT" | "IMAGE" | "TEXT";
-// export type PostVisibility = "public" | "unlock" | "private";
+import { POST_TYPES } from "../utils/post.js";
+import { PROFILE_VISIBILITY_VALUES } from "../utils/profileVisibility.js";
 
 const PostSchema = new Schema(
   {
@@ -9,12 +8,11 @@ const PostSchema = new Schema(
       type: Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
     },
 
     type: {
       type: String,
-      enum: ["PROMPT", "IMAGE", "TEXT"],
+      enum: POST_TYPES,
       required: true,
       index: true,
     },
@@ -44,9 +42,8 @@ const PostSchema = new Schema(
 
     visibility: {
       type: String,
-      enum: ["public", "unlocked", "private"],
+      enum: PROFILE_VISIBILITY_VALUES,
       default: "public",
-      index: true,
     },
   },
   {

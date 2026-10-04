@@ -1,7 +1,7 @@
-import { Types } from "mongoose";
-
-const VISIBILITIES = ["public", "unlocked", "private"];
-const POST_TYPES = ["PROMPT", "IMAGE", "TEXT"];
+import { isValidObjectId } from "../utils/objectId.js";
+import { parseCoordinate } from "../utils/location.js";
+import { POST_TYPES } from "../utils/post.js";
+import { PROFILE_VISIBILITY_VALUES } from "../utils/profileVisibility.js";
 
 const parseMaybeJson = (value) => {
   if (typeof value !== "string") return value;
@@ -12,71 +12,83 @@ const parseMaybeJson = (value) => {
   }
 };
 
+const validatePostContent = (value) => {
+  const content = parseMaybeJson(value);
+  if (typeof content !== "object" || content === null || Array.isArray(content)) {
+    return { error: "Invalid content payload" };
+  }
+  if (content.promptId != null && !isValidObjectId(content.promptId)) {
+    return { error: "Invalid promptId" };
+  }
+  return { content };
+};
+
+const hasInvalidVisibility = (visibility) =>
+  visibility !== undefined && !PROFILE_VISIBILITY_VALUES.includes(visibility);
+
 export const validateObjectIdParam = (paramName) => (req, res, next) => {
   const value = req.params?.[paramName];
-  if (!value || !Types.ObjectId.isValid(value)) {
+  if (!isValidObjectId(value)) {
     return res.status(400).json({ message: `Invalid ${paramName}` });
   }
   next();
 };
 
 export const validateCreatePost = (req, res, next) => {
+  req.body ||= {};
   const { type, visibility } = req.body;
 
   if (!POST_TYPES.includes(type)) {
     return res.status(400).json({ message: "Invalid post type" });
   }
 
-  if (visibility && !VISIBILITIES.includes(visibility)) {
+  if (hasInvalidVisibility(visibility)) {
     return res.status(400).json({ message: "Invalid visibility value" });
   }
 
   if (req.body.content !== undefined) {
-    const parsed = parseMaybeJson(req.body.content);
-    if (typeof parsed !== "object" || parsed === null) {
-      return res.status(400).json({ message: "Invalid content payload" });
-    }
+    const result = validatePostContent(req.body.content);
+    if (result.error) return res.status(400).json({ message: result.error });
+    const { content } = result;
 
-    if (type === "PROMPT" && parsed.promptId) {
-      if (!Types.ObjectId.isValid(parsed.promptId)) {
-        return res.status(400).json({ message: "Invalid promptId" });
-      }
-    }
-
-    if (type === "TEXT" && parsed.text && typeof parsed.text !== "string") {
+    if (
+      type === "TEXT" &&
+      content.text != null &&
+      typeof content.text !== "string"
+    ) {
       return res.status(400).json({ message: "Invalid text content" });
     }
 
-    req.body.content = parsed;
+    req.body.content = content;
   }
 
   next();
 };
 
 export const validateUpdatePost = (req, res, next) => {
+  req.body ||= {};
   const { visibility } = req.body;
 
-  if (visibility && !VISIBILITIES.includes(visibility)) {
+  if (hasInvalidVisibility(visibility)) {
     return res.status(400).json({ message: "Invalid visibility value" });
   }
 
   if (req.body.content !== undefined) {
-    const parsed = parseMaybeJson(req.body.content);
-    if (typeof parsed !== "object" || parsed === null) {
-      return res.status(400).json({ message: "Invalid content payload" });
-    }
-    req.body.content = parsed;
+    const result = validatePostContent(req.body.content);
+    if (result.error) return res.status(400).json({ message: result.error });
+    req.body.content = result.content;
   }
 
   next();
 };
 
 export const validateUpdateLocation = (req, res, next) => {
+  req.body ||= {};
   const { latitude, longitude } = req.body;
-  const latNum = Number(latitude);
-  const lonNum = Number(longitude);
+  const latNum = parseCoordinate(latitude);
+  const lonNum = parseCoordinate(longitude);
 
-  if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) {
+  if (latNum === null || lonNum === null) {
     return res.status(400).json({
       message: "latitude and longitude must be numbers",
     });

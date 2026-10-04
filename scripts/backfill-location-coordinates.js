@@ -3,10 +3,8 @@ import axios from "axios";
 import mongoose from "mongoose";
 import connectDB from "../config/db.js";
 import User from "../models/user.model.js";
-import {
-  buildCanonicalLocation,
-  classifyLocationBackfillCandidate,
-} from "../utils/location.js";
+import { buildCanonicalLocation } from "../utils/location.js";
+import { classifyLocationBackfillCandidate } from "../utils/locationBackfill.js";
 
 const REQUEST_DELAY_MS = 1100;
 const USER_AGENT = "LumoreLocationBackfill/1.0";

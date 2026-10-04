@@ -1,35 +1,24 @@
 import Notification from "../models/notification.model.js";
+import { mapInBatches } from "../utils/batch.js";
 import {
   buildNotificationDoc,
-  buildObjectId,
   clampPagination,
-  isValidObjectId,
   normalizeNotificationPayload,
 } from "./notification.helpers.js";
+import { isValidObjectId, toObjectId } from "../utils/objectId.js";
+import { isPlainObject } from "../utils/object.js";
+import { logError } from "../utils/logError.js";
+import { hasMorePages } from "../utils/pagination.js";
 import {
   emitBatchCreated,
   emitNotificationCreated,
   emitNotificationDeleted,
   emitNotificationUpdated,
   emitUnreadCount,
-  NOTIFICATION_SOCKET_EVENTS,
 } from "./notification.events.js";
-import {
-  buildCommunityInviteNotification,
-  buildCommunityJoinedNotification,
-  buildCommunityMatchNotification,
-  buildCommunityRoleUpdatedNotification,
-  buildFeedbackNotification,
-  buildGameSubmissionNotification,
-  buildMatchNotification,
-  buildSystemMessageNotification,
-} from "./notification.templates.js";
-
-const safeInput = (input) =>
-  input && typeof input === "object" ? input : null;
 
 const safeInputArray = (inputs) =>
-  Array.isArray(inputs) ? inputs.filter((item) => safeInput(item)) : [];
+  Array.isArray(inputs) ? inputs.filter(isPlainObject) : [];
 
 /**
  * Persist a notification, idempotently. If a notification already exists for
@@ -43,31 +32,41 @@ const persistNotification = async (doc) => {
     return { doc: created.toObject(), created: true };
   }
 
-  const result = await Notification.findOneAndUpdate(
-    {
-      userId: doc.userId,
-      type: doc.type,
-      entityType: doc.entityType,
-      entityId: doc.entityId,
-    },
-    { $setOnInsert: doc },
-    {
-      returnDocument: "after",
-      upsert: true,
-      includeResultMetadata: true,
-      setDefaultsOnInsert: true,
-    },
-  );
+  const query = {
+    userId: doc.userId,
+    type: doc.type,
+    entityType: doc.entityType,
+    entityId: doc.entityId,
+  };
+  let result;
+  try {
+    result = await Notification.findOneAndUpdate(
+      query,
+      { $setOnInsert: doc },
+      {
+        returnDocument: "after",
+        upsert: true,
+        includeResultMetadata: true,
+        setDefaultsOnInsert: true,
+      },
+    );
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    const existing = await Notification.findOne(query).lean();
+    if (!existing) throw error;
+    return { doc: existing, created: false };
+  }
 
   const created = !result?.lastErrorObject?.updatedExisting;
   return { doc: result?.value?.toObject?.() || result?.value, created };
 };
 
 export const createNotification = async (input) => {
-  const safe = safeInput(input);
-  if (!safe) throw new Error("createNotification requires an input object");
+  if (!isPlainObject(input)) {
+    throw new Error("createNotification requires an input object");
+  }
 
-  const doc = buildNotificationDoc(safe);
+  const doc = buildNotificationDoc(input);
   const { doc: saved, created } = await persistNotification(doc);
   const formatted = normalizeNotificationPayload(saved);
 
@@ -88,10 +87,7 @@ export const createManyNotifications = async (inputs = []) => {
       try {
         return buildNotificationDoc(item);
       } catch (error) {
-        console.error(
-          "[notifications] createMany skipped entry:",
-          error?.message || error,
-        );
+        logError("[notifications] create_many_entry_skipped", error);
         return null;
       }
     })
@@ -99,11 +95,20 @@ export const createManyNotifications = async (inputs = []) => {
 
   if (!built.length) return [];
 
-  // Use ordered:false so one bad doc doesn't abort the batch; dedup relies on
-  // the partial unique index plus upsert fallback in persistNotification when
-  // an entityId is present.
-  const createdDocs = await Notification.insertMany(built, { ordered: false });
+  const withEntity = built.filter((doc) => doc.entityType && doc.entityId);
+  const withoutEntity = built.filter((doc) => !doc.entityType || !doc.entityId);
+  const [persisted, inserted] = await Promise.all([
+    mapInBatches(withEntity, 50, persistNotification),
+    withoutEntity.length
+      ? Notification.insertMany(withoutEntity, { ordered: false })
+      : [],
+  ]);
+  const createdDocs = [
+    ...persisted.filter((item) => item.created).map((item) => item.doc),
+    ...inserted,
+  ];
   const formatted = createdDocs.map(normalizeNotificationPayload);
+  if (!formatted.length) return [];
 
   // Group by userId so we can batch unread counts in a single aggregation.
   const grouped = new Map();
@@ -142,19 +147,23 @@ export const getUserNotifications = async (
   }
 
   const { page: safePage, limit: safeLimit } = clampPagination({ page, limit });
-  const userObjectId = buildObjectId(userId);
+  const userObjectId = toObjectId(userId);
   const filter = { userId: userObjectId };
   if (unreadOnly) filter.isRead = false;
 
   const skip = (safePage - 1) * safeLimit;
+  const totalCount = Notification.countDocuments(filter).exec();
+  const unreadCountQuery = unreadOnly
+    ? totalCount
+    : Notification.countDocuments({ userId: userObjectId, isRead: false });
   const [docs, total, unreadCount] = await Promise.all([
     Notification.find(filter)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(safeLimit)
       .lean(),
-    Notification.countDocuments(filter),
-    Notification.countDocuments({ userId: userObjectId, isRead: false }),
+    totalCount,
+    unreadCountQuery,
   ]);
 
   return {
@@ -163,7 +172,12 @@ export const getUserNotifications = async (
       page: safePage,
       limit: safeLimit,
       total,
-      hasMore: skip + docs.length < total,
+      hasMore: hasMorePages({
+        page: safePage,
+        limit: safeLimit,
+        total,
+        itemCount: docs.length,
+      }),
     },
     unreadCount,
   };
@@ -171,8 +185,8 @@ export const getUserNotifications = async (
 
 export const getUnreadCount = async (userId) => {
   if (!isValidObjectId(userId)) return 0;
-  return await Notification.countDocuments({
-    userId: buildObjectId(userId),
+  return Notification.countDocuments({
+    userId: toObjectId(userId),
     isRead: false,
   });
 };
@@ -184,8 +198,8 @@ export const markAsRead = async (userId, notificationId) => {
 
   const updated = await Notification.findOneAndUpdate(
     {
-      _id: buildObjectId(notificationId),
-      userId: buildObjectId(userId),
+      _id: toObjectId(notificationId),
+      userId: toObjectId(userId),
     },
     { $set: { isRead: true, readAt: new Date() } },
     { returnDocument: "after" },
@@ -201,7 +215,7 @@ export const markAsRead = async (userId, notificationId) => {
 export const markAllAsRead = async (userId) => {
   if (!isValidObjectId(userId)) return { modifiedCount: 0 };
   const result = await Notification.updateMany(
-    { userId: buildObjectId(userId), isRead: false },
+    { userId: toObjectId(userId), isRead: false },
     { $set: { isRead: true, readAt: new Date() } },
   );
   emitUnreadCount(userId, 0);
@@ -213,8 +227,8 @@ export const deleteNotification = async (userId, notificationId) => {
     return { deleted: false };
   }
   const result = await Notification.findOneAndDelete({
-    _id: buildObjectId(notificationId),
-    userId: buildObjectId(userId),
+    _id: toObjectId(notificationId),
+    userId: toObjectId(userId),
   });
   if (!result) return { deleted: false };
 
@@ -222,196 +236,4 @@ export const deleteNotification = async (userId, notificationId) => {
   emitNotificationDeleted(userId, result._id.toString());
   emitUnreadCount(userId, unreadCount);
   return { deleted: true };
-};
-
-/* -------------------------------------------------------------------------- */
-/*                       Typed domain helpers (public API)                    */
-/* -------------------------------------------------------------------------- */
-
-const VERIFICATION_STATUS_TYPE_MAP = {
-  approved: "ACCOUNT_VERIFICATION_APPROVED",
-  completed: "ACCOUNT_VERIFICATION_COMPLETED",
-  revoked: "ACCOUNT_VERIFICATION_REVOKED",
-  rejected: "ACCOUNT_VERIFICATION_REJECTED",
-  failed: "ACCOUNT_VERIFICATION_REJECTED",
-};
-
-export const notifyVerificationStatusChange = async ({
-  userId,
-  status,
-  previousStatus,
-  source = "system",
-  metadata = {},
-}) => {
-  if (!isValidObjectId(userId) || !status) return null;
-  const normalizedStatus = String(status).toLowerCase();
-  const type = VERIFICATION_STATUS_TYPE_MAP[normalizedStatus];
-  if (!type) return null;
-
-  const previous = previousStatus
-    ? String(previousStatus).toLowerCase()
-    : null;
-  if (previous === normalizedStatus) return null;
-
-  try {
-    return await createNotification({
-      userId,
-      type,
-      entityType: "account",
-      metadata: {
-        status: normalizedStatus,
-        previousStatus: previous,
-        source,
-        ...metadata,
-      },
-    });
-  } catch (error) {
-    console.error(
-      "[notifications] verification status notify failed:",
-      error?.message || error,
-    );
-    return null;
-  }
-};
-
-export const notifyGameSubmissionStatusChange = async ({
-  userId,
-  status,
-  questionId,
-}) => {
-  const doc = buildGameSubmissionNotification({ userId, status, questionId });
-  if (!doc) return null;
-  try {
-    return await createNotification({
-      userId: doc.userId,
-      type: doc.type,
-      entityType: doc.entityType,
-      entityId: doc.entityId,
-      metadata: doc.metadata,
-    });
-  } catch (error) {
-    console.error(
-      "[notifications] game submission notify failed:",
-      error?.message || error,
-    );
-    return null;
-  }
-};
-
-export const notifyCommunityJoined = async ({
-  userId,
-  communityId,
-  communityName,
-}) => {
-  const doc = buildCommunityJoinedNotification({
-    userId,
-    communityId,
-    communityName,
-  });
-  if (!doc) return null;
-  try {
-    return await createNotification({
-      userId: doc.userId,
-      type: doc.type,
-      entityType: doc.entityType,
-      entityId: doc.entityId,
-      metadata: doc.metadata,
-    });
-  } catch (error) {
-    console.error(
-      "[notifications] community joined notify failed:",
-      error?.message || error,
-    );
-    return null;
-  }
-};
-
-export const notifyCommunityInvite = async ({
-  userId,
-  actorId,
-  communityId,
-  communityName,
-}) => {
-  const doc = buildCommunityInviteNotification({
-    userId,
-    actorId,
-    communityId,
-    communityName,
-  });
-  if (!doc) return null;
-  try {
-    return await createNotification({
-      userId: doc.userId,
-      actorId: doc.actorId,
-      type: doc.type,
-      entityType: doc.entityType,
-      entityId: doc.entityId,
-      metadata: doc.metadata,
-    });
-  } catch (error) {
-    console.error(
-      "[notifications] community invite notify failed:",
-      error?.message || error,
-    );
-    return null;
-  }
-};
-
-export const notifyCommunityRoleUpdated = async ({
-  userId,
-  communityId,
-  communityName,
-  role,
-}) => {
-  const doc = buildCommunityRoleUpdatedNotification({
-    userId,
-    communityId,
-    communityName,
-    role,
-  });
-  if (!doc) return null;
-  try {
-    return await createNotification({
-      userId: doc.userId,
-      type: doc.type,
-      entityType: doc.entityType,
-      entityId: doc.entityId,
-      metadata: doc.metadata,
-    });
-  } catch (error) {
-    console.error(
-      "[notifications] community role updated notify failed:",
-      error?.message || error,
-    );
-    return null;
-  }
-};
-
-export const buildSystemMessageDoc = buildSystemMessageNotification;
-export const buildMatchDoc = buildMatchNotification;
-export const buildCommunityMatchDoc = buildCommunityMatchNotification;
-export const buildFeedbackDoc = buildFeedbackNotification;
-
-export const __testHelpers = {
-  buildNotificationDoc,
-  normalizeNotificationPayload,
-  clampPagination,
-};
-
-export { NOTIFICATION_SOCKET_EVENTS };
-
-export default {
-  createNotification,
-  createManyNotifications,
-  getUserNotifications,
-  getUnreadCount,
-  markAsRead,
-  markAllAsRead,
-  deleteNotification,
-  notifyVerificationStatusChange,
-  notifyGameSubmissionStatusChange,
-  notifyCommunityJoined,
-  notifyCommunityInvite,
-  notifyCommunityRoleUpdated,
-  NOTIFICATION_SOCKET_EVENTS,
 };

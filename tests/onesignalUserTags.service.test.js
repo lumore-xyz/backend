@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildOneSignalProfileTags,
-  extractLocationTags,
   syncUserProfileTagsToOneSignal,
 } from "../services/onesignalUserTags.service.js";
+import { extractLocationTags } from "../utils/location.js";
 
 const createEntitlementsTagLimitError = () => {
   const error = new Error("conflict");

@@ -1,4 +1,8 @@
 import mongoose from "mongoose";
+import {
+  LOCATION_ROOM_CYCLE_STATUSES,
+  LOCATION_ROOM_CYCLE_STATUS,
+} from "../utils/locationRoom.js";
 
 const locationRoomCycleSchema = new mongoose.Schema(
   {
@@ -6,13 +10,11 @@ const locationRoomCycleSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "LocationRoom",
       required: true,
-      index: true,
     },
     status: {
       type: String,
-      enum: ["running", "completed", "failed"],
-      default: "running",
-      index: true,
+      enum: LOCATION_ROOM_CYCLE_STATUSES,
+      default: LOCATION_ROOM_CYCLE_STATUS.RUNNING,
     },
     startedAt: {
       type: Date,
@@ -87,7 +89,5 @@ const locationRoomCycleSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
-
-locationRoomCycleSchema.index({ room: 1, startedAt: -1 });
 
 export default mongoose.model("LocationRoomCycle", locationRoomCycleSchema);
