@@ -64,10 +64,9 @@ Kritik and Sakshi both installed the app, signup using google, email or phone no
 11. Diet
 12. home town
 
-### Match making:
+### Explore and Conversations:
 
-All the active users are in the pool of “Active Users”, they can start matching with each other based on their profile details, interest's and preferences, once a user get matched with someone both of them enters a chat room. and can’t be matched with someone else. unless they end the conversation from their previous partner. Each user have **10 free conversation daily**
-
+Users discover profiles through the daily Explore list and can start a conversation with an unlocked suggestion. Starting a conversation costs one credit from the person who initiates it; the suggested person is not charged. Existing conversations remain available through the chat inbox.
 ### What they will see and what they won’t?
 
 You find a match, nice. you can start the conversation, send your “Hi 👋”, but wait are you concern about your profile data, you don’t want to show your profile or photos to a random stranger. we got your point. You can choose what to show and what not to on your profile, you can provide the data for better match making. and once you feel comfortable to show your profile you can just **“UNLOCK YOUR PROFILE”**.  By unlocking your profile, your partner can also see your profile.

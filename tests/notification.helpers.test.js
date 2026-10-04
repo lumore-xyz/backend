@@ -57,6 +57,16 @@ test("buildNotificationDoc accepts ObjectId-like strings", () => {
   assert.equal(doc.actorId.toString(), "64a000000000000000000002");
 });
 
+test("buildNotificationDoc omits an entity ID when the notification has no entity", () => {
+  const doc = buildNotificationDoc({
+    userId: "64a000000000000000000001",
+    type: "SYSTEM_MESSAGE",
+    entityType: "system",
+  });
+
+  assert.equal(Object.hasOwn(doc, "entityId"), false);
+});
+
 test("clampPagination enforces min/max bounds", () => {
   assert.deepEqual(clampPagination({}), {
     page: 1,

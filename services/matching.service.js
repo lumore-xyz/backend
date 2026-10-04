@@ -1,19 +1,15 @@
 import MatchRoom from "../models/room.model.js";
+import { getId, getPairKey, getSortedIds } from "../utils/matchIds.js";
+import {
+  MATCH_ROOM_SOURCE,
+  MATCH_ROOM_STATUSES,
+  MATCH_ROOM_STATUS,
+} from "../utils/matchRoom.js";
 
-const MATCH_ROOM_LOG_PREFIX = "[match-room]";
-
-export const BLOCKING_MATCH_STATUSES = ["active", "archive"];
-
-const getId = (value) => value?._id?.toString?.() || value?.toString?.() || "";
-
-export const getPairKey = (userId1, userId2) =>
-  [getId(userId1), getId(userId2)].sort().join(":");
-
-const getSortedParticipants = (userId1, userId2) =>
-  [getId(userId1), getId(userId2)].sort();
+const BLOCKING_MATCH_STATUSES = MATCH_ROOM_STATUSES;
 
 const buildSourceQuery = ({ source, locationRoom, locationRoomCycle }) => {
-  if (source === "location_room") {
+  if (source === MATCH_ROOM_SOURCE.LOCATION_ROOM) {
     return {
       source,
       locationRoom,
@@ -22,12 +18,11 @@ const buildSourceQuery = ({ source, locationRoom, locationRoomCycle }) => {
   }
 
   return {
-    $or: [{ source: "explore" }, { source: { $exists: false } }],
+    $or: [
+      { source: MATCH_ROOM_SOURCE.EXPLORE },
+      { source: { $exists: false } },
+    ],
   };
-};
-
-const logMatchRoomStep = (stage, details = {}) => {
-  console.info(`${MATCH_ROOM_LOG_PREFIX} ${stage}`, details);
 };
 
 export const findExistingMatchRoom = async (
@@ -35,8 +30,8 @@ export const findExistingMatchRoom = async (
   userId2,
   { statuses = BLOCKING_MATCH_STATUSES } = {},
 ) => {
-  const participants = getSortedParticipants(userId1, userId2);
-  return await MatchRoom.findOne({
+  const participants = getSortedIds(userId1, userId2);
+  return MatchRoom.findOne({
     participants: { $all: participants },
     $expr: { $eq: [{ $size: "$participants" }, 2] },
     status: { $in: statuses },
@@ -108,92 +103,71 @@ export const getOrCreateMatchRoom = async (
   matchingNote = null,
   options = {},
 ) => {
-  const participants = getSortedParticipants(userId1, userId2);
-  const source = options.source || "explore";
+  const participants = getSortedIds(userId1, userId2);
+  const source = options.source || MATCH_ROOM_SOURCE.EXPLORE;
   const locationRoom = options.locationRoom || null;
   const locationRoomCycle = options.locationRoomCycle || null;
   const sourceMetadata = options.sourceMetadata || {};
+  const pairKey = options.pairKey;
+  const withCreationStatus = (room, created) =>
+    options.returnCreationStatus ? { room, created } : room;
 
-  logMatchRoomStep("lookup_start", {
-    userId1: participants[0] || null,
-    userId2: participants[1] || null,
-    source,
-    locationRoom: locationRoom?.toString?.() || locationRoom || null,
-    locationRoomCycle:
-      locationRoomCycle?.toString?.() || locationRoomCycle || null,
-    hasMatchingNote: Boolean(matchingNote),
+  if (pairKey) await MatchRoom.init();
+
+  let room = await MatchRoom.findOne({
+    participants: { $all: participants },
+    $expr: { $eq: [{ $size: "$participants" }, 2] },
+    ...buildSourceQuery({ source, locationRoom, locationRoomCycle }),
   });
 
-  try {
-    let room = await MatchRoom.findOne({
-      participants: { $all: participants },
-      $expr: { $eq: [{ $size: "$participants" }, 2] },
-      ...buildSourceQuery({ source, locationRoom, locationRoomCycle }),
-    });
-
-    if (room) {
-      logMatchRoomStep("existing_room_found", {
-        roomId: room._id.toString(),
-        status: room.status,
-      });
-
-      if (room.status !== "active") {
-        logMatchRoomStep("existing_room_not_reopened", {
-          roomId: room._id.toString(),
-          status: room.status,
-        });
-        return room;
-      }
-      if (matchingNote) {
-        room.matchingNote = matchingNote;
-      }
-      room.archivedAt = null;
-      room.source = source;
-      room.locationRoom = locationRoom;
-      room.locationRoomCycle = locationRoomCycle;
-      room.sourceMetadata = {
-        title: sourceMetadata.title || room.sourceMetadata?.title || "",
-        subtitle:
-          sourceMetadata.subtitle || room.sourceMetadata?.subtitle || "",
-      };
-      await room.save();
-
-      logMatchRoomStep("existing_room_saved", {
-        roomId: room._id.toString(),
-        status: room.status,
-      });
-      return room;
+  if (room) {
+    if (room.status !== MATCH_ROOM_STATUS.ACTIVE) {
+      return withCreationStatus(room, false);
     }
+    if (matchingNote) {
+      room.matchingNote = matchingNote;
+    }
+    room.archivedAt = null;
+    room.source = source;
+    room.locationRoom = locationRoom;
+    room.locationRoomCycle = locationRoomCycle;
+    room.sourceMetadata = {
+      title: sourceMetadata.title || room.sourceMetadata?.title || "",
+      subtitle:
+        sourceMetadata.subtitle || room.sourceMetadata?.subtitle || "",
+    };
+    await room.save();
 
-    logMatchRoomStep("creating_new_room", {
-      participants,
-      source,
-    });
-
-    room = await MatchRoom.create({
-      participants,
-      status: "active",
-      archivedAt: null,
-      source,
-      locationRoom,
-      locationRoomCycle,
-      sourceMetadata,
-      matchingNote,
-    });
-
-    logMatchRoomStep("new_room_created", {
-      roomId: room._id.toString(),
-      status: room.status,
-    });
-
-    return room;
-  } catch (error) {
-    console.error(`${MATCH_ROOM_LOG_PREFIX} error`, {
-      participants,
-      source,
-      message: error?.message || "unknown_error",
-      stack: error?.stack || null,
-    });
-    throw error;
+    return withCreationStatus(room, false);
   }
+
+  const roomData = {
+    participants,
+    status: MATCH_ROOM_STATUS.ACTIVE,
+    archivedAt: null,
+    source,
+    locationRoom,
+    locationRoomCycle,
+    sourceMetadata,
+    matchingNote,
+  };
+  let created = true;
+  if (pairKey) {
+    const query = { directExplorePairKey: pairKey };
+    try {
+      const result = await MatchRoom.findOneAndUpdate(query, { $setOnInsert: roomData },
+        { upsert: true, returnDocument: "after", includeResultMetadata: true });
+      room = result?.value || result;
+      if (result?.lastErrorObject) created = !result.lastErrorObject.updatedExisting;
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+      room = await MatchRoom.findOne(query);
+      if (!room) throw error;
+      created = false;
+    }
+  } else {
+    room = await MatchRoom.create(roomData);
+  }
+
+  return withCreationStatus(room, created);
 };

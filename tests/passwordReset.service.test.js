@@ -5,10 +5,12 @@ import {
   createPasswordResetToken,
   getPasswordResetExpiryMinutes,
   hashPasswordResetToken,
+} from "../services/passwordReset.service.js";
+import {
   isStrongPassword,
   isValidEmail,
   normalizeEmail,
-} from "../services/passwordReset.service.js";
+} from "../utils/credentials.js";
 
 const withEnv = async (overrides, fn) => {
   const previous = {};

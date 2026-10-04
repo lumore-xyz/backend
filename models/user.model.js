@@ -1,7 +1,38 @@
 // /models/user.model.js
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
-import { buildCanonicalLocation } from "../utils/location.js";
+import {
+  VERIFICATION_STATUSES,
+  VERIFICATION_STATUS,
+} from "../utils/verification.js";
+import { getAge } from "../utils/age.js";
+import {
+  buildCanonicalLocation,
+  GEOJSON_POINT_TYPE,
+} from "../utils/location.js";
+import {
+  isProfileFieldVisible,
+  PROFILE_VISIBILITY_VALUES,
+} from "../utils/profileVisibility.js";
+
+const PRIVATE_USER_FIELDS = new Set([
+  "password",
+  "passwordResetToken",
+  "passwordResetExpiresAt",
+  "googleId",
+  "telegramId",
+  "verificationSessionId",
+  "socketId",
+  "isArchived",
+  "archivedAt",
+  "scheduledDeletionAt",
+  "lastActive",
+  "lastLocationUpdate",
+  "lastDailyCreditAt",
+  "explorePayment",
+  "exploreRefreshPayment",
+  "referredBy",
+]);
 
 const userSchema = new mongoose.Schema(
   {
@@ -43,8 +74,8 @@ const userSchema = new mongoose.Schema(
     },
     verificationStatus: {
       type: String,
-      enum: ["not_started", "pending", "approved", "rejected", "failed"],
-      default: "not_started",
+      enum: VERIFICATION_STATUSES,
+      default: VERIFICATION_STATUS.NOT_STARTED,
     },
     verificationSessionId: {
       type: String,
@@ -112,14 +143,13 @@ const userSchema = new mongoose.Schema(
     archivedAt: { type: Date, default: null },
     scheduledDeletionAt: { type: Date, default: null },
     isMatching: { type: Boolean, default: false },
-    matchmakingTimestamp: { type: Date, default: null },
     socketId: { type: String },
     lastActive: { type: Date, default: Date.now },
     location: {
       type: {
         type: String,
-        enum: ["Point"],
-        default: "Point",
+        enum: [GEOJSON_POINT_TYPE],
+        default: GEOJSON_POINT_TYPE,
         required: true,
       },
       coordinates: {
@@ -167,6 +197,26 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    explorePayment: {
+      type: new mongoose.Schema({
+        dayKey: { type: String, required: true },
+        referenceId: { type: String, required: true },
+        balanceAfter: { type: Number, required: true },
+        settled: { type: Boolean, default: false },
+      }, { _id: false }),
+      default: null,
+      select: false,
+    },
+    exploreRefreshPayment: {
+      type: new mongoose.Schema({
+        dayKey: { type: String, required: true },
+        referenceId: { type: String, required: true },
+        balanceAfter: { type: Number, required: true },
+        settled: { type: Boolean, default: false },
+      }, { _id: false }),
+      default: null,
+      select: false,
+    },
     fieldVisibility: {
       type: Object,
       default: {
@@ -192,11 +242,13 @@ const userSchema = new mongoose.Schema(
       },
       validate: {
         validator: function (v) {
-          const validValues = ["public", "unlocked", "private"];
-          return Object.values(v).every((value) => validValues.includes(value));
+          return Object.values(v).every((value) =>
+            PROFILE_VISIBILITY_VALUES.includes(value),
+          );
         },
-        message:
-          "Invalid visibility value. Must be one of: public, unlocked, private",
+        message: `Invalid visibility value. Must be one of: ${PROFILE_VISIBILITY_VALUES.join(
+          ", ",
+        )}`,
       },
     },
   },
@@ -212,17 +264,6 @@ const userSchema = new mongoose.Schema(
 // CRITICAL: 2dsphere index for geospatial queries
 userSchema.index({ location: "2dsphere" });
 
-// // Compound index for matchmaking + geospatial
-// userSchema.index(
-//   {
-//     location: "2dsphere",
-//     isMatching: 1,
-//     isActive: 1,
-//     gender: 1,
-//   },
-//   { name: "matchmaking_geo_index" }
-// );
-
 // Additional useful indexes (deduplicated & fixed)
 userSchema.index({ username: 1 }, { unique: true });
 userSchema.index({ email: 1 }, { sparse: true, unique: true });
@@ -231,7 +272,6 @@ userSchema.index({ googleId: 1 }, { sparse: true, unique: true });
 userSchema.index({ telegramId: 1 }, { sparse: true, unique: true });
 userSchema.index({ passwordResetToken: 1 }, { sparse: true });
 userSchema.index({ lastActive: -1 });
-userSchema.index({ matchmakingTimestamp: 1 }, { sparse: true });
 userSchema.index({ gender: 1 });
 userSchema.index({ dob: 1 });
 userSchema.index({ height: 1 });
@@ -247,43 +287,18 @@ userSchema.index({ "lifestyle.pets": 1 });
 
 userSchema.virtual("age").get(function () {
   if (!this.dob) return null;
-
-  const today = new Date();
-  const birthDate = new Date(this.dob);
-  let age = today.getFullYear() - birthDate.getFullYear();
-  const monthDiff = today.getMonth() - birthDate.getMonth();
-
-  if (
-    monthDiff < 0 ||
-    (monthDiff === 0 && today.getDate() < birthDate.getDate())
-  ) {
-    age--;
-  }
-  return age;
+  const age = getAge(this.dob);
+  return Number.isFinite(age) ? age : null;
 });
 
-// ==================== PRE-SAVE HOOKS ====================
-
-// Normalize username to lowercase
-userSchema.pre("save", function () {
+userSchema.pre("save", async function () {
   if (this.username) {
     this.username = this.username.toLowerCase();
   }
-});
 
-// Normalize gender to lowercase (for case-insensitive matching)
-userSchema.pre("save", function () {
-  if (this.gender && typeof this.gender === "string") {
-    this.gender = this.gender.toLowerCase().trim();
-  }
-});
-
-// Validate location coordinates before saving
-userSchema.pre("save", function () {
   if (this.location && this.location.coordinates) {
     const [lng, lat] = this.location.coordinates;
 
-    // Validate ranges
     if (lng < -180 || lng > 180) {
       throw new Error(
         `Invalid longitude: ${lng}. Must be between -180 and 180`,
@@ -293,10 +308,7 @@ userSchema.pre("save", function () {
       throw new Error(`Invalid latitude: ${lat}. Must be between -90 and 90`);
     }
   }
-});
 
-// Password hashing (only when password changes)
-userSchema.pre("save", async function () {
   if (!this.isModified("password") || !this.password) return;
 
   const saltRounds = 12;
@@ -307,13 +319,17 @@ userSchema.pre("save", async function () {
 
 // Password Comparison Method
 userSchema.methods.comparePassword = async function (enteredPassword) {
-  return await bcrypt.compare(enteredPassword, this.password);
+  return bcrypt.compare(enteredPassword, this.password);
 };
 
 // Update last active timestamp
 userSchema.methods.updateLastActive = async function () {
-  this.lastActive = Date.now();
-  return await this.save();
+  this.lastActive = new Date();
+  await this.constructor.updateOne(
+    { _id: this._id },
+    { $set: { lastActive: this.lastActive } },
+  );
+  return this;
 };
 
 // Update user location with validation
@@ -329,75 +345,24 @@ userSchema.methods.updateLocation = async function (
   });
   this.lastLocationUpdate = new Date();
 
-  return await this.save();
-};
-
-// Get distance to another user (in meters)
-userSchema.methods.getDistanceTo = function (otherUser) {
-  if (!this.location?.coordinates || !otherUser.location?.coordinates) {
-    return null;
-  }
-
-  const [lng1, lat1] = this.location.coordinates;
-  const [lng2, lat2] = otherUser.location.coordinates;
-
-  // Haversine formula
-  const R = 6371e3; // Earth's radius in meters
-  const φ1 = (lat1 * Math.PI) / 180;
-  const φ2 = (lat2 * Math.PI) / 180;
-  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-  const Δλ = ((lng2 - lng1) * Math.PI) / 180;
-
-  const a =
-    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  return Math.round(R * c); // Distance in meters
-};
-
-// Check if location is set (not default [0,0])
-userSchema.methods.hasValidLocation = function () {
-  if (!this.location?.coordinates) return false;
-  const [lng, lat] = this.location.coordinates;
-  return !(lng === 0 && lat === 0);
-};
-
-// Update field visibility
-userSchema.methods.updateFieldVisibility = async function (field, visibility) {
-  if (!this.fieldVisibility) {
-    this.fieldVisibility = {};
-  }
-  this.fieldVisibility[field] = visibility;
-  return await this.save();
+  return this.save();
 };
 
 // Check field visibility
 userSchema.methods.isFieldVisible = function (field, isUnlocked = false) {
-  if (!this.fieldVisibility) {
-    return true;
-  }
-  const visibility = this.fieldVisibility[field] || "public";
-
-  switch (visibility) {
-    case "public":
-      return true;
-    case "unlocked":
-      return isUnlocked;
-    case "private":
-      return false;
-    default:
-      return true;
-  }
+  return isProfileFieldVisible(this, field, isUnlocked);
 };
 
 // Modify toJSON to filter fields based on visibility
-userSchema.methods.toJSON = function (isUnlocked = false) {
+userSchema.methods.toJSON = function (options = {}) {
+  const isUnlocked = options === true || options?.isUnlocked === true;
   const obj = this.toObject();
   const visibleObj = {};
 
   // Process each field based on visibility settings
   Object.keys(obj).forEach((field) => {
+    if (PRIVATE_USER_FIELDS.has(field)) return;
+
     if (field === "fieldVisibility" || field === "_id" || field === "__v") {
       visibleObj[field] = obj[field];
       return;
@@ -408,87 +373,7 @@ userSchema.methods.toJSON = function (isUnlocked = false) {
     }
   });
 
-  // Never expose password
-  delete visibleObj.password;
-
   return visibleObj;
-};
-
-// ==================== STATIC METHODS ====================
-
-// Find users within distance (returns array with distance field)
-userSchema.statics.findNearby = async function (
-  longitude,
-  latitude,
-  maxDistanceMeters = 10000,
-  additionalQuery = {},
-  userId,
-  limit = 100,
-) {
-  return await this.aggregate([
-    {
-      $geoNear: {
-        near: {
-          type: "Point",
-          coordinates: [longitude, latitude],
-        },
-        distanceField: "distance",
-        maxDistance: maxDistanceMeters,
-        spherical: true,
-        query: {
-          _id: { $ne: new mongoose.Types.ObjectId(userId) }, // exclude self
-          "location.coordinates": { $exists: true, $ne: [0, 0] },
-          isMatching: true,
-          ...additionalQuery,
-        },
-      },
-    },
-
-    // 🧠 FAIRNESS: oldest matchmakingTimestamp first
-    {
-      $sort: {
-        matchmakingTimestamp: 1, // oldest first
-        distance: 1, // tie-breaker
-      },
-    },
-
-    // 🚀 Apply limit to 100 candidates
-    { $limit: limit },
-  ]);
-};
-
-// Count users by distance ranges
-userSchema.statics.getUserDistributionStats = async function (
-  longitude,
-  latitude,
-) {
-  return await this.aggregate([
-    {
-      $geoNear: {
-        near: {
-          type: "Point",
-          coordinates: [longitude, latitude],
-        },
-        distanceField: "distance",
-        spherical: true,
-        query: {
-          isActive: true,
-          "location.coordinates": { $exists: true, $ne: [0, 0] },
-        },
-      },
-    },
-    {
-      $bucket: {
-        groupBy: "$distance",
-        boundaries: [0, 1000, 5000, 10000, 50000, 100000],
-        default: "100km+",
-        output: {
-          count: { $sum: 1 },
-          users: { $push: "$_id" },
-        },
-      },
-    },
-  ]);
 };
 
 export default mongoose.model("User", userSchema);

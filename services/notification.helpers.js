@@ -1,4 +1,6 @@
-import { Types } from "mongoose";
+import { isValidObjectId, toObjectId } from "../utils/objectId.js";
+import { isPlainObject } from "../utils/object.js";
+import { getPagination } from "../utils/pagination.js";
 
 import {
   NOTIFICATION_PAGINATION,
@@ -6,58 +8,32 @@ import {
   buildNotificationCopy,
 } from "../libs/notificationConstants.js";
 
-export const isValidObjectId = (value) => {
-  if (!value) return false;
-  if (value instanceof Types.ObjectId) return true;
-  return Types.ObjectId.isValid(String(value));
-};
+const BANNED_METADATA_KEYS = new Set([
+  "__proto__",
+  "prototype",
+  "constructor",
+  "$set",
+  "$unset",
+  "$inc",
+]);
 
-export const buildObjectId = (value) => {
-  if (!value) return null;
-  if (value instanceof Types.ObjectId) return value;
-  return new Types.ObjectId(String(value));
-};
-
-export const toObjectIdString = (value) => {
-  if (!value) return null;
-  if (value instanceof Types.ObjectId) return value.toString();
-  if (typeof value === "string") return value;
-  if (value?._id) {
-    return value._id?.toString?.() || String(value._id);
-  }
-  return String(value);
-};
-
-export const clampPagination = ({ page, limit }) => {
-  const safePage = Math.max(
-    Number(page) || NOTIFICATION_PAGINATION.DEFAULT_PAGE,
-    1,
+export const clampPagination = ({ page, limit }) =>
+  getPagination(
+    { page, limit },
+    {
+      defaultPage: NOTIFICATION_PAGINATION.DEFAULT_PAGE,
+      defaultLimit: NOTIFICATION_PAGINATION.DEFAULT_LIMIT,
+      maxLimit: NOTIFICATION_PAGINATION.MAX_LIMIT,
+    },
   );
-  const requestedLimit = Number(limit) || NOTIFICATION_PAGINATION.DEFAULT_LIMIT;
-  const safeLimit = Math.min(
-    Math.max(requestedLimit, 1),
-    NOTIFICATION_PAGINATION.MAX_LIMIT,
-  );
-  return { page: safePage, limit: safeLimit };
-};
 
 const sanitizeMetadata = (metadata) => {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return {};
-  }
+  if (!isPlainObject(metadata)) return {};
   // Strip reserved/internal keys so callers can't smuggle Mongo operators or
   // arbitrarily-large payloads via metadata.
-  const bannedKeys = new Set([
-    "__proto__",
-    "prototype",
-    "constructor",
-    "$set",
-    "$unset",
-    "$inc",
-  ]);
   const cleaned = {};
   for (const [key, value] of Object.entries(metadata)) {
-    if (!key || bannedKeys.has(key)) continue;
+    if (!key || BANNED_METADATA_KEYS.has(key)) continue;
     if (value === undefined) continue;
     cleaned[key] = value;
   }
@@ -91,14 +67,14 @@ export const buildNotificationDoc = ({
   });
 
   return {
-    userId: buildObjectId(userId),
+    userId: toObjectId(userId),
     actorId:
-      actorId && isValidObjectId(actorId) ? buildObjectId(actorId) : null,
+      actorId && isValidObjectId(actorId) ? toObjectId(actorId) : null,
     type,
     title: copy.title,
     message: copy.message,
     entityType: copy.entityType || entityType || null,
-    entityId: entityId ? String(entityId) : null,
+    ...(entityId ? { entityId: String(entityId) } : {}),
     metadata: sanitizeMetadata(metadata),
     isRead: false,
     readAt: null,

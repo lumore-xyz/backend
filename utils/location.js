@@ -1,12 +1,45 @@
 const EARTH_RADIUS_METERS = 6371000;
+export const GEOJSON_POINT_TYPE = "Point";
 
-export const LOCATION_BACKFILL_DEFAULTS = {
-  maxSwappedDistanceKm: 25,
-  minStoredDistanceKm: 100,
-  swapDistanceRatioThreshold: 10,
+const hasValidGeoCoordinates = (latitude, longitude) =>
+  Number.isFinite(latitude) &&
+  Number.isFinite(longitude) &&
+  latitude >= -90 &&
+  latitude <= 90 &&
+  longitude >= -180 &&
+  longitude <= 180;
+
+export const parseCoordinate = (value) => {
+  if (
+    (typeof value !== "number" && typeof value !== "string") ||
+    (typeof value === "string" && !value.trim())
+  ) {
+    return null;
+  }
+
+  const coordinate = Number(value);
+  return Number.isFinite(coordinate) ? coordinate : null;
 };
 
-const toTrimmedAddress = (formattedAddress) => String(formattedAddress || "").trim();
+export const formattedAddressPartsExpression = () => ({
+  $split: [{ $trim: { input: "$location.formattedAddress" } }, ","],
+});
+
+export const extractLocationTags = (formattedAddress) => {
+  const segments = String(formattedAddress || "")
+    .split(",")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (!segments.length) return { city: "", country: "", pincode: "" };
+
+  const country = segments.at(-1) || "";
+  const pincodeCandidate = segments.at(-2) || "";
+  const pincode = pincodeCandidate.match(/\b\d{4,10}\b/)?.[0] || pincodeCandidate;
+  const city = segments.at(-4) || segments.at(-3) || "";
+
+  return { city, country, pincode };
+};
 
 const assertFiniteCoordinate = (value, label) => {
   const parsed = Number(value);
@@ -33,9 +66,9 @@ export const buildCanonicalLocation = ({
   }
 
   return {
-    type: "Point",
+    type: GEOJSON_POINT_TYPE,
     coordinates: [normalizedLongitude, normalizedLatitude],
-    formattedAddress: toTrimmedAddress(formattedAddress),
+    formattedAddress: String(formattedAddress || "").trim(),
   };
 };
 
@@ -47,11 +80,14 @@ export const getGeoPointFromLocation = (location) => {
 
   const longitude = Number(coordinates[0]);
   const latitude = Number(coordinates[1]);
-  if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
-    return null;
-  }
+  if (!hasValidGeoCoordinates(latitude, longitude)) return null;
 
   return { latitude, longitude };
+};
+
+export const hasValidLocation = (location) => {
+  const point = getGeoPointFromLocation(location);
+  return Boolean(point && (point.longitude !== 0 || point.latitude !== 0));
 };
 
 export const calculateDistanceMeters = (pointA, pointB) => {
@@ -63,10 +99,8 @@ export const calculateDistanceMeters = (pointA, pointB) => {
   const longitude2 = Number(pointB.longitude);
 
   if (
-    !Number.isFinite(latitude1) ||
-    !Number.isFinite(longitude1) ||
-    !Number.isFinite(latitude2) ||
-    !Number.isFinite(longitude2)
+    !hasValidGeoCoordinates(latitude1, longitude1) ||
+    !hasValidGeoCoordinates(latitude2, longitude2)
   ) {
     return null;
   }
@@ -80,124 +114,10 @@ export const calculateDistanceMeters = (pointA, pointB) => {
     Math.cos(toRadians(latitude1)) *
       Math.cos(toRadians(latitude2)) *
       Math.sin(longitudeDelta / 2) ** 2;
+  const haversine = Math.min(1, a);
 
-  return 2 * EARTH_RADIUS_METERS * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
-export const classifyLocationBackfillCandidate = ({
-  storedLocation,
-  geocodedPoint,
-  maxSwappedDistanceKm = LOCATION_BACKFILL_DEFAULTS.maxSwappedDistanceKm,
-  minStoredDistanceKm = LOCATION_BACKFILL_DEFAULTS.minStoredDistanceKm,
-  swapDistanceRatioThreshold = LOCATION_BACKFILL_DEFAULTS.swapDistanceRatioThreshold,
-}) => {
-  const storedPoint = getGeoPointFromLocation(storedLocation);
-  if (!storedPoint) {
-    return {
-      action: "skip",
-      reason: "missing_stored_coordinates",
-      storedPoint: null,
-      swappedPoint: null,
-      storedDistanceKm: null,
-      swappedDistanceKm: null,
-      distanceRatio: null,
-    };
-  }
-
-  if (!geocodedPoint) {
-    return {
-      action: "skip",
-      reason: "missing_geocoded_point",
-      storedPoint,
-      swappedPoint: null,
-      storedDistanceKm: null,
-      swappedDistanceKm: null,
-      distanceRatio: null,
-    };
-  }
-
-  const swappedPoint = {
-    latitude: storedPoint.longitude,
-    longitude: storedPoint.latitude,
-  };
-
-  if (
-    swappedPoint.latitude < -90 ||
-    swappedPoint.latitude > 90 ||
-    swappedPoint.longitude < -180 ||
-    swappedPoint.longitude > 180
-  ) {
-    return {
-      action: "keep",
-      reason: "swap_out_of_range",
-      storedPoint,
-      swappedPoint,
-      storedDistanceKm: null,
-      swappedDistanceKm: null,
-      distanceRatio: null,
-    };
-  }
-
-  const storedDistanceMeters = calculateDistanceMeters(storedPoint, geocodedPoint);
-  const swappedDistanceMeters = calculateDistanceMeters(swappedPoint, geocodedPoint);
-  const storedDistanceKm =
-    storedDistanceMeters === null ? null : storedDistanceMeters / 1000;
-  const swappedDistanceKm =
-    swappedDistanceMeters === null ? null : swappedDistanceMeters / 1000;
-
-  if (storedDistanceKm === null || swappedDistanceKm === null) {
-    return {
-      action: "skip",
-      reason: "distance_calculation_failed",
-      storedPoint,
-      swappedPoint,
-      storedDistanceKm,
-      swappedDistanceKm,
-      distanceRatio: null,
-    };
-  }
-
-  const safeSwappedDistance = swappedDistanceKm <= 0 ? 0.000001 : swappedDistanceKm;
-  const distanceRatio = storedDistanceKm / safeSwappedDistance;
-  const shouldSwap =
-    swappedDistanceKm <= maxSwappedDistanceKm &&
-    (storedDistanceKm >= minStoredDistanceKm ||
-      distanceRatio >= swapDistanceRatioThreshold);
-
-  if (shouldSwap) {
-    return {
-      action: "swap",
-      reason:
-        storedDistanceKm >= minStoredDistanceKm
-          ? "stored_far_swapped_close"
-          : "swapped_materially_closer",
-      storedPoint,
-      swappedPoint,
-      storedDistanceKm,
-      swappedDistanceKm,
-      distanceRatio,
-    };
-  }
-
-  if (storedDistanceKm <= maxSwappedDistanceKm) {
-    return {
-      action: "keep",
-      reason: "stored_location_consistent",
-      storedPoint,
-      swappedPoint,
-      storedDistanceKm,
-      swappedDistanceKm,
-      distanceRatio,
-    };
-  }
-
-  return {
-    action: "skip",
-    reason: "ambiguous_location_mismatch",
-    storedPoint,
-    swappedPoint,
-    storedDistanceKm,
-    swappedDistanceKm,
-    distanceRatio,
-  };
+  return 2 * EARTH_RADIUS_METERS * Math.atan2(
+    Math.sqrt(haversine),
+    Math.sqrt(1 - haversine),
+  );
 };

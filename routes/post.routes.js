@@ -17,23 +17,24 @@ import {
 
 const router = Router();
 
+router.use(protect);
+router.param("id", validateObjectIdParam("id"));
+router.param("userId", validateObjectIdParam("userId"));
+
 router.post(
   "/",
-  protect,
   postCreateLimiter,
   upload.single("image"),
   validateCreatePost,
   createPost,
 );
-router.get("/:userId", protect, validateObjectIdParam("userId"), getUserPosts);
-router.get("/:id", protect, validateObjectIdParam("id"), getPostById);
+router.get("/by-id/:id", getPostById);
+router.get("/:userId", getUserPosts);
 router.put(
   "/:id",
-  protect,
-  validateObjectIdParam("id"),
   validateUpdatePost,
   updatePost,
 );
-router.delete("/:id", protect, validateObjectIdParam("id"), deletePost);
+router.delete("/:id", deletePost);
 
 export default router;

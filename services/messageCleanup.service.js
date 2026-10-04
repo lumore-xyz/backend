@@ -1,42 +1,48 @@
 import Message from "../models/message.model.js";
-import { deleteFile } from "./file.service.js";
+import { getBatchSize } from "../utils/batch.js";
+import { deleteMessageMedia } from "./messageMediaCleanup.service.js";
 
 const MESSAGE_TTL_HOURS = 24;
 const DEFAULT_BEFORE_EXPIRY_MINUTES = 5;
-const DEFAULT_BATCH_SIZE = 100;
 
 const getCleanupCutoff = () => {
-  const beforeExpiryMinutes = Number(
+  const configuredMinutes = Number(
     process.env.MESSAGE_IMAGE_CLEANUP_BEFORE_EXPIRY_MINUTES ||
       DEFAULT_BEFORE_EXPIRY_MINUTES
   );
+  const beforeExpiryMinutes = Number.isFinite(configuredMinutes)
+    ? Math.max(0, configuredMinutes)
+    : DEFAULT_BEFORE_EXPIRY_MINUTES;
   const ttlMs = MESSAGE_TTL_HOURS * 60 * 60 * 1000;
-  const leadMs = Math.max(0, beforeExpiryMinutes) * 60 * 1000;
+  const leadMs = beforeExpiryMinutes * 60 * 1000;
   const ageMs = Math.max(0, ttlMs - leadMs);
   return new Date(Date.now() - ageMs);
 };
 
-const getBatchSize = () =>
-  Math.max(1, Number(process.env.MESSAGE_IMAGE_CLEANUP_BATCH_SIZE || DEFAULT_BATCH_SIZE));
-
-export const cleanupExpiredImageMessages = async () => {
+export const cleanupExpiredMediaMessages = async () => {
   const cutoff = getCleanupCutoff();
-  const batchSize = getBatchSize();
+  const batchSize = getBatchSize("MESSAGE_IMAGE_CLEANUP_BATCH_SIZE");
 
   const expiredMediaMessages = await Message.find({
     timestamp: { $lte: cutoff },
     $or: [
       {
         messageType: "image",
-        imagePublicId: { $exists: true, $ne: null },
+        $or: [
+          { imagePublicId: { $exists: true, $ne: null } },
+          { imageUrl: { $exists: true, $ne: null } },
+        ],
       },
       {
         messageType: "audio",
-        audioPublicId: { $exists: true, $ne: null },
+        $or: [
+          { audioPublicId: { $exists: true, $ne: null } },
+          { audioUrl: { $exists: true, $ne: null } },
+        ],
       },
     ],
   })
-    .select("_id messageType imagePublicId audioPublicId")
+    .select("_id messageType imagePublicId imageUrl audioPublicId audioUrl")
     .sort({ timestamp: 1 })
     .limit(batchSize)
     .lean();
@@ -52,40 +58,20 @@ export const cleanupExpiredImageMessages = async () => {
     };
   }
 
-  let deletedImages = 0;
-  let deletedAudio = 0;
-  let failedImages = 0;
-  let failedAudio = 0;
+  const { failedMessageIds = [], ...mediaResult } =
+    await deleteMessageMedia(expiredMediaMessages);
 
-  for (const message of expiredMediaMessages) {
-    const isAudio = message.messageType === "audio";
-    const publicId = isAudio ? message.audioPublicId : message.imagePublicId;
-    const resourceType = isAudio ? "video" : "image";
-    try {
-      await deleteFile(publicId, resourceType);
-      if (isAudio) deletedAudio += 1;
-      else deletedImages += 1;
-    } catch (error) {
-      if (isAudio) failedAudio += 1;
-      else failedImages += 1;
-      console.error("[MessageCleanup] Failed deleting media from cloud storage:", {
-        messageId: message._id?.toString?.() || message._id,
-        publicId,
-        resourceType,
-        error: error?.message || error,
-      });
-    }
-  }
-
-  const messageIds = expiredMediaMessages.map((item) => item._id);
-  const deleteResult = await Message.deleteMany({ _id: { $in: messageIds } });
+  const failedIds = new Set(failedMessageIds.map(String));
+  const messageIds = expiredMediaMessages
+    .filter((item) => !failedIds.has(String(item._id)))
+    .map((item) => item._id);
+  const deleteResult = messageIds.length
+    ? await Message.deleteMany({ _id: { $in: messageIds } })
+    : { deletedCount: 0 };
 
   return {
     scanned: expiredMediaMessages.length,
     deletedMessages: deleteResult.deletedCount || 0,
-    deletedImages,
-    deletedAudio,
-    failedImages,
-    failedAudio,
+    ...mediaResult,
   };
 };

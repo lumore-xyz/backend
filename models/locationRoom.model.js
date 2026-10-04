@@ -1,7 +1,13 @@
 import mongoose from "mongoose";
+import {
+  LOCATION_ROOM_STATUSES,
+  LOCATION_ROOM_STATUS,
+  LOCATION_ROOM_VISIBILITY_VALUES,
+  LOCATION_ROOM_VISIBILITY,
+} from "../utils/locationRoom.js";
+import { GEOJSON_POINT_TYPE } from "../utils/location.js";
 
 const MATCH_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const LOCATION_ROOM_VISIBILITIES = ["public", "private"];
 
 const locationRoomSchema = new mongoose.Schema(
   {
@@ -22,19 +28,16 @@ const locationRoomSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
     },
     status: {
       type: String,
-      enum: ["active", "archived"],
-      default: "active",
-      index: true,
+      enum: LOCATION_ROOM_STATUSES,
+      default: LOCATION_ROOM_STATUS.ACTIVE,
     },
     visibility: {
       type: String,
-      enum: LOCATION_ROOM_VISIBILITIES,
-      default: "public",
-      index: true,
+      enum: LOCATION_ROOM_VISIBILITY_VALUES,
+      default: LOCATION_ROOM_VISIBILITY.PUBLIC,
     },
     imageUrl: {
       type: String,
@@ -49,8 +52,8 @@ const locationRoomSchema = new mongoose.Schema(
     location: {
       type: {
         type: String,
-        enum: ["Point"],
-        default: "Point",
+        enum: [GEOJSON_POINT_TYPE],
+        default: GEOJSON_POINT_TYPE,
         required: true,
       },
       coordinates: {
@@ -81,7 +84,6 @@ const locationRoomSchema = new mongoose.Schema(
     nextMatchAt: {
       type: Date,
       required: true,
-      index: true,
       default: () => new Date(Date.now() + MATCH_INTERVAL_MS),
     },
     lastCycleAt: {
@@ -91,7 +93,6 @@ const locationRoomSchema = new mongoose.Schema(
     isCycleLocked: {
       type: Boolean,
       default: false,
-      index: true,
     },
     cycleLockedAt: {
       type: Date,
@@ -106,6 +107,5 @@ locationRoomSchema.index({ status: 1, nextMatchAt: 1, isCycleLocked: 1 });
 locationRoomSchema.index({ status: 1, visibility: 1, nextMatchAt: 1 });
 
 export const LOCATION_ROOM_MATCH_INTERVAL_MS = MATCH_INTERVAL_MS;
-export const LOCATION_ROOM_VISIBILITY_OPTIONS = LOCATION_ROOM_VISIBILITIES;
 
 export default mongoose.model("LocationRoom", locationRoomSchema);

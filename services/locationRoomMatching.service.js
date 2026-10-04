@@ -3,745 +3,56 @@ import LocationRoom, {
 } from "../models/locationRoom.model.js";
 import LocationRoomCycle from "../models/locationRoomCycle.model.js";
 import LocationRoomPin from "../models/locationRoomPin.model.js";
-import UserPreference from "../models/preference.model.js";
-import ThisOrThatAnswer from "../models/thisOrThatAnswer.model.js";
 import User from "../models/user.model.js";
-import {
-  calculateDistanceMeters,
-  getGeoPointFromLocation,
-} from "../utils/location.js";
-import {
-  CREDIT_RULES,
-  spendCreditsForConversationStart,
-} from "./credits.service.js";
-import {
-  getMatchedPairSet,
-  getOrCreateMatchRoom,
-  hasExistingMatchRoom,
-} from "./matching.service.js";
-import {
-  getHardEligibilityResult,
-  normalizePreference,
-  scoreCandidate,
-} from "./matchmaking.service.js";
-import {
-  buildCommunityMatchDoc,
-  createManyNotifications,
-} from "./notification.service.js";
-import { buildMatchNote as buildMatchNoteShared } from "./matchNote.service.js";
-import { sendNotificationToUser } from "./push.service.js";
-import socketService from "./socket.service.js";
+import { hasValidLocation } from "../utils/location.js";
+import { LOCATION_ROOM_POOL_STATUS } from "../utils/locationRoomPool.js";
+import { LOCATION_ROOM_CYCLE_STATUS } from "../utils/locationRoom.js";
+import { selectRoomMatchPairs } from "./locationRoomPairing.service.js";
+import { normalizePreference } from "./matchingPolicy.service.js";
+import { buildCompatibilityEdges } from "./locationRoomCompatibility.service.js";
+import { notifyLocationRoomPoolUpdated } from "./locationRoomNotification.service.js";
+import { createRoomMatches } from "./locationRoomMatchCreation.service.js";
+import { getPreferencesByUserIds } from "./profilePreference.service.js";
+import { logError } from "../utils/logError.js";
 
-export const ROOM_MIN_COMPATIBILITY_SCORE = 35;
-const ROOM_MATCH_LOG_PREFIX = "[location-room-match]";
-const ROOM_CYCLE_LOCK_STALE_MS = 15 * 60 * 1000;
-const ROOM_CYCLE_RETRY_MS = 15 * 60 * 1000;
 const ROOM_MATCH_SELECT =
   "_id username nickname profilePicture gender dob interests languages religion diet lifestyle personalityType location credits isArchived";
-
-const getId = (value) => value?._id?.toString?.() || value?.toString?.() || "";
-
-const getPairKey = (userId1, userId2) =>
-  [getId(userId1), getId(userId2)].sort().join(":");
-
-const logRoomMatchStep = (stage, details = {}) => {
-  console.info(`${ROOM_MATCH_LOG_PREFIX} ${stage}`, details);
-};
-
-const hasValidLocation = (user) =>
-  Boolean(getGeoPointFromLocation(user?.location));
-
-const isProfileEligibleForRoom = (user) =>
-  Boolean(
-    user &&
-    !user.isArchived &&
-    user.credits >= CREDIT_RULES.CONVERSATION_COST &&
-    user.gender &&
-    user.dob &&
-    hasValidLocation(user),
-  );
 
 const getFailureReason = (user) => {
   if (!user) return "user_not_found";
   if (user.isArchived) return "archived_user";
-  if (user.credits < CREDIT_RULES.CONVERSATION_COST)
-    return "insufficient_credits";
   if (!user.gender || !user.dob) return "missing_profile";
-  if (!hasValidLocation(user)) return "missing_location";
+  if (!hasValidLocation(user?.location)) return "missing_location";
   return "";
 };
 
-const getAnswersByUser = async (userIds) => {
-  const answers = await ThisOrThatAnswer.find({
-    userId: { $in: userIds },
-  })
-    .select("userId questionId selection")
-    .lean();
-
-  const byUser = new Map();
-  for (const answer of answers) {
-    const userId = answer.userId.toString();
-    if (!byUser.has(userId)) byUser.set(userId, new Map());
-    byUser.get(userId).set(answer.questionId.toString(), answer.selection);
-  }
-  return byUser;
-};
-
-const getDistanceMetersBetweenUsers = (userA, userB) => {
-  const pointA = getGeoPointFromLocation(userA?.location);
-  const pointB = getGeoPointFromLocation(userB?.location);
-  return calculateDistanceMeters(pointA, pointB) || 0;
-};
-
-const round2 = (value) => {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return 0;
-  return Math.round(num * 100) / 100;
-};
-
-const toStringList = (value) =>
-  Array.isArray(value)
-    ? value
-        .map((entry) => String(entry || "").trim())
-        .filter(Boolean)
-    : [];
-
-const getIntersection = (a = [], b = []) => {
-  const setB = new Set((b || []).map((item) => String(item)));
-  return Array.from(new Set((a || []).map((item) => String(item)))).filter(
-    (item) => setB.has(item),
-  );
-};
-
-const getExactMatchValue = (a, b) => {
-  const left = String(a || "")
-    .trim()
-    .toLowerCase();
-  const right = String(b || "")
-    .trim()
-    .toLowerCase();
-  if (!left || !right) return null;
-  return left === right ? left : null;
-};
-
-const getCommonalityBreakdown = ({ seeker, candidate }) => ({
-  goals: getIntersection(toStringList(seeker?.interests?.goals || []), toStringList(candidate?.interests?.goals || [])),
-  interests: getIntersection(toStringList(seeker?.interests), toStringList(candidate?.interests)),
-  languages: getIntersection(toStringList(seeker?.languages), toStringList(candidate?.languages)),
-  religion: getExactMatchValue(seeker?.religion, candidate?.religion),
-  diet: getExactMatchValue(seeker?.diet, candidate?.diet),
-  lifestyle: {
-    drinking: getExactMatchValue(
-      seeker?.lifestyle?.drinking,
-      candidate?.lifestyle?.drinking,
-    ),
-    smoking: getExactMatchValue(
-      seeker?.lifestyle?.smoking,
-      candidate?.lifestyle?.smoking,
-    ),
-    pets: getExactMatchValue(
-      seeker?.lifestyle?.pets,
-      candidate?.lifestyle?.pets,
-    ),
-  },
-});
-
-const getThisOrThatStats = ({ seekerAnswers, candidateAnswers }) => {
-  let sharedAnswers = 0;
-  let matchedAnswers = 0;
-  for (const [questionId, seekerSelection] of seekerAnswers.entries()) {
-    if (!candidateAnswers.has(questionId)) continue;
-    sharedAnswers += 1;
-    if (candidateAnswers.get(questionId) === seekerSelection) {
-      matchedAnswers += 1;
-    }
-  }
-  return {
-    sharedAnswers,
-    matchedAnswers,
-    matchRate: sharedAnswers
-      ? round2((matchedAnswers / sharedAnswers) * 100)
-      : 0,
-  };
-};
-
-const buildRoomMatchingNote = ({
-  room,
-  cycle,
-  score,
-  seekerScore,
-  candidateScore,
-  seekerUser,
-  candidateUser,
-  seekerAnswers,
-  candidateAnswers,
-  distanceKm,
-}) => {
-  const common = getCommonalityBreakdown({
-    seeker: seekerUser,
-    candidate: candidateUser,
-  });
-  const thisOrThat = getThisOrThatStats({
-    seekerAnswers: seekerAnswers || new Map(),
-    candidateAnswers: candidateAnswers || new Map(),
-  });
-
-  const reasons = ["room_pool_compatibility"];
-  if (common.interests.length) reasons.push("shared_interests");
-  if (common.languages.length) reasons.push("shared_languages");
-  if (common.religion) reasons.push("shared_religion");
-  if (common.diet) reasons.push("shared_diet");
-  if (thisOrThat.matchedAnswers > 0) reasons.push("this_or_that_similarity");
-
-  return {
-    version: "location_room",
-    source: "location_room",
-    locationRoomId: room._id.toString(),
-    locationRoomTitle: room.title,
-    locationRoomCycleId: cycle._id.toString(),
-    totalScore: round2(score),
-    components: {
-      seekerScore: round2(seekerScore?.totalScore),
-      candidateScore: round2(candidateScore?.totalScore),
-      profileScore: round2(seekerScore?.componentScores?.profileScore),
-      intentScore: round2(seekerScore?.componentScores?.intentScore),
-      thisOrThatScore: round2(seekerScore?.componentScores?.thisOrThatScore),
-      distanceScore: round2(seekerScore?.componentScores?.distanceScore),
-    },
-    distanceKm: Number.isFinite(distanceKm) ? round2(distanceKm) : null,
-    common,
-    thisOrThat,
-    reasons,
-  };
-};
-
-const buildRoomMatchPayload = ({
-  room,
-  matchRoom,
-  matchedUserId,
-  matchingNote,
-}) => ({
-  roomId: matchRoom._id.toString(),
-  chatRoomId: matchRoom._id.toString(),
-  matchedUser: matchedUserId.toString(),
-  matchedUserId: matchedUserId.toString(),
-  locationRoom: {
-    _id: room._id.toString(),
-    title: room.title,
-  },
-  matchingNote,
-});
-
-export const selectRoomMatchPairs = ({
-  edges,
-  eligibleUserIds = [],
-  maxMatchesPerUser = 2,
-  blockedPairKeys = new Set(),
-}) => {
-  const sortedEdges = [...(edges || [])].sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    return getPairKey(a.userId1, a.userId2).localeCompare(
-      getPairKey(b.userId1, b.userId2),
-    );
-  });
-  const userIds = new Set(
-    (eligibleUserIds || []).map((userId) => getId(userId)).filter(Boolean),
-  );
-  for (const edge of sortedEdges) {
-    userIds.add(getId(edge.userId1));
-    userIds.add(getId(edge.userId2));
-  }
-
-  const matchCounts = new Map(Array.from(userIds).map((userId) => [userId, 0]));
-  const usedPairs = new Set(Array.from(blockedPairKeys || []).map(String));
-  const selected = [];
-
-  const selectEdge = (edge) => {
-    const userId1 = getId(edge.userId1);
-    const userId2 = getId(edge.userId2);
-    const pairKey = getPairKey(userId1, userId2);
-    if (usedPairs.has(pairKey)) return false;
-    selected.push(edge);
-    usedPairs.add(pairKey);
-    matchCounts.set(userId1, (matchCounts.get(userId1) || 0) + 1);
-    matchCounts.set(userId2, (matchCounts.get(userId2) || 0) + 1);
-    return true;
-  };
-
-  for (const edge of sortedEdges) {
-    const userId1 = getId(edge.userId1);
-    const userId2 = getId(edge.userId2);
-    if (
-      (matchCounts.get(userId1) || 0) === 0 &&
-      (matchCounts.get(userId2) || 0) === 0
-    ) {
-      selectEdge(edge);
-    }
-  }
-
-  for (const userId of userIds) {
-    if ((matchCounts.get(userId) || 0) > 0) continue;
-    const edge = sortedEdges.find((candidate) => {
-      const userId1 = getId(candidate.userId1);
-      const userId2 = getId(candidate.userId2);
-      if (usedPairs.has(getPairKey(userId1, userId2))) return false;
-      if (userId1 !== userId && userId2 !== userId) return false;
-      const otherUserId = userId1 === userId ? userId2 : userId1;
-      return (
-        (matchCounts.get(otherUserId) || 0) > 0 &&
-        (matchCounts.get(otherUserId) || 0) < maxMatchesPerUser
-      );
-    });
-    if (edge) selectEdge(edge);
-  }
-
-  return {
-    selected,
-    matchCounts,
-    unmatchedUserIds: Array.from(userIds).filter(
-      (userId) => (matchCounts.get(userId) || 0) === 0,
-    ),
-  };
-};
-
-const buildCompatibilityEdges = async ({
-  room,
-  cycle,
-  users,
-  prefsByUser,
-  now,
-}) => {
-  const userIds = users.map((user) => user._id.toString());
-  const [answersByUser, existingMatchedPairSet] = await Promise.all([
-    getAnswersByUser(userIds),
-    getMatchedPairSet({ userIds }),
-  ]);
-  const edges = [];
-
-  for (let leftIndex = 0; leftIndex < users.length; leftIndex += 1) {
-    for (
-      let rightIndex = leftIndex + 1;
-      rightIndex < users.length;
-      rightIndex += 1
-    ) {
-      const userA = users[leftIndex];
-      const userB = users[rightIndex];
-      const pairKey = getPairKey(userA._id, userB._id);
-      if (existingMatchedPairSet.has(pairKey)) continue;
-
-      const prefsA = prefsByUser.get(userA._id.toString());
-      const prefsB = prefsByUser.get(userB._id.toString());
-      const eligibility = getHardEligibilityResult({
-        seeker: userA,
-        seekerPrefs: prefsA,
-        candidate: userB,
-        candidatePrefs: prefsB,
-        now,
-      });
-      if (!eligibility.ok) continue;
-
-      const distanceMeters = getDistanceMetersBetweenUsers(userA, userB);
-      const maxDistanceKm = Math.max(
-        1,
-        Math.min(
-          Number(prefsA?.distance || 50),
-          Number(prefsB?.distance || 50),
-        ),
-      );
-      const userBForScore = { ...userB, distance: distanceMeters };
-      const userAForScore = { ...userA, distance: distanceMeters };
-      const scoreAB = scoreCandidate({
-        seeker: userA,
-        candidate: userBForScore,
-        context: {
-          seekerPrefs: prefsA,
-          candidatePrefs: prefsB,
-          now,
-          maxDistanceKm,
-          seekerAnswers: answersByUser.get(userA._id.toString()) || new Map(),
-          candidateAnswers:
-            answersByUser.get(userB._id.toString()) || new Map(),
-        },
-      });
-      const scoreBA = scoreCandidate({
-        seeker: userB,
-        candidate: userAForScore,
-        context: {
-          seekerPrefs: prefsB,
-          candidatePrefs: prefsA,
-          now,
-          maxDistanceKm,
-          seekerAnswers: answersByUser.get(userB._id.toString()) || new Map(),
-          candidateAnswers:
-            answersByUser.get(userA._id.toString()) || new Map(),
-        },
-      });
-      const score = (scoreAB.totalScore + scoreBA.totalScore) / 2;
-      if (score < ROOM_MIN_COMPATIBILITY_SCORE) continue;
-
-      edges.push({
-        userId1: userA._id.toString(),
-        userId2: userB._id.toString(),
-        score,
-        matchingNote: buildRoomMatchingNote({
-          room,
-          cycle,
-          score,
-          seekerScore: scoreAB,
-          candidateScore: scoreBA,
-          seekerUser: userA,
-          candidateUser: userB,
-          seekerAnswers: answersByUser.get(userA._id.toString()),
-          candidateAnswers: answersByUser.get(userB._id.toString()),
-          distanceKm: Number.isFinite(distanceMeters)
-            ? distanceMeters / 1000
-            : null,
-        }),
-      });
-    }
-  }
-
-  return {
-    edges,
-    blockedPairKeys: existingMatchedPairSet,
-  };
-};
-
-const notifyRoomMatch = async ({
-  room,
-  matchRoom,
-  userId1,
-  userId2,
-  balances,
-}) => {
-  const roomId = matchRoom._id.toString();
-  const payloadForUser1 = buildRoomMatchPayload({
-    room,
-    matchRoom,
-    matchedUserId: userId2,
-    matchingNote: matchRoom.matchingNote,
-  });
-  const payloadForUser2 = buildRoomMatchPayload({
-    room,
-    matchRoom,
-    matchedUserId: userId1,
-    matchingNote: matchRoom.matchingNote,
-  });
-
-  socketService.emitToUser(userId1, "roomMatchFound", payloadForUser1);
-  socketService.emitToUser(userId2, "roomMatchFound", payloadForUser2);
-  socketService.emitToUser(userId1, "inbox_updated", {
-    roomId,
-    status: "active",
-  });
-  socketService.emitToUser(userId2, "inbox_updated", {
-    roomId,
-    status: "active",
-  });
-  socketService.emitToUser(userId1, "creditsUpdated", {
-    credits: balances?.[userId1.toString()],
-    reason: "room_conversation_start",
-  });
-  socketService.emitToUser(userId2, "creditsUpdated", {
-    credits: balances?.[userId2.toString()],
-    reason: "room_conversation_start",
-  });
-
-  await Promise.allSettled([
-    sendNotificationToUser(userId1, {
-      title: "Room match found!",
-      body: `You matched through ${room.title}.`,
-      tag: `room-match-${roomId}`,
-      data: {
-        type: "room_match",
-        roomId,
-        locationRoomId: room._id.toString(),
-        matchedUserId: userId2.toString(),
-        url: `/app/chat/${roomId}`,
-      },
-    }),
-    sendNotificationToUser(userId2, {
-      title: "Room match found!",
-      body: `You matched through ${room.title}.`,
-      tag: `room-match-${roomId}`,
-      data: {
-        type: "room_match",
-        roomId,
-        locationRoomId: room._id.toString(),
-        matchedUserId: userId1.toString(),
-        url: `/app/chat/${roomId}`,
-      },
-    }),
-  ]);
-};
-
-const markInsufficientCreditUsers = async ({ roomId, userIds, now }) => {
-  const users = await User.find({ _id: { $in: userIds } })
-    .select("credits")
-    .lean();
-  const insufficientUserIds = users
-    .filter((user) => user.credits < CREDIT_RULES.CONVERSATION_COST)
-    .map((user) => user._id);
-  if (!insufficientUserIds.length) return [];
-
-  await LocationRoomPin.updateMany(
-    { room: roomId, user: { $in: insufficientUserIds } },
-    {
-      $set: {
-        poolStatus: "insufficient_credits",
-        lastPoolError: "insufficient_credits",
-        updatedAt: now,
-      },
-    },
-  );
-  return insufficientUserIds;
-};
-
-const createRoomMatches = async ({ room, cycle, pairs, now }) => {
-  const matches = [];
-  const matchedUserIds = new Set();
-  const skippedUsers = [];
-
-  logRoomMatchStep("create_matches_start", {
-    roomId: room._id.toString(),
-    cycleId: cycle._id.toString(),
-    pairCount: pairs.length,
-  });
-
-  for (const pair of pairs) {
-    const userId1 = pair.userId1;
-    const userId2 = pair.userId2;
-    logRoomMatchStep("create_matches_pair_start", {
-      roomId: room._id.toString(),
-      cycleId: cycle._id.toString(),
-      userId1: userId1.toString(),
-      userId2: userId2.toString(),
-      score: pair.score,
-    });
-    const alreadyMatched = await hasExistingMatchRoom(userId1, userId2);
-    if (alreadyMatched) {
-      logRoomMatchStep("create_matches_pair_blocked_existing_room", {
-        roomId: room._id.toString(),
-        cycleId: cycle._id.toString(),
-        userId1: userId1.toString(),
-        userId2: userId2.toString(),
-      });
-      skippedUsers.push({ user: userId1, reason: "already_matched" });
-      skippedUsers.push({ user: userId2, reason: "already_matched" });
-      continue;
-    }
-
-    const creditSpend = await spendCreditsForConversationStart(
-      userId1,
-      userId2,
-    );
-    logRoomMatchStep("create_matches_pair_credit_result", {
-      roomId: room._id.toString(),
-      cycleId: cycle._id.toString(),
-      userId1: userId1.toString(),
-      userId2: userId2.toString(),
-      success: Boolean(creditSpend?.success),
-      reason: creditSpend?.reason || null,
-    });
-    if (!creditSpend.success) {
-      const insufficientUserIds = await markInsufficientCreditUsers({
-        roomId: room._id,
-        userIds: [userId1, userId2],
-        now,
-      });
-      for (const userId of insufficientUserIds) {
-        skippedUsers.push({ user: userId, reason: "insufficient_credits" });
-      }
-      continue;
-    }
-
-    // Enrich the structural matchingNote with an AI-generated
-    // one-sentence opener ("why you matched") for each participant, mirroring
-    // the explore matchmaking flow. If the AI call fails the deterministic
-    // fallback inside `buildMatchNote` keeps the room usable.
-    const enrichMatchNote = async () => {
-      try {
-        const enriched = await buildMatchNoteShared({
-          seekerId: userId1,
-          candidateId: userId2,
-          matchingNote: pair.matchingNote,
-          loadUsers: async ({ seekerId, candidateId }) =>
-            User.find({
-              _id: { $in: [seekerId, candidateId] },
-            })
-              .select("_id username nickname")
-              .lean(),
-        });
-        logRoomMatchStep("create_matches_pair_ai_ready", {
-          roomId: room._id.toString(),
-          cycleId: cycle._id.toString(),
-          userId1: userId1.toString(),
-          userId2: userId2.toString(),
-          hasAiSentence: Boolean(enriched?.oneSentenceNote),
-          usedFallback: Boolean(enriched?.aiSummary?.usedFallback),
-        });
-        return enriched || pair.matchingNote;
-      } catch (error) {
-        logRoomMatchStep("create_matches_pair_ai_failed", {
-          roomId: room._id.toString(),
-          cycleId: cycle._id.toString(),
-          userId1: userId1.toString(),
-          userId2: userId2.toString(),
-          message: error?.message || error,
-        });
-        return pair.matchingNote;
-      }
-    };
-
-    // Strip the AI envelope fields when persisting so the canonical record
-    // keeps only the deterministic structural note.
-    const stripAiEnvelope = (note) => {
-      if (!note || typeof note !== "object") return note;
-      const {
-        oneSentenceNote: _omitOneSentenceNote,
-        notesByUser: _omitNotesByUser,
-        aiSummary: _omitAiSummary,
-        ...rest
-      } = note;
-      void _omitOneSentenceNote;
-      void _omitNotesByUser;
-      void _omitAiSummary;
-      return rest;
-    };
-
-    // Look up whether a chat room already exists for this pair BEFORE we
-    // generate an AI sentence. If `alreadyMatched` above returned true the
-    // whole pair would have been skipped; reaching here means this is a fresh
-    // pair, so we always generate the AI envelope.
-    const enrichedMatchingNote = await enrichMatchNote();
-
-    const matchRoom = await getOrCreateMatchRoom(
-      userId1,
-      userId2,
-      stripAiEnvelope(enrichedMatchingNote || pair.matchingNote),
-      {
-        source: "location_room",
-        locationRoom: room._id,
-        locationRoomCycle: cycle._id,
-        sourceMetadata: {
-          title: room.title,
-          subtitle: room.location?.formattedAddress || "",
-        },
-      },
-    );
-    // Re-attach the AI envelope onto the in-memory doc so the socket payload
-    // emitted in this process carries the personalised opener. Persisted docs
-    // continue to expose the structural note via the existing API surface.
-    if (enrichedMatchingNote?.oneSentenceNote) {
-      matchRoom.matchingNote = enrichedMatchingNote;
-    }
-    logRoomMatchStep("create_matches_pair_room_ready", {
-      roomId: room._id.toString(),
-      cycleId: cycle._id.toString(),
-      chatRoomId: matchRoom._id.toString(),
-      userId1: userId1.toString(),
-      userId2: userId2.toString(),
-    });
-    matchedUserIds.add(userId1.toString());
-    matchedUserIds.add(userId2.toString());
-    await LocationRoomPin.updateMany(
-      {
-        room: room._id,
-        user: { $in: [userId1, userId2] },
-      },
-      {
-        $set: {
-          lastMatchRoom: matchRoom._id,
-        },
-      },
-    );
-    matches.push({
-      users: [userId1, userId2],
-      matchRoom: matchRoom._id,
-      score: pair.score,
-    });
-
-    const communityMatchDocs = [
-      buildCommunityMatchDoc({
-        userId: userId1,
-        matchedUserId: userId2,
-        roomId: matchRoom._id,
-        locationRoomId: room._id,
-        communityName: room.title,
-      }),
-      buildCommunityMatchDoc({
-        userId: userId2,
-        matchedUserId: userId1,
-        roomId: matchRoom._id,
-        locationRoomId: room._id,
-        communityName: room.title,
-      }),
-    ].filter(Boolean);
-
-    if (communityMatchDocs.length) {
-      createManyNotifications(communityMatchDocs).catch((error) => {
-        console.error(
-          `${ROOM_MATCH_LOG_PREFIX} notification_create_failed`,
-          error?.message || error,
-        );
-      });
-    }
-
-    await notifyRoomMatch({
-      room,
-      matchRoom,
-      userId1,
-      userId2,
-      balances: creditSpend.balances,
-    });
-    logRoomMatchStep("create_matches_pair_notified", {
-      roomId: room._id.toString(),
-      cycleId: cycle._id.toString(),
-      chatRoomId: matchRoom._id.toString(),
-    });
-  }
-
-  if (matchedUserIds.size) {
-    await LocationRoomPin.updateMany(
-      {
-        room: room._id,
-        user: { $in: Array.from(matchedUserIds) },
-      },
-      {
-        $set: {
-          inPool: false,
-          poolStatus: "matched",
-          lastMatchedAt: now,
-          lastMatchedCycle: cycle._id,
-          lastPoolError: "",
-        },
-      },
-    );
-  }
-
-  return {
-    matches,
-    matchedUserIds,
-    skippedUsers,
-  };
-};
-
 export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
-  logRoomMatchStep("cycle_start", {
-    roomId: room._id.toString(),
-    roomTitle: room.title,
-    now: now.toISOString(),
-  });
   const cycle = await LocationRoomCycle.create({
     room: room._id,
-    status: "running",
+    status: LOCATION_ROOM_CYCLE_STATUS.RUNNING,
     startedAt: now,
   });
+  try {
+    return await processLocationRoomCycle({ room, cycle, now });
+  } catch (error) {
+    cycle.status = LOCATION_ROOM_CYCLE_STATUS.FAILED;
+    cycle.completedAt = new Date();
+    cycle.error = "cycle_failed";
+    try {
+      await cycle.save();
+    } catch (saveError) {
+      logError("[location-room] failed to persist cycle failure", saveError);
+    }
+    throw error;
+  }
+};
+
+const processLocationRoomCycle = async ({ room, cycle, now }) => {
   const pins = await LocationRoomPin.find({
     room: room._id,
     isPinned: true,
     inPool: true,
-    poolStatus: "in_pool",
+    poolStatus: LOCATION_ROOM_POOL_STATUS.IN_POOL,
   })
     .select("user")
     .lean();
@@ -758,27 +69,13 @@ export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
     const reason = getFailureReason(user);
     if (reason) {
       skippedUsers.push({ user: userId, reason });
-      if (reason === "insufficient_credits") {
-        await LocationRoomPin.updateOne(
-          { room: room._id, user: userId },
-          {
-            $set: {
-              poolStatus: "insufficient_credits",
-              lastPoolError: reason,
-            },
-          },
-        );
-      }
       continue;
     }
-    if (isProfileEligibleForRoom(user)) eligibleUsers.push(user);
+    eligibleUsers.push(user);
   }
 
-  const preferenceDocs = await UserPreference.find({
-    user: { $in: eligibleUsers.map((user) => user._id) },
-  }).lean();
-  const preferenceDocByUser = new Map(
-    preferenceDocs.map((doc) => [doc.user.toString(), doc]),
+  const preferenceDocByUser = await getPreferencesByUserIds(
+    eligibleUsers.map((user) => user._id),
   );
   const prefsByUser = new Map(
     eligibleUsers.map((user) => [
@@ -795,24 +92,10 @@ export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
     prefsByUser,
     now,
   });
-  logRoomMatchStep("cycle_edges_built", {
-    roomId: room._id.toString(),
-    cycleId: cycle._id.toString(),
-    poolUserCount: poolUserIds.length,
-    eligibleUserCount: eligibleUsers.length,
-    edgeCount: edges.length,
-    blockedPairCount: blockedPairKeys.size,
-  });
   const { selected, unmatchedUserIds } = selectRoomMatchPairs({
     edges,
     eligibleUserIds: eligibleUsers.map((user) => user._id),
     blockedPairKeys,
-  });
-  logRoomMatchStep("cycle_pairs_selected", {
-    roomId: room._id.toString(),
-    cycleId: cycle._id.toString(),
-    selectedPairCount: selected.length,
-    unmatchedUserCount: unmatchedUserIds.length,
   });
   for (const userId of unmatchedUserIds) {
     skippedUsers.push({ user: userId, reason: "no_compatible_room_match" });
@@ -831,7 +114,7 @@ export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
   const matchedUserCount = created.matchedUserIds.size;
   const finalSkippedUsers = [...skippedUsers, ...created.skippedUsers];
 
-  cycle.status = "completed";
+  cycle.status = LOCATION_ROOM_CYCLE_STATUS.COMPLETED;
   cycle.completedAt = completedAt;
   cycle.nextMatchAt = nextMatchAt;
   cycle.poolUserCount = poolUserIds.length;
@@ -851,20 +134,12 @@ export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
     },
   });
 
-  socketService.emitToUsers(poolUserIds, "room_pool_updated", {
-    roomId: room._id.toString(),
+  await notifyLocationRoomPoolUpdated({
+    roomId: room._id,
+    userIds: poolUserIds,
     nextMatchAt,
     matchedUserCount,
     matchCount: created.matches.length,
-  });
-
-  logRoomMatchStep("cycle_complete", {
-    roomId: room._id.toString(),
-    cycleId: cycle._id.toString(),
-    matchedUserCount,
-    matchCount: created.matches.length,
-    skippedUserCount: finalSkippedUsers.length,
-    nextMatchAt: nextMatchAt.toISOString(),
   });
 
   return {
@@ -873,112 +148,4 @@ export const runLocationRoomCycle = async ({ room, now = new Date() }) => {
     matchedUserCount,
     skippedUserCount: finalSkippedUsers.length,
   };
-};
-
-export const processDueLocationRoomCycle = async ({
-  roomId,
-  now = new Date(),
-  ignoreSchedule = false,
-}) => {
-  const staleLockBefore = new Date(now.getTime() - ROOM_CYCLE_LOCK_STALE_MS);
-  const room = await LocationRoom.findOneAndUpdate(
-    {
-      _id: roomId,
-      status: "active",
-      ...(ignoreSchedule ? {} : { nextMatchAt: { $lte: now } }),
-      $or: [
-        { isCycleLocked: { $ne: true } },
-        { cycleLockedAt: { $lt: staleLockBefore } },
-      ],
-    },
-    {
-      $set: {
-        isCycleLocked: true,
-        cycleLockedAt: now,
-      },
-    },
-    { returnDocument: "after" },
-  );
-  if (!room) {
-    logRoomMatchStep("cycle_skipped", {
-      roomId: roomId.toString(),
-      reason: "not_due_or_locked",
-      now: now.toISOString(),
-    });
-    return { skipped: true, reason: "not_due_or_locked" };
-  }
-
-  try {
-    return await runLocationRoomCycle({ room, now });
-  } catch (error) {
-    console.error(`${ROOM_MATCH_LOG_PREFIX} cycle_error`, {
-      roomId: room._id.toString(),
-      message: error?.message || "unknown_error",
-      stack: error?.stack || null,
-    });
-    const retryAt = new Date(Date.now() + ROOM_CYCLE_RETRY_MS);
-    await Promise.allSettled([
-      LocationRoomCycle.create({
-        room: room._id,
-        status: "failed",
-        startedAt: now,
-        completedAt: new Date(),
-        nextMatchAt: retryAt,
-        error: error?.message || "unknown_error",
-      }),
-      LocationRoom.findByIdAndUpdate(room._id, {
-        $set: {
-          nextMatchAt: retryAt,
-          isCycleLocked: false,
-          cycleLockedAt: null,
-        },
-      }),
-    ]);
-    throw error;
-  }
-};
-
-export const runDueLocationRoomCycles = async ({
-  now = new Date(),
-  limit = 25,
-} = {}) => {
-  const rooms = await LocationRoom.find({
-    status: "active",
-    nextMatchAt: { $lte: now },
-  })
-    .select("_id")
-    .sort({ nextMatchAt: 1 })
-    // .limit(limit)
-    .lean();
-
-  const results = [];
-  for (const room of rooms) {
-    try {
-      results.push(
-        await processDueLocationRoomCycle({ roomId: room._id, now }),
-      );
-    } catch (error) {
-      console.error("[rooms] cycle failed:", {
-        roomId: room._id.toString(),
-        message: error?.message || error,
-      });
-      results.push({ success: false, roomId: room._id, error });
-    }
-  }
-  return {
-    scanned: rooms.length,
-    processed: results.filter((result) => !result?.skipped).length,
-    results,
-  };
-};
-
-// Exposed for unit tests so the matchingNote shape is verifiable without
-// having to spin up the full matching pipeline.
-export const __testHelpers = {
-  buildRoomMatchingNote,
-  getCommonalityBreakdown,
-  getThisOrThatStats,
-  getIntersection,
-  getExactMatchValue,
-  round2,
 };

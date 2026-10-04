@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { refreshToken as refreshTokenController } from "../controllers/auth.controller.js";
+import {
+  refreshToken as refreshTokenController,
+  tma_login as tmaLoginController,
+} from "../controllers/auth.controller.js";
 import User from "../models/user.model.js";
 import { generateRefreshToken } from "../services/authToken.service.js";
 
@@ -76,6 +79,20 @@ test("refreshToken returns 401 when no refresh token is provided", async () => {
 
   assert.equal(res.statusCode, 401);
   assert.equal(res.body.error, "No refresh token provided");
+});
+
+test("tma_login rejects unsigned Telegram init data", async () => {
+  await withEnv({ TMA_BOT_TOKEN: "test-bot-token" }, async () => {
+    const req = {
+      body: { initData: "user=%7B%22id%22%3A123%7D" },
+    };
+    const res = createRes();
+
+    await tmaLoginController(req, res);
+
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.message, "Invalid or expired Telegram init data");
+  });
 });
 
 test("refreshToken returns a new access token for a valid refresh token", async () => {

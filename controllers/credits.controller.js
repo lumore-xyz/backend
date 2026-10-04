@@ -1,49 +1,29 @@
-import {
-  claimRewardedAdCredit,
-  getCreditBalance,
-  getCreditHistory,
-  grantDailyActiveBonus,
-} from "../services/credits.service.js";
+import { getCreditBalance } from "../services/creditBalance.service.js";
+import { getCreditHistory } from "../services/creditHistory.service.js";
+import { grantDailyActiveBonus } from "../services/dailyActiveCredits.service.js";
+import { claimRewardedAdCredit } from "../services/rewardedAdCredits.service.js";
 
 export const getCreditsBalance = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const balance = await getCreditBalance(userId);
-
-    if (!balance) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    return res.status(200).json({ success: true, data: balance });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: "Server error" });
+  const balance = await getCreditBalance(req.user.id);
+  if (!balance) {
+    return res.status(404).json({ success: false, message: "User not found" });
   }
+  return res.status(200).json({ success: true, data: balance });
 };
 
 export const getCreditsHistory = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { page, limit } = req.query;
-    const result = await getCreditHistory(userId, page, limit);
-    return res.status(200).json({ success: true, ...result });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: "Server error" });
-  }
+  const { page, limit } = req.query;
+  const result = await getCreditHistory(req.user.id, page, limit);
+  return res.status(200).json({ success: true, ...result });
 };
 
 export const claimDailyCredits = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const result = await grantDailyActiveBonus(userId, new Date());
-    return res.status(200).json({ success: true, data: result });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: "Server error" });
-  }
+  const result = await grantDailyActiveBonus(req.user.id);
+  return res.status(200).json({ success: true, data: result });
 };
 
 export const claimRewardedAdCreditController = async (req, res) => {
   try {
-    const userId = req.user.id;
     const claimId = req.body?.claimId;
 
     if (typeof claimId !== "string" || !claimId.trim()) {
@@ -54,7 +34,7 @@ export const claimRewardedAdCreditController = async (req, res) => {
     }
 
     const result = await claimRewardedAdCredit({
-      userId,
+      userId: req.user.id,
       claimId,
       now: new Date(),
     });
@@ -71,7 +51,7 @@ export const claimRewardedAdCreditController = async (req, res) => {
         message: "Invalid claimId",
       });
     }
-    return res.status(500).json({ success: false, message: "Server error" });
+    throw error;
   }
 };
 

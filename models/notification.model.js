@@ -11,19 +11,16 @@ const notificationSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
     },
     actorId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
-      index: true,
     },
     type: {
       type: String,
       enum: NOTIFICATION_TYPES,
       required: true,
-      index: true,
     },
     title: {
       type: String,
@@ -41,11 +38,9 @@ const notificationSchema = new mongoose.Schema(
       type: String,
       enum: NOTIFICATION_ENTITY_TYPES,
       default: null,
-      index: true,
     },
     entityId: {
       type: String,
-      default: null,
     },
     metadata: {
       type: mongoose.Schema.Types.Mixed,
@@ -54,7 +49,6 @@ const notificationSchema = new mongoose.Schema(
     isRead: {
       type: Boolean,
       default: false,
-      index: true,
     },
     readAt: {
       type: Date,

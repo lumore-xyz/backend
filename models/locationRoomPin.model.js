@@ -1,4 +1,8 @@
 import mongoose from "mongoose";
+import {
+  LOCATION_ROOM_POOL_STATUSES,
+  LOCATION_ROOM_POOL_STATUS,
+} from "../utils/locationRoomPool.js";
 
 const locationRoomPinSchema = new mongoose.Schema(
   {
@@ -6,35 +10,24 @@ const locationRoomPinSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "LocationRoom",
       required: true,
-      index: true,
     },
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
     },
     isPinned: {
       type: Boolean,
       default: true,
-      index: true,
     },
     inPool: {
       type: Boolean,
       default: true,
-      index: true,
     },
     poolStatus: {
       type: String,
-      enum: [
-        "in_pool",
-        "matched",
-        "left",
-        "insufficient_credits",
-        "ineligible",
-      ],
-      default: "in_pool",
-      index: true,
+      enum: LOCATION_ROOM_POOL_STATUSES,
+      default: LOCATION_ROOM_POOL_STATUS.IN_POOL,
     },
     pinnedAt: {
       type: Date,

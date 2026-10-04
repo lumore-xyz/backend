@@ -1,4 +1,5 @@
 import MobileRuntimeConfig from "../models/mobileRuntimeConfig.model.js";
+import { isPlainObject } from "../utils/object.js";
 
 const DEFAULT_KEY = "global";
 
@@ -25,6 +26,7 @@ const URL_FIELDS = new Set([
 ]);
 const REQUIRED_URL_FIELDS = new Set(["BASE_URL", "SOCKET_URL"]);
 const ALLOWED_FIELD_SET = new Set(ALLOWED_FIELDS);
+const badRequest = (message) => Object.assign(new Error(message), { statusCode: 400 });
 const DEFAULT_ENVIRONMENT = String(
   process.env.NODE_ENV || "development",
 ).toLowerCase();
@@ -48,9 +50,6 @@ const DEFAULT_RUNTIME_CONFIG = {
   featureFlags: {},
 };
 
-const isPlainObject = (value) =>
-  Boolean(value) && typeof value === "object" && !Array.isArray(value);
-
 const isFeatureFlagValue = (value) =>
   value === null ||
   typeof value === "boolean" ||
@@ -66,7 +65,7 @@ const normalizeEnvironment = (environment) => {
 
 const normalizeFeatureFlags = (featureFlags) => {
   if (!isPlainObject(featureFlags)) {
-    throw new Error("featureFlags must be an object");
+    throw badRequest("featureFlags must be an object");
   }
 
   const normalized = {};
@@ -76,7 +75,7 @@ const normalizeFeatureFlags = (featureFlags) => {
     if (!normalizedKey) return;
 
     if (!isFeatureFlagValue(flagValue)) {
-      throw new Error(
+      throw badRequest(
         `featureFlags.${normalizedKey} must be a string, number, boolean or null`,
       );
     }
@@ -90,13 +89,13 @@ const normalizeFeatureFlags = (featureFlags) => {
 
 const normalizeStringField = (key, value) => {
   if (typeof value !== "string") {
-    throw new Error(`${key} must be a string`);
+    throw badRequest(`${key} must be a string`);
   }
 
   const normalized = value.trim();
   if (!normalized) {
     if (REQUIRED_URL_FIELDS.has(key)) {
-      throw new Error(`${key} cannot be empty`);
+      throw badRequest(`${key} cannot be empty`);
     }
     return normalized;
   }
@@ -106,11 +105,11 @@ const normalizeStringField = (key, value) => {
     try {
       parsed = new URL(normalized);
     } catch {
-      throw new Error(`${key} must be a valid URL`);
+      throw badRequest(`${key} must be a valid URL`);
     }
 
     if (!["http:", "https:"].includes(parsed.protocol)) {
-      throw new Error(`${key} must use http or https`);
+      throw badRequest(`${key} must use http or https`);
     }
   }
 
@@ -119,14 +118,14 @@ const normalizeStringField = (key, value) => {
 
 export const validateAndNormalizeRuntimeConfigPatch = (patch) => {
   if (!isPlainObject(patch)) {
-    throw new Error("config payload must be an object");
+    throw badRequest("config payload must be an object");
   }
 
   const normalizedPatch = {};
 
   Object.entries(patch).forEach(([key, value]) => {
     if (!ALLOWED_FIELD_SET.has(key)) {
-      throw new Error(`Unknown runtime config key: ${key}`);
+      throw badRequest(`Unknown runtime config key: ${key}`);
     }
 
     if (key === "featureFlags") {

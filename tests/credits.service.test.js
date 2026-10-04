@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import CreditLedger from "../models/creditLedger.model.js";
 import User from "../models/user.model.js";
 import {
-  CREDIT_RULES,
-  claimRewardedAdCredit,
   getNextUtcDayStart,
-  getRewardedAdQuotaFromClaims,
   getUtcDayStart,
-} from "../services/credits.service.js";
+} from "../utils/utcDate.js";
+import { CREDIT_RULES } from "../services/creditRules.js";
+import {
+  claimRewardedAdCredit,
+  getRewardedAdQuotaFromClaims,
+} from "../services/rewardedAdCredits.service.js";
 
 test("getUtcDayStart normalizes to UTC midnight", () => {
   const date = new Date("2026-02-14T18:33:22.000Z");

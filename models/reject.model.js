@@ -15,7 +15,7 @@ const rejectedProfileSchema = new mongoose.Schema(
     roomId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "MatchRoom",
-      required: true,
+      default: null,
     },
     reason: {
       type: String,

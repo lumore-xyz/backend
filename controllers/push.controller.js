@@ -1,127 +1,78 @@
-import Push from "../models/push.model.js";
-import User from "../models/user.model.js";
 import { sendNotificationToUser } from "../services/push.service.js";
+import {
+  subscribeUserToPush,
+  unsubscribeUserFromPush,
+} from "../services/pushSubscription.service.js";
 
 // Subscribe to push notifications
-export const subscribe = async (req, res, next) => {
-  try {
-    const userId = req.user.id;
-    const { subscription } = req.body; // Changed from req.params to req.body
+export const subscribe = async (req, res) => {
+  const userId = req.user.id;
+  const { subscription } = req.body || {};
 
-    // Validate subscription object
-    if (!subscription || !subscription.endpoint || !subscription.keys) {
-      return next(new Error("Invalid subscription object", 400));
-    }
-
-    // Check if user exists
-    const user = await User.findById(userId);
-    if (!user) {
-      return next(new Error("User not found", 404));
-    }
-
-    // Check if subscription already exists for this endpoint
-    const existingSubscription = await Push.findOne({
-      "subscription.endpoint": subscription.endpoint,
-    });
-
-    if (existingSubscription) {
-      // Update the user reference if needed
-      if (existingSubscription.user.toString() !== userId) {
-        existingSubscription.user = userId;
-        await existingSubscription.save();
-      }
-
-      return res.status(200).json({
-        status: "success",
-        message: "Subscription already exists",
-        data: { subscription: existingSubscription },
-      });
-    }
-
-    // Create new push subscription
-    const newSubscription = await Push.create({
-      user: userId,
-      subscription: {
-        endpoint: subscription.endpoint,
-        keys: {
-          p256dh: subscription.keys.p256dh,
-          auth: subscription.keys.auth,
-        },
-      },
-    });
-
-    res.status(201).json({
-      status: "success",
-      message: "Successfully subscribed to push notifications",
-      data: { subscription: newSubscription },
-    });
-  } catch (error) {
-    next(error);
+  if (!subscription || !subscription.endpoint || !subscription.keys) {
+    return res.status(400).json({ status: "fail", message: "Invalid subscription object" });
   }
+
+  const result = await subscribeUserToPush(userId, subscription);
+  if (result.error === "USER_NOT_FOUND") {
+    return res.status(404).json({ status: "fail", message: "User not found" });
+  }
+
+  return res.status(result.existing ? 200 : 201).json({
+    status: "success",
+    message: result.existing
+      ? "Subscription already exists"
+      : "Successfully subscribed to push notifications",
+    data: { subscription: result.subscription },
+  });
 };
 
 // Unsubscribe from push notifications
-export const unsubscribe = async (req, res, next) => {
-  try {
-    const userId = req.user.id;
-    const { endpoint } = req.body; // The subscription endpoint to remove
+export const unsubscribe = async (req, res) => {
+  const userId = req.user.id;
+  const { endpoint } = req.body || {};
 
-    // Validate endpoint
-    if (!endpoint) {
-      return next(new Error("Endpoint is required", 400));
-    }
-
-    // Check if user exists
-    const user = await User.findById(userId);
-    if (!user) {
-      return next(new Error("User not found", 404));
-    }
-
-    // Find and delete the subscription
-    const deletedSubscription = await Push.findOneAndDelete({
-      user: userId,
-      "subscription.endpoint": endpoint,
-    });
-
-    if (!deletedSubscription) {
-      return res.status(404).json({
-        status: "fail",
-        message: "Subscription not found",
-      });
-    }
-
-    res.status(200).json({
-      status: "success",
-      message: "Successfully unsubscribed from push notifications",
-    });
-  } catch (error) {
-    next(error);
+  if (!endpoint) {
+    return res.status(400).json({ status: "fail", message: "Endpoint is required" });
   }
+
+  const deletedSubscription = await unsubscribeUserFromPush(userId, endpoint);
+  if (deletedSubscription?.error === "USER_NOT_FOUND") {
+    return res.status(404).json({ status: "fail", message: "User not found" });
+  }
+
+  if (!deletedSubscription) {
+    return res.status(404).json({ status: "fail", message: "Subscription not found" });
+  }
+
+  return res.status(200).json({
+    status: "success",
+    message: "Successfully unsubscribed from push notifications",
+  });
 };
 
-export const sendNotification = async (req, res, next) => {
-  try {
-    const { userId, title, body, icon, image, data, tag } = req.body;
+export const sendNotification = async (req, res) => {
+  const { userId, title, body, icon, image, data, tag } = req.body || {};
 
-    if (!userId || !title || !body) {
-      return next(new Error("userId, title, and body are required", 400));
-    }
-
-    const result = await sendNotificationToUser(userId, {
-      title,
-      body,
-      icon,
-      image,
-      data,
-      tag,
+  if (!userId || !title || !body) {
+    return res.status(400).json({
+      status: "fail",
+      message: "userId, title, and body are required",
     });
-
-    res.status(200).json({
-      status: "success",
-      message: "Notification sent",
-      data: result,
-    });
-  } catch (error) {
-    next(error);
   }
+
+  const result = await sendNotificationToUser(userId, {
+    title,
+    body,
+    icon,
+    image,
+    data,
+    tag,
+  });
+
+  return res.status(200).json({
+    status: "success",
+    message: "Notification sent",
+    data: result,
+  });
 };

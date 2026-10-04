@@ -30,8 +30,6 @@ export const NOTIFICATION_ENTITY_TYPES = Object.freeze([
   "system",
 ]);
 
-export const NOTIFICATION_ENTITY_TYPE_SET = new Set(NOTIFICATION_ENTITY_TYPES);
-
 const defaultTemplates = {
   MATCH_CREATED: {
     title: "New match!",
@@ -106,15 +104,12 @@ const formatTemplate = (template, variables = {}) =>
   String(template || "").replace(
     PLACEHOLDER_PATTERN,
     (match, key) => {
-      if (!Object.prototype.hasOwnProperty.call(variables, key)) return match;
+      if (!Object.hasOwn(variables, key)) return match;
       const value = variables[key];
       if (value === null || value === undefined) return match;
       return String(value);
     },
   );
-
-export const getNotificationTypeTemplate = (type) =>
-  defaultTemplates[type] || null;
 
 export const buildNotificationCopy = ({ type, variables = {} }) => {
   const template = defaultTemplates[type];
@@ -153,8 +148,8 @@ export const resolveEntityTypeForType = (type) => {
   return template?.entityType || "system";
 };
 
-export const NOTIFICATION_DEFAULT_PAGE_LIMIT = 20;
-export const NOTIFICATION_MAX_PAGE_LIMIT = 100;
+const NOTIFICATION_DEFAULT_PAGE_LIMIT = 20;
+const NOTIFICATION_MAX_PAGE_LIMIT = 100;
 
 export const NOTIFICATION_PAGINATION = Object.freeze({
   DEFAULT_PAGE: 1,

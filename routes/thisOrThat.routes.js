@@ -1,36 +1,33 @@
 import { Router } from "express";
 import {
   getThisOrThatQuestions,
+  submitThisOrThatQuestion,
+} from "../controllers/thisOrThat.controller.js";
+import { updateThisOrThatQuestionStatus } from "../controllers/adminThisOrThat.controller.js";
+import {
   getUserThisOrThatAnswers,
   submitThisOrThatAnswer,
-  submitThisOrThatQuestion,
-  updateThisOrThatQuestionStatus,
-} from "../controllers/thisOrThat.controller.js";
+} from "../controllers/thisOrThatAnswer.controller.js";
 import { requireAdmin } from "../middleware/admin.middleware.js";
 import { protect } from "../middleware/auth.middleware.js";
 import { upload } from "../middleware/upload.middleware.js";
 import { validateObjectIdParam } from "../middleware/validate.middleware.js";
 
 const router = Router();
+router.use(protect);
+router.param("userId", validateObjectIdParam("userId"));
 
-router.get("/questions", protect, getThisOrThatQuestions);
-router.get(
-  "/answers/:userId",
-  protect,
-  validateObjectIdParam("userId"),
-  getUserThisOrThatAnswers,
-);
-router.post("/answers", protect, submitThisOrThatAnswer);
+router.get("/questions", getThisOrThatQuestions);
+router.get("/answers/:userId", getUserThisOrThatAnswers);
+router.post("/answers", submitThisOrThatAnswer);
 router.patch(
   "/questions/:questionId/status",
-  protect,
   requireAdmin,
   validateObjectIdParam("questionId"),
   updateThisOrThatQuestionStatus,
 );
 router.post(
   "/questions",
-  protect,
   upload.fields([
     { name: "leftImage", maxCount: 1 },
     { name: "rightImage", maxCount: 1 },

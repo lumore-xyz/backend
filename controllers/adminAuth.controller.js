@@ -1,57 +1,33 @@
-import { OAuth2Client } from "google-auth-library";
-import User from "../models/user.model.js";
-import { generateAuthTokens } from "../services/authToken.service.js";
-
-const client = new OAuth2Client(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  "postmessage"
-);
+import { authenticateAdminGoogleUser } from "../services/auth.service.js";
+import { getGooglePayloadFromCode } from "../services/googleAuth.service.js";
+import { logError } from "../utils/logError.js";
 
 export const adminGoogleLoginWeb = async (req, res) => {
-  const { code } = req.body;
+  const code = req.body?.code;
 
   try {
     if (!code) {
       return res.status(400).json({ message: "Google auth code is required" });
     }
 
-    const { tokens } = await client.getToken(code);
-    const ticket = await client.verifyIdToken({
-      idToken: tokens.id_token,
-      audience: process.env.GOOGLE_CLIENT_ID,
-    });
-
-    const payload = ticket.getPayload();
-    const { email, sub: googleId, email_verified } = payload;
-
-    if (!email_verified) {
+    const payload = await getGooglePayloadFromCode(code);
+    const result = await authenticateAdminGoogleUser(payload);
+    if (result.error === "EMAIL_NOT_VERIFIED") {
       return res.status(400).json({ message: "Email not verified by Google" });
     }
-
-    const user = await User.findOne({ email }).select("-password");
-    if (!user || !user.isAdmin) {
+    if (result.error === "ADMIN_ACCESS_DENIED") {
       return res.status(403).json({
         message: "Admin access denied",
       });
     }
 
-    if (!user.googleId) {
-      user.googleId = googleId;
-      user.emailVerified = true;
-      await user.save();
-    }
-
-    await user.updateLastActive();
-    const { accessToken, refreshToken } = generateAuthTokens(user._id);
-
     return res.status(200).json({
-      user,
-      accessToken,
-      refreshToken,
+      user: result.user,
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
     });
   } catch (error) {
-    console.error("[admin-auth] Google login failed:", error);
+    logError("[admin-auth] Google login failed", error);
     return res.status(500).json({ message: "Google login failed" });
   }
 };

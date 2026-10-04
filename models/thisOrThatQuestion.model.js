@@ -1,4 +1,8 @@
 import { Schema, Types, model } from "mongoose";
+import {
+  THIS_OR_THAT_QUESTION_STATUSES,
+  THIS_OR_THAT_QUESTION_STATUS,
+} from "../utils/thisOrThat.js";
 
 const thisOrThatQuestionSchema = new Schema(
   {
@@ -34,9 +38,8 @@ const thisOrThatQuestionSchema = new Schema(
     },
     status: {
       type: String,
-      enum: ["approved", "pending", "rejected"],
-      default: "approved",
-      index: true,
+      enum: THIS_OR_THAT_QUESTION_STATUSES,
+      default: THIS_OR_THAT_QUESTION_STATUS.APPROVED,
     },
     submittedBy: {
       type: Types.ObjectId,

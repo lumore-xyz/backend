@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { CREDIT_LEDGER_TYPE, CREDIT_LEDGER_TYPES } from "../utils/creditLedger.js";
 
 const creditLedgerSchema = new mongoose.Schema(
   {
@@ -6,7 +7,6 @@ const creditLedgerSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
     },
     amount: {
       type: Number,
@@ -15,26 +15,15 @@ const creditLedgerSchema = new mongoose.Schema(
     type: {
       type: String,
       required: true,
-      enum: [
-        "signup_bonus",
-        "daily_active",
-        "conversation_start",
-        "this_or_that_approved",
-        "referral_bonus",
-        "rewarded_ad_watch",
-        "admin_adjustment",
-      ],
-      index: true,
+      enum: CREDIT_LEDGER_TYPES,
     },
     referenceType: {
       type: String,
       default: null,
-      index: true,
     },
     referenceId: {
       type: String,
       default: null,
-      index: true,
     },
     balanceAfter: {
       type: Number,
@@ -56,9 +45,26 @@ creditLedgerSchema.index(
   {
     unique: true,
     partialFilterExpression: {
-      type: "rewarded_ad_watch",
+      type: CREDIT_LEDGER_TYPE.REWARDED_AD_WATCH,
       referenceType: "rewarded_ad_session",
     },
+  },
+);
+
+creditLedgerSchema.index(
+  { user: 1, referenceId: 1, type: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { type: CREDIT_LEDGER_TYPE.EXPLORE_UNLOCK },
+  },
+);
+
+creditLedgerSchema.index(
+  { user: 1, referenceId: 1, type: 1 },
+  {
+    name: "creditLedger_explore_refresh_unique",
+    unique: true,
+    partialFilterExpression: { type: CREDIT_LEDGER_TYPE.EXPLORE_REFRESH },
   },
 );
 

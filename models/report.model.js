@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { REPORT_CATEGORIES, REPORT_STATUSES } from "../utils/report.js";
 
 const reportSchema = new mongoose.Schema(
   {
@@ -19,20 +20,7 @@ const reportSchema = new mongoose.Schema(
     },
     category: {
       type: String,
-      enum: [
-        "spam",
-        "harassment",
-        "nudity",
-        "hate_speech",
-        "scam_fraud",
-        "other",
-        "impersonation",
-        "underage",
-        "violence",
-        "threats",
-        "self_harm",
-        "bullying",
-      ],
+      enum: REPORT_CATEGORIES,
       required: true,
     },
     reason: {
@@ -45,7 +33,7 @@ const reportSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["open", "reviewing", "closed"],
+      enum: REPORT_STATUSES,
       default: "open",
     },
   },

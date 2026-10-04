@@ -1,5 +1,10 @@
 import nodemailer from "nodemailer";
 import sanitizeHtml from "sanitize-html";
+import { isValidEmail } from "../utils/credentials.js";
+import { mapInBatches } from "../utils/batch.js";
+import { normalizeString } from "../utils/strings.js";
+
+const EMAIL_SEND_BATCH_SIZE = 50;
 
 const parseSmtpPort = (value) => {
   const parsed = Number.parseInt(String(value || ""), 10);
@@ -27,8 +32,6 @@ const createTransporter = () => {
   });
 };
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 const sanitizeHeaderValue = (value) =>
   String(value || "")
     .replace(/[\r\n"]/g, "")
@@ -41,22 +44,16 @@ const resolveMailboxHeader = ({
   required = false,
   emailLabel = "email",
 }) => {
-  const chosenEmail =
-    String(email || "")
-      .trim()
-      .toLowerCase() ||
-    String(fallbackEmail || "")
-      .trim()
-      .toLowerCase();
+  const chosenEmail = normalizeString(email) || normalizeString(fallbackEmail);
 
   if (!chosenEmail) {
     if (required) {
-      throw new Error("EMAIL_FROM or SMTP_USER is required for sender address");
+      throw new Error("Sender email is required");
     }
     return "";
   }
 
-  if (!EMAIL_PATTERN.test(chosenEmail)) {
+  if (!isValidEmail(chosenEmail)) {
     throw new Error(`Invalid ${emailLabel} address`);
   }
 
@@ -78,7 +75,7 @@ const resolveFromHeader = ({ fromEmail, fromName }) => {
 const buildAllowedLinkSchemes = () => {
   const customSchemes = String(process.env.EMAIL_ALLOWED_SCHEMES || "")
     .split(",")
-    .map((scheme) => String(scheme || "").trim().toLowerCase())
+    .map(normalizeString)
     .filter(Boolean)
     .map((scheme) => scheme.replace(/:$/, ""))
     .filter((scheme) => /^[a-z][a-z0-9+.-]*$/.test(scheme));
@@ -162,9 +159,7 @@ export const sendEmailViaNodemailer = async ({
   const personalizedMessages = Array.isArray(messages)
     ? messages
         .map((item) => ({
-          to: String(item?.to || "")
-            .trim()
-            .toLowerCase(),
+          to: normalizeString(item?.to),
           subject: String(item?.subject || "").trim() || "Lumore",
           htmlBody: sanitizeEmailHtml(item?.htmlBody || item?.body || ""),
           textBody:
@@ -175,8 +170,10 @@ export const sendEmailViaNodemailer = async ({
     : [];
 
   if (personalizedMessages.length) {
-    const results = await Promise.all(
-      personalizedMessages.map((message) =>
+    const results = await mapInBatches(
+      personalizedMessages,
+      EMAIL_SEND_BATCH_SIZE,
+      (message) =>
         transporter.sendMail({
           from,
           replyTo: replyTo || undefined,
@@ -185,7 +182,6 @@ export const sendEmailViaNodemailer = async ({
           text: message.textBody || undefined,
           html: message.htmlBody || undefined,
         }),
-      ),
     );
 
     return {
@@ -199,11 +195,7 @@ export const sendEmailViaNodemailer = async ({
   const uniqueEmails = Array.from(
     new Set(
       (emails || [])
-        .map((email) =>
-          String(email || "")
-            .trim()
-            .toLowerCase(),
-        )
+        .map(normalizeString)
         .filter(Boolean),
     ),
   );

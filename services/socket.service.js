@@ -1,157 +1,42 @@
-/**
- * ============================================================
- * Lumore – Real-time Chat & Matchmaking Socket Service
- * ============================================================
- *
- * Dev Philosophy:
- * - No swipe culture → intentional, system-driven matching
- * - One active match at a time per user
- * - Privacy-first (minimal data exposure)
- * - Optimize DB access for scale (no N+1 queries)
- *
- * Scaling Notes:
- * - `userSockets` is in-memory (single instance)
- * - For horizontal scaling, replace with Redis adapter
- * - Matchmaking can be moved to a worker/queue later
- */
 import jwt from "jsonwebtoken";
 import { Server } from "socket.io";
-import Message from "../models/message.model.js";
-import MatchRoom from "../models/room.model.js";
-import UnlockHistory from "../models/unlock.model.js";
 import User from "../models/user.model.js";
+import { corsOptions } from "../config/cors.js";
+import { getId } from "../utils/matchIds.js";
+import { logError } from "../utils/logError.js";
 import {
-  CREDIT_RULES,
-  spendCreditsForConversationStart,
-} from "./credits.service.js";
-import { generateMatchNotesByUser } from "./matchNote.service.js";
-// Removed local `buildMatchNote` in favor of the shared helper exported from
-// `matchNote.service.js`. We re-bind it via `buildMatchNoteShared` so the
-// local reference below stays short while still going through the shared
-// module (and so future callers can inject a different `loadUsers` impl).
-void generateMatchNotesByUser; // kept for backwards-compat re-exports
-import {
-  getOrCreateMatchRoom,
-  hasExistingMatchRoom,
-} from "./matching.service.js";
-import { findBestMatch } from "./matchmaking.service.js";
-import {
-  buildMatchNote as buildMatchNoteShared,
-} from "./matchNote.service.js";
-import {
-  createManyNotifications,
-  buildMatchDoc,
-} from "./notification.service.js";
-import { sendNotificationToUser } from "./push.service.js";
+  isUserActivityDue,
+  recordUserActivity,
+} from "./userActivity.service.js";
+import { registerProfileLockHandlers } from "./socketProfileLock.service.js";
+import { registerChatHandlers } from "./socketChat.service.js";
 
-const MATCHMAKING_FLOW_LOG_PREFIX = "[matchmaking-flow]";
-
-/**
- * ============================================================
- * Shared Runtime State
- * ============================================================
- *
- * NOTE:
- * - userSockets maps userId → active socket instance
- * - This is ephemeral and resets on server restart
- * - DO NOT store critical state here
- */
-let io = null;
-const userSockets = new Map();
-
-const DEFAULT_REACTION_EMOJI = "\u2764\uFE0F";
-
-const logMatchmakingFlow = (stage, details = {}) => {
-  console.info(`${MATCHMAKING_FLOW_LOG_PREFIX} ${stage}`, details);
-};
+let chatNamespace;
 
 const emitToUser = (userId, event, payload) => {
-  const socket = userSockets.get(userId?.toString?.() || String(userId || ""));
-  if (!socket) return false;
-  socket.emit(event, payload);
-  return true;
+  const id = getId(userId);
+  if (!id || !chatNamespace) return;
+  chatNamespace.to(id).emit(event, payload);
 };
 
 const emitToUsers = (userIds = [], event, payload) => {
-  let emitted = 0;
-  for (const userId of userIds) {
-    if (emitToUser(userId, event, payload)) emitted += 1;
+  for (const userId of new Set(userIds.map(getId).filter(Boolean))) {
+    emitToUser(userId, event, payload);
   }
-  return emitted;
 };
 
-const isParticipant = (room, currentUserId) =>
-  room?.participants?.some((id) => id.toString() === currentUserId.toString());
-
-const normalizeReplyMessage = (replyDoc) => {
-  if (!replyDoc) return null;
-  return {
-    _id: replyDoc._id?.toString(),
-    senderId: replyDoc.sender?._id
-      ? replyDoc.sender._id.toString()
-      : replyDoc.sender?.toString?.() || null,
-    message: replyDoc.message || "",
-    messageType: replyDoc.messageType || "text",
-    imageUrl: replyDoc.imageUrl || null,
-    audioUrl: replyDoc.audioUrl || null,
-    audioDurationMs: replyDoc.audioDurationMs || null,
-    audioWaveform: Array.isArray(replyDoc.audioWaveform)
-      ? replyDoc.audioWaveform
-      : [],
-    editedAt: replyDoc.editedAt || null,
-    createdAt: replyDoc.createdAt || null,
-  };
+const emitToRoom = (roomId, event, payload) => {
+  const id = getId(roomId);
+  if (!id || !chatNamespace) return;
+  chatNamespace.to(id).emit(event, payload);
 };
 
-const normalizeMessagePayload = (messageDoc, extra = {}) => ({
-  _id: messageDoc._id.toString(),
-  roomId: messageDoc.roomId,
-  senderId: messageDoc.sender?.toString?.() || null,
-  receiverId: messageDoc.receiver?.toString?.() || null,
-  messageType: messageDoc.messageType || "text",
-  message: messageDoc.message || "",
-  imageUrl: messageDoc.imageUrl || null,
-  imagePublicId: messageDoc.imagePublicId || null,
-  audioUrl: messageDoc.audioUrl || null,
-  audioPublicId: messageDoc.audioPublicId || null,
-  audioDurationMs: messageDoc.audioDurationMs || null,
-  audioWaveform: Array.isArray(messageDoc.audioWaveform)
-    ? messageDoc.audioWaveform
-    : [],
-  replyTo: normalizeReplyMessage(messageDoc.replyTo),
-  reactions: (messageDoc.reactions || []).map((reaction) => ({
-    userId: reaction.user?.toString?.() || null,
-    emoji: reaction.emoji || DEFAULT_REACTION_EMOJI,
-  })),
-  editedAt: messageDoc.editedAt || null,
-  deliveredAt: messageDoc.deliveredAt || null,
-  readAt: messageDoc.readAt || null,
-  createdAt: messageDoc.createdAt,
-  timestamp: new Date(messageDoc.createdAt).getTime(),
-  ...extra,
-});
+export const disconnectUser = (userId) => {
+  const id = getId(userId);
+  if (!id || !chatNamespace) return;
+  chatNamespace.in(id).disconnectSockets(true);
+};
 
-const buildMatchNote = ({ seekerId, candidateId, matchingNote }) =>
-  buildMatchNoteShared({
-    seekerId,
-    candidateId,
-    matchingNote,
-    loadUsers: async ({ seekerId: sId, candidateId: cId }) =>
-      User.find({ _id: { $in: [sId, cId] } })
-        .select("_id username nickname")
-        .lean(),
-  });
-
-/* ============================================================
- * AUTHENTICATION MIDDLEWARE
- * ============================================================
- *
- * Dev Notes:
- * - Uses JWT passed via socket.handshake.auth.token
- * - Keeps payload minimal (no password, no heavy fields)
- * - socket.user becomes the single source of truth
- * - All downstream handlers rely on socket.user
- */
 const authenticateSocket = async (socket, next) => {
   try {
     const token = socket.handshake.auth.token;
@@ -160,735 +45,79 @@ const authenticateSocket = async (socket, next) => {
     const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
 
     const user = await User.findById(decoded.id)
-      .select("_id isActive lastActive")
+      .select("_id isArchived")
       .lean();
 
-    if (!user) throw new Error("User not found");
+    if (!user || user.isArchived) throw new Error("User is unavailable");
 
     socket.user = user;
     next();
-  } catch (err) {
+  } catch {
     next(new Error("Authentication error"));
   }
 };
 
-/* ============================================================
- * SOCKET.IO INITIALIZATION
- * ============================================================
- *
- * Dev Notes:
- * - Uses a dedicated namespace: /api/chat
- * - Keeps chat isolated from other real-time features
- * - CORS restricted to client URL
- */
 const initialize = (server) => {
-  io = new Server(server, {
-    cors: {
-      origin: process.env.CLIENT_URL || "http://localhost:3000",
-      credentials: true,
-    },
+  const io = new Server(server, {
+    cors: corsOptions,
   });
 
-  const ns = io.of("/api/chat");
-  ns.use(authenticateSocket);
-  ns.on("connection", handleConnection);
+  chatNamespace = io.of("/api/chat");
+  chatNamespace.use(authenticateSocket);
+  chatNamespace.on("connection", handleConnection);
 };
 
-/* ============================================================
- * MATCH CREATION & NOTIFICATION
- * ============================================================
- *
- * Dev Notes:
- * - Persists match via matchingService
- * - Both users share a deterministic roomId
- * - Socket joins are defensive (socket may be offline)
- * - Push notifications are sent regardless of socket state
- */
-const createAndNotifyMatch = async (userId1, userId2, matchingNote = null) => {
-  logMatchmakingFlow("create_match_start", {
-    userId1: String(userId1),
-    userId2: String(userId2),
-    hasMatchingNote: Boolean(matchingNote),
-  });
+export const handleConnection = (socket) => {
+  const userId = socket.user._id.toString();
+  let lastActivityAt = new Date();
+  socket.join(userId);
 
-  const alreadyMatched = await hasExistingMatchRoom(userId1, userId2);
-  if (alreadyMatched) {
-    logMatchmakingFlow("create_match_blocked_existing_room", {
-      userId1: String(userId1),
-      userId2: String(userId2),
-    });
-    return { success: false, reason: "already_matched" };
-  }
-
-  const creditSpend = await spendCreditsForConversationStart(userId1, userId2);
-  logMatchmakingFlow("create_match_credit_result", {
-    userId1: String(userId1),
-    userId2: String(userId2),
-    success: Boolean(creditSpend?.success),
-    reason: creditSpend?.reason || null,
-    balances: creditSpend?.balances || null,
-  });
-  if (!creditSpend.success) {
-    return { success: false, reason: creditSpend.reason };
-  }
-
-  const room = await getOrCreateMatchRoom(userId1, userId2, matchingNote);
-  logMatchmakingFlow("create_match_room_ready", {
-    userId1: String(userId1),
-    userId2: String(userId2),
-    roomId: room?._id?.toString?.() || null,
-    roomStatus: room?.status || null,
-  });
-  await User.updateMany(
-    { _id: { $in: [userId1, userId2] } },
+  const markOnline = User.updateOne(
+    { _id: userId },
     {
       $set: {
-        isMatching: false,
-      },
-    },
-  );
-
-  const roomId = room._id.toString();
-
-  const s1 = userSockets.get(userId1);
-  const s2 = userSockets.get(userId2);
-  logMatchmakingFlow("create_match_socket_presence", {
-    userId1: String(userId1),
-    userId2: String(userId2),
-    initiatorOnline: Boolean(s1),
-    partnerOnline: Boolean(s2),
-  });
-
-  const matchDocForUser1 = buildMatchDoc({
-    userId: userId1,
-    matchedUserId: userId2,
-    roomId,
-  });
-  const matchDocForUser2 = buildMatchDoc({
-    userId: userId2,
-    matchedUserId: userId1,
-    roomId,
-  });
-
-  if (matchDocForUser1 && matchDocForUser2) {
-    createManyNotifications([matchDocForUser1, matchDocForUser2]).catch(
-      (error) => {
-        console.error(
-          `${MATCHMAKING_FLOW_LOG_PREFIX} create_match_notification_failed`,
-          error?.message || error,
-        );
-      },
-    );
-  }
-
-  const matchNotificationForUser1 = sendNotificationToUser(userId1, {
-    title: "Match found!",
-    body: "You have a new match on Lumore.",
-    tag: `match-${roomId}`,
-    data: {
-      type: "match",
-      roomId,
-      matchedUserId: userId2,
-      url: `/app/chat/${roomId}`,
-    },
-  });
-
-  const matchNotificationForUser2 = sendNotificationToUser(userId2, {
-    title: "Match found!",
-    body: "You have a new match on Lumore.",
-    tag: `match-${roomId}`,
-    data: {
-      type: "match",
-      roomId,
-      matchedUserId: userId1,
-      url: `/app/chat/${roomId}`,
-    },
-  });
-
-  if (s1) {
-    s1.join(roomId);
-    s1.emit("creditsUpdated", {
-      credits: creditSpend.balances[userId1],
-      reason: "conversation_start",
-    });
-    s1.emit("matchFound", {
-      roomId,
-      matchedUser: userId2,
-      matchedUserId: userId2,
-      matchingNote: room?.matchingNote || matchingNote || null,
-    });
-  }
-
-  if (s2) {
-    s2.join(roomId);
-    s2.emit("creditsUpdated", {
-      credits: creditSpend.balances[userId2],
-      reason: "conversation_start",
-    });
-    s2.emit("matchFound", {
-      roomId,
-      matchedUser: userId1,
-      matchedUserId: userId1,
-      matchingNote: room?.matchingNote || matchingNote || null,
-    });
-  }
-
-  await Promise.allSettled([
-    matchNotificationForUser1,
-    matchNotificationForUser2,
-  ]);
-  logMatchmakingFlow("create_match_complete", {
-    userId1: String(userId1),
-    userId2: String(userId2),
-    roomId,
-  });
-  return { success: true, roomId, balances: creditSpend.balances };
-};
-
-/* ============================================================
- * SOCKET CONNECTION HANDLER
- * ============================================================
- *
- * Lifecycle:
- * - Register socket
- * - Mark user online
- * - Listen for matchmaking & messaging
- * - Cleanup on disconnect
- */
-const handleConnection = (socket) => {
-  const userId = socket.user._id.toString();
-  userSockets.set(userId, socket);
-
-  const markRoomMessagesReadAndDelivered = async (roomId) => {
-    const now = new Date();
-    const deliveredFilter = {
-      roomId,
-      receiver: userId,
-      deliveredAt: null,
-    };
-    const readFilter = {
-      roomId,
-      receiver: userId,
-      readAt: null,
-    };
-
-    const deliveredMessages = await Message.find(deliveredFilter)
-      .select("_id")
-      .lean();
-    const readMessages = await Message.find(readFilter).select("_id").lean();
-
-    if (deliveredMessages.length > 0) {
-      await Message.updateMany(deliveredFilter, { $set: { deliveredAt: now } });
-      const deliveredMessageIds = deliveredMessages.map((m) =>
-        m._id.toString(),
-      );
-      socket.nsp.to(roomId).emit("message_delivered", {
-        roomId,
-        messageIds: deliveredMessageIds,
-        deliveredAt: now.toISOString(),
-      });
-    }
-
-    if (readMessages.length > 0) {
-      await Message.updateMany(readFilter, {
-        $set: { readAt: now, deliveredAt: now },
-      });
-      const readMessageIds = readMessages.map((m) => m._id.toString());
-      socket.nsp.to(roomId).emit("message_read", {
-        roomId,
-        messageIds: readMessageIds,
-        readAt: now.toISOString(),
-      });
-    }
-  };
-
-  // Fire-and-forget presence update
-  User.findByIdAndUpdate(userId, {
-    isActive: true,
-    socketId: socket.id,
-    lastActive: new Date(),
-  }).lean();
-
-  /* -------- Matchmaking -------- */
-  socket.on("startMatchmaking", async () => {
-    try {
-      logMatchmakingFlow("start_matchmaking_received", {
-        userId,
+        isActive: true,
         socketId: socket.id,
-      });
+        lastActive: new Date(),
+      },
+    },
+  ).catch((error) => {
+    logError("Failed to mark socket user online", error);
+  });
 
-      const currentUser = await User.findById(userId).select("credits").lean();
-      logMatchmakingFlow("start_matchmaking_user_loaded", {
-        userId,
-        hasUser: Boolean(currentUser),
-        credits: currentUser?.credits ?? null,
-        requiredCredits: CREDIT_RULES.CONVERSATION_COST,
+  socket.use((_packet, next) => {
+    const now = new Date();
+    if (isUserActivityDue(lastActivityAt, now)) {
+      lastActivityAt = now;
+      recordUserActivity(userId, now).catch((error) => {
+        logError("Failed to record socket activity", error);
       });
-
-      if (
-        !currentUser ||
-        currentUser.credits < CREDIT_RULES.CONVERSATION_COST
-      ) {
-        logMatchmakingFlow("start_matchmaking_insufficient_credits", {
-          userId,
-          credits: currentUser?.credits ?? 0,
-          requiredCredits: CREDIT_RULES.CONVERSATION_COST,
-        });
-        socket.emit("insufficientCredits", {
-          message: "You need at least 1 credit to start matchmaking.",
-          credits: currentUser?.credits || 0,
-          required: CREDIT_RULES.CONVERSATION_COST,
-        });
-        socket.emit("matchmakingError", {
-          message: "Not enough credits to start matchmaking.",
-        });
-        return;
-      }
-
-      await User.findByIdAndUpdate(userId, {
-        isMatching: true,
-        matchmakingTimestamp: Date.now(),
-      });
-      logMatchmakingFlow("start_matchmaking_flagged", {
-        userId,
-      });
-
-      const match = await findBestMatch({ userId, now: new Date() });
-      logMatchmakingFlow("start_matchmaking_match_result", {
-        userId,
-        foundMatch: Boolean(match),
-        matchedUserId: match?.uid || null,
-        mode: match?.mode || null,
-        score: match?.score ?? null,
-        candidatePoolSize: match?.matchingNote?.candidatePoolSize ?? null,
-      });
-
-      if (match) {
-        const enrichedMatchingNote = await buildMatchNote({
-          seekerId: userId,
-          candidateId: match.uid,
-          matchingNote: match.matchingNote || null,
-        });
-        logMatchmakingFlow("start_matchmaking_note_ready", {
-          userId,
-          matchedUserId: match.uid,
-          hasEnrichedMatchingNote: Boolean(enrichedMatchingNote),
-        });
-        const created = await createAndNotifyMatch(
-          userId,
-          match.uid,
-          enrichedMatchingNote || match.matchingNote || null,
-        );
-        logMatchmakingFlow("start_matchmaking_create_result", {
-          userId,
-          matchedUserId: match.uid,
-          success: Boolean(created?.success),
-          reason: created?.reason || null,
-          roomId: created?.roomId || null,
-        });
-
-        if (!created?.success) {
-          await User.findByIdAndUpdate(userId, { isMatching: false });
-          socket.emit("matchmakingError", {
-            message:
-              created?.reason === "already_matched"
-                ? "You are already matched with this user."
-                : "Unable to start conversation due to insufficient credits.",
-          });
-        }
-      } else {
-        logMatchmakingFlow("start_matchmaking_no_match", {
-          userId,
-        });
-      }
-    } catch (e) {
-      console.error(`${MATCHMAKING_FLOW_LOG_PREFIX} start_matchmaking_error`, {
-        userId,
-        message: e?.message || "unknown_error",
-        stack: e?.stack || null,
-      });
-      socket.emit("matchmakingError", { message: e.message });
     }
+    next();
   });
 
-  socket.on("stopMatchmaking", async () => {
-    logMatchmakingFlow("stop_matchmaking_received", {
-      userId,
-      socketId: socket.id,
-    });
-    await User.findByIdAndUpdate(userId, {
-      isMatching: false,
-      matchmakingTimestamp: null,
-    });
-    logMatchmakingFlow("stop_matchmaking_complete", {
-      userId,
-    });
-    socket.emit("matchmakingStopped", { message: "Matchmaking stopped" });
-  });
+  registerProfileLockHandlers(socket, userId);
+  registerChatHandlers(socket, { userId });
 
-  /* -------- Chat -------- */
-  socket.on("joinChat", async ({ roomId }) => {
-    if (!roomId) return;
-    socket.join(roomId);
-
-    try {
-      const room = await MatchRoom.findById(roomId).lean();
-      if (!room || !isParticipant(room, userId)) return;
-      await markRoomMessagesReadAndDelivered(roomId);
-      await MatchRoom.findByIdAndUpdate(roomId, {
-        $set: { [`unreadCounts.${userId}`]: 0 },
-      });
-      socket.emit("inbox_updated", {
-        roomId,
-        status: room.status,
-      });
-    } catch (error) {
-      console.error("[joinChat] Error:", error);
-    }
-  });
-
-  socket.on("leaveChat", ({ roomId }) => {
-    if (!roomId) return;
-    socket.leave(roomId);
-  });
-
-  // ==================== CHAT CANCELLATION ====================
-
-  socket.on("endChat", async ({ roomId }) => {
-    const room = await MatchRoom.findById(roomId);
-    if (!room) return;
-
-    if (!isParticipant(room, userId)) return;
-
-    room.status = "archive";
-    room.endedBy = userId;
-    room.archivedAt = room.archivedAt || new Date();
-    await room.save();
-
-    socket.to(roomId).emit("chatEnded", {
-      endedBy: userId,
-    });
-    socket.leave(roomId);
-  });
-
-  socket.on("send_message", async (data) => {
-    try {
-      const {
-        roomId,
-        message: messageText,
-        receiverId,
-        replyTo,
-        messageType = "text",
-        imageUrl = null,
-        imagePublicId = null,
-        audioUrl = null,
-        audioPublicId = null,
-        audioDurationMs = null,
-        audioWaveform = [],
-        clientMessageId = null,
-      } = data || {};
-
-      const room = await MatchRoom.findById(roomId).lean();
-      if (!room) return;
-      if (!isParticipant(room, userId)) return;
-      if (room.status !== "active") return;
-
-      if (messageType === "text" && !messageText) return;
-      if (messageType === "image" && !imageUrl) return;
-      if (messageType === "audio" && !audioUrl) return;
-
-      let replyMessage = null;
-      if (replyTo) {
-        replyMessage = await Message.findOne({ _id: replyTo, roomId })
-          .select("_id sender messageType message imageUrl audioUrl audioDurationMs audioWaveform editedAt createdAt")
-          .lean();
-      }
-
-      const receiverSocket = receiverId
-        ? userSockets.get(receiverId.toString())
-        : null;
-      const receiverInRoom = Boolean(receiverSocket?.rooms?.has(roomId));
-      const now = new Date();
-
-      const createdMessage = await Message.create({
-        sender: userId,
-        receiver: receiverId,
-        roomId,
-        messageType,
-        message: messageType === "text" ? messageText : null,
-        imageUrl: messageType === "image" ? imageUrl : null,
-        imagePublicId: messageType === "image" ? imagePublicId : null,
-        audioUrl: messageType === "audio" ? audioUrl : null,
-        audioPublicId: messageType === "audio" ? audioPublicId : null,
-        audioDurationMs:
-          messageType === "audio" ? Math.max(0, Number(audioDurationMs || 0)) : null,
-        audioWaveform:
-          messageType === "audio" && Array.isArray(audioWaveform)
-            ? audioWaveform.map(Number).filter(Number.isFinite).slice(0, 72)
-            : [],
-        replyTo: replyMessage?._id || null,
-        deliveredAt: receiverInRoom ? now : null,
-        readAt: receiverInRoom ? now : null,
-      });
-
-      const payload = normalizeMessagePayload(
-        {
-          ...createdMessage.toObject(),
-          replyTo: replyMessage,
-        },
-        { clientMessageId },
-      );
-
-      socket.to(roomId).emit("new_message", payload);
-      socket.emit("message_sent", payload);
-
-      if (receiverInRoom) {
-        socket.emit("message_delivered", {
-          roomId,
-          messageIds: [createdMessage._id.toString()],
-          deliveredAt: now.toISOString(),
-        });
-        socket.emit("message_read", {
-          roomId,
-          messageIds: [createdMessage._id.toString()],
-          readAt: now.toISOString(),
-        });
-      }
-
-      const unreadIncrements = {};
-      for (const participantId of room.participants || []) {
-        const pid = participantId.toString();
-        if (
-          pid !== userId &&
-          !(receiverInRoom && receiverId && pid === receiverId.toString())
-        ) {
-          unreadIncrements[`unreadCounts.${pid}`] = 1;
-        }
-      }
-
-      await MatchRoom.findByIdAndUpdate(roomId, {
-        $set: {
-          lastMessageAt: new Date(),
-          lastMessage: {
-            sender: userId,
-            messageType,
-            message: messageType === "text" ? messageText : null,
-            previewType:
-              messageType === "image"
-                ? "image"
-                : messageType === "audio"
-                  ? "audio"
-                : messageType === "text"
-                  ? "text"
-                  : "none",
-            imageUrl: messageType === "image" ? imageUrl : null,
-            audioUrl: messageType === "audio" ? audioUrl : null,
-            audioDurationMs:
-              messageType === "audio" ? Math.max(0, Number(audioDurationMs || 0)) : null,
-            createdAt: new Date(),
-          },
-        },
-        ...(Object.keys(unreadIncrements).length
-          ? { $inc: unreadIncrements }
-          : {}),
-      });
-
-      socket.emit("inbox_updated", {
-        roomId,
-        status: room.status,
-      });
-
-      if (receiverId && receiverId !== userId) {
-        if (receiverSocket) {
-          receiverSocket.emit("inbox_updated", {
-            roomId,
-            status: room.status,
-          });
-        }
-      }
-
-      if (receiverId && receiverId !== userId) {
-        await sendNotificationToUser(receiverId, {
-          title: "New message",
-          body: "You received a new message on Lumore.",
-          tag: `message-${roomId}`,
-          data: {
-            type: "message",
-            roomId,
-            senderId: userId,
-            url: `/app/chat/${roomId}`,
-          },
-        });
-      }
-    } catch (error) {
-      console.error("[send_message] Error:", error);
-      socket.emit("error", { message: "Unable to send message" });
-    }
-  });
-
-  socket.on("typing", (data) => {
-    const { roomId, isTyping } = data || {};
-    if (!roomId) return;
-    socket
-      .to(roomId)
-      .emit("typing", { roomId, userId, isTyping: Boolean(isTyping) });
-  });
-
-  socket.on("edit_message", async (data) => {
-    try {
-      const { roomId, messageId, message: messageText } = data || {};
-      if (!roomId || !messageId) return;
-
-      const room = await MatchRoom.findById(roomId).lean();
-      if (!room || !isParticipant(room, userId) || room.status !== "active")
-        return;
-
-      const messageDoc = await Message.findOne({
-        _id: messageId,
-        roomId,
-        sender: userId,
-        messageType: "text",
-      });
-
-      if (!messageDoc) return;
-
-      if (messageText) {
-        messageDoc.message = messageText;
-      } else {
-        return;
-      }
-      messageDoc.editedAt = new Date();
-      await messageDoc.save();
-
-      socket.nsp.to(roomId).emit("message_edited", {
-        roomId,
-        messageId: messageDoc._id.toString(),
-        message: messageDoc.message,
-        editedAt: messageDoc.editedAt,
-      });
-    } catch (error) {
-      console.error("[edit_message] Error:", error);
-      socket.emit("error", { message: "Unable to edit message" });
-    }
-  });
-
-  socket.on("toggle_message_reaction", async (data) => {
-    try {
-      const { roomId, messageId, emoji = DEFAULT_REACTION_EMOJI } = data || {};
-      if (!roomId || !messageId) return;
-
-      const room = await MatchRoom.findById(roomId).lean();
-      if (!room || !isParticipant(room, userId)) return;
-
-      const message = await Message.findOne({ _id: messageId, roomId });
-      if (!message) return;
-
-      const existingIndex = message.reactions.findIndex(
-        (reaction) => reaction.user.toString() === userId,
-      );
-
-      if (existingIndex >= 0) {
-        if (message.reactions[existingIndex].emoji === emoji) {
-          message.reactions.splice(existingIndex, 1);
-        } else {
-          message.reactions[existingIndex].emoji = emoji;
-        }
-      } else {
-        message.reactions.push({
-          user: userId,
-          emoji,
-        });
-      }
-
-      await message.save();
-
-      socket.nsp.to(roomId).emit("message_reaction_updated", {
-        roomId,
-        messageId: message._id.toString(),
-        reactions: (message.reactions || []).map((reaction) => ({
-          userId: reaction.user.toString(),
-          emoji: reaction.emoji || DEFAULT_REACTION_EMOJI,
-        })),
-      });
-    } catch (error) {
-      console.error("[toggle_message_reaction] Error:", error);
-      socket.emit("error", { message: "Unable to update reaction" });
-    }
-  });
-
-  // ==================== PROFILE UNLOCK ====================
-  socket.on("unlockProfile", async ({ profileId, roomId }) => {
-    await unlockProfile(socket, userId, profileId, roomId);
-  });
-
-  socket.on("lockProfile", async ({ profileId, roomId }) => {
-    await lockProfile(socket, userId, profileId, roomId);
-  });
-
-  /* -------- Disconnect -------- */
   socket.on("disconnect", async () => {
-    userSockets.delete(userId);
-
-    await User.findByIdAndUpdate(userId, {
-      isActive: false,
-      socketId: null,
-      lastActive: new Date(),
-    });
+    await markOnline;
+    try {
+      const [remainingSocket] = await chatNamespace
+        .in(userId)
+        .fetchSockets();
+      await User.findOneAndUpdate(
+        { _id: userId, socketId: socket.id },
+        {
+          $set: {
+            isActive: Boolean(remainingSocket),
+            socketId: remainingSocket?.id || null,
+          },
+        },
+      );
+    } catch (error) {
+      logError("Failed to mark socket user offline", error);
+    }
   });
 };
 
-/* ============================================================
- * HELPERS
- * ============================================================
- *
- * NOTE:
- * - Pure functions
- * - Safe to move into a shared utils module later
- */
-
-const unlockProfile = async (socket, userId, profileId, roomId) => {
-  try {
-    if (!profileId || !roomId) {
-      throw new Error("Missing profileId or roomId");
-    }
-
-    await UnlockHistory.findOneAndUpdate(
-      { user: userId, unlockedUser: profileId },
-      { unlockedAt: new Date() },
-      { upsert: true },
-    );
-
-    // send to OTHER user in room
-    socket.to(roomId).emit("profileUnlocked", {
-      profileId,
-      unlockedBy: userId,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err) {
-    console.error("[Profile] Unlock error:", err);
-    socket.emit("error", { message: err.message });
-  }
-};
-const lockProfile = async (socket, userId, profileId, roomId) => {
-  try {
-    if (!profileId || !roomId) {
-      throw new Error("Missing profileId or roomId");
-    }
-
-    await UnlockHistory.deleteOne({
-      user: userId,
-      unlockedUser: profileId,
-    });
-
-    socket.to(roomId).emit("profileLocked", {
-      profileId,
-      lockedBy: userId,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err) {
-    console.error("[Profile] Lock error:", err);
-    socket.emit("error", { message: err.message });
-  }
-};
-
-export default { initialize, emitToUser, emitToUsers };
+export default { initialize, emitToUser, emitToUsers, emitToRoom, disconnectUser };

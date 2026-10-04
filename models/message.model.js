@@ -1,5 +1,6 @@
 // /models/message.model.js
 import mongoose from "mongoose";
+import { MESSAGE_TYPES } from "../utils/message.js";
 
 const reactionSchema = new mongoose.Schema(
   {
@@ -11,6 +12,7 @@ const reactionSchema = new mongoose.Schema(
     emoji: {
       type: String,
       default: "\u2764\uFE0F",
+      maxlength: 32,
     },
   },
   { _id: false }
@@ -36,7 +38,7 @@ const messageSchema = new mongoose.Schema(
     },
     messageType: {
       type: String,
-      enum: ["text", "image", "audio"],
+      enum: MESSAGE_TYPES,
       default: "text",
     },
     imageUrl: {

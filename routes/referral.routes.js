@@ -7,7 +7,9 @@ import { protect } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
-router.get("/summary", protect, getReferralSummary);
-router.post("/apply", protect, applyReferralCode);
+router.use(protect);
+
+router.get("/summary", getReferralSummary);
+router.post("/apply", applyReferralCode);
 
 export default router;

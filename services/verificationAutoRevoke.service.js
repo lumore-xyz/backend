@@ -14,9 +14,13 @@
  */
 
 import User from "../models/user.model.js";
+import { isPlainObject } from "../utils/object.js";
+import { normalizeString } from "../utils/strings.js";
 import {
-  notifyVerificationStatusChange,
-} from "./notification.service.js";
+  isVerifiedUser,
+  VERIFICATION_STATUS,
+} from "../utils/verification.js";
+import { notifyVerificationStatusChange } from "./notificationPublisher.service.js";
 
 export const IDENTITY_REVOKE_FIELDS = Object.freeze([
   "profilePicture",
@@ -25,27 +29,19 @@ export const IDENTITY_REVOKE_FIELDS = Object.freeze([
   "religion",
 ]);
 
-const REVOKED_STATUS = "not_started";
-
-const isPlainObject = (value) =>
-  Boolean(value) && typeof value === "object" && !Array.isArray(value);
-
-const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
-
 const normalizeForCompare = (value) => {
   if (value === null || value === undefined) return "";
   if (value instanceof Date) return value.getTime();
-  if (typeof value === "string") return value.trim().toLowerCase();
+  if (typeof value === "string") return normalizeString(value);
   return value;
 };
-
 const valuesAreEqual = (left, right) =>
   normalizeForCompare(left) === normalizeForCompare(right);
 
 export const detectChangedIdentityFields = (previous = {}, next = {}) => {
   const changed = [];
   for (const field of IDENTITY_REVOKE_FIELDS) {
-    if (!hasOwn(next, field)) continue;
+    if (!Object.hasOwn(next, field)) continue;
     if (!valuesAreEqual(previous?.[field], next?.[field])) {
       changed.push(field);
     }
@@ -53,12 +49,9 @@ export const detectChangedIdentityFields = (previous = {}, next = {}) => {
   return changed;
 };
 
-const isCurrentlyVerified = (user) =>
-  Boolean(user?.isVerified) || user?.verificationStatus === "approved";
-
 const buildRevocationPatch = () => ({
   isVerified: false,
-  verificationStatus: REVOKED_STATUS,
+  verificationStatus: VERIFICATION_STATUS.NOT_STARTED,
   verificationMethod: null,
   verificationSessionId: null,
 });
@@ -81,7 +74,7 @@ export const applyVerificationAutoRevoke = async ({
     return { revoked: false, changedFields: [] };
   }
 
-  if (!isCurrentlyVerified(previousUser)) {
+  if (!isVerifiedUser(previousUser)) {
     return { revoked: false, changedFields, wasVerified: false };
   }
 
@@ -92,12 +85,12 @@ export const applyVerificationAutoRevoke = async ({
   logger?.info?.(
     `[verification-auto-revoke] user=${userId} changedFields=${changedFields.join(
       ",",
-    )} status=${REVOKED_STATUS}`,
+    )} status=${VERIFICATION_STATUS.NOT_STARTED}`,
   );
 
   await notifyVerificationStatusChange({
     userId,
-    status: REVOKED_STATUS,
+    status: VERIFICATION_STATUS.NOT_STARTED,
     previousStatus: previousUser?.verificationStatus,
     source: "identity_field_change",
     metadata: { changedFields },
@@ -108,44 +101,5 @@ export const applyVerificationAutoRevoke = async ({
     changedFields,
     wasVerified: true,
     revocation,
-  };
-};
-
-export const applyVerificationAutoRevokeForDocument = async ({
-  user,
-  nextPatch,
-  logger = console,
-}) => {
-  if (!user || !isPlainObject(nextPatch)) {
-    return { revoked: false, changedFields: [] };
-  }
-
-  const changedFields = detectChangedIdentityFields(
-    user.toObject?.() || user,
-    nextPatch,
-  );
-  if (changedFields.length === 0) {
-    return { revoked: false, changedFields: [] };
-  }
-
-  if (!isCurrentlyVerified(user)) {
-    return { revoked: false, changedFields, wasVerified: false };
-  }
-
-  user.isVerified = false;
-  user.verificationStatus = REVOKED_STATUS;
-  user.verificationMethod = null;
-  user.verificationSessionId = null;
-
-  logger?.info?.(
-    `[verification-auto-revoke] user=${user._id} changedFields=${changedFields.join(
-      ",",
-    )} status=${REVOKED_STATUS}`,
-  );
-
-  return {
-    revoked: true,
-    changedFields,
-    wasVerified: true,
   };
 };

@@ -3,24 +3,10 @@ import mongoose from "mongoose";
 import connectDB from "../config/db.js";
 import User from "../models/user.model.js";
 import UserPreference from "../models/preference.model.js";
-
-const VALID_INTERESTED_IN = new Set(["man", "woman"]);
-
-function normalizeInterestedIn(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  return VALID_INTERESTED_IN.has(normalized) ? normalized : null;
-}
-
-function inferInterestedInFromGender(gender) {
-  const normalizedGender = String(gender || "")
-    .trim()
-    .toLowerCase();
-  if (normalizedGender === "man") return "woman";
-  if (normalizedGender === "woman") return "man";
-  return null;
-}
+import {
+  inferInterestedInFromGender,
+  normalizeInterestedIn,
+} from "../utils/userPreferences.js";
 
 async function run() {
   await connectDB();
