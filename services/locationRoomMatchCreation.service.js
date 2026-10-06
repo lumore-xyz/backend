@@ -76,9 +76,10 @@ const createMatch = async ({
       seekerId: userId1,
       candidateId: userId2,
       matchingNote: pair.matchingNote,
+      profileContext: pair.profileContext,
       loadUsers: async ({ seekerId, candidateId }) =>
         User.find({ _id: { $in: [seekerId, candidateId] } })
-          .select("_id username nickname")
+          .select("_id nickname fieldVisibility")
           .lean(),
     }) || pair.matchingNote;
   } catch (error) {

@@ -4,12 +4,12 @@ import MatchRoom from "../models/room.model.js";
 import User from "../models/user.model.js";
 import { handleConnection } from "../services/socket.service.js";
 
-test("joinChat does not join rooms when the socket user is not a participant", async () => {
+test("joinChat keeps the personal inbox room but rejects a chat where the user is not a participant", async () => {
   const originalFindRoom = MatchRoom.findById;
   const originalUpdateUser = User.updateOne;
   const handlers = new Map();
   const joinedRooms = [];
-  MatchRoom.findById = () => ({ lean: async () => ({ participants: ["owner"] }) });
+  MatchRoom.findById = () => ({ lean: async () => ({ participants: ["owner"], status: "active" }) });
   User.updateOne = async () => ({ acknowledged: true });
 
   const socket = {
@@ -26,8 +26,8 @@ test("joinChat does not join rooms when the socket user is not a participant", a
 
   try {
     handleConnection(socket);
-    await handlers.get("joinChat")({ roomId: "room-1" });
-    assert.deepEqual(joinedRooms, []);
+    await handlers.get("joinChat")({ roomId: "64a000000000000000000001" });
+    assert.deepEqual(joinedRooms, ["attacker"]);
   } finally {
     MatchRoom.findById = originalFindRoom;
     User.updateOne = originalUpdateUser;

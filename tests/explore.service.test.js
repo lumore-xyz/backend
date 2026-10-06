@@ -1,7 +1,7 @@
 import test from "node:test";
+import mongoose from "mongoose";
 import assert from "node:assert/strict";
 import express from "express";
-import axios from "axios";
 import exploreRoutes from "../routes/explore.routes.js";
 import CreditLedger from "../models/creditLedger.model.js";
 import ExploreDaily from "../models/exploreDaily.model.js";
@@ -17,6 +17,7 @@ import { scoreExploreCandidate } from "../services/exploreMatchingPolicy.service
 import { buildExploreCandidateQuery } from "../services/exploreCandidate.service.js";
 import { rejectExploreProfile } from "../services/exploreRejection.service.js";
 import { startExploreConversation } from "../services/exploreConversationCore.service.js";
+import { getProfileCompatibility } from "../services/exploreCompatibility.service.js";
 import { getAge } from "../utils/age.js";
 import { getDailyExplore, unlockDailyExplore } from "../services/explore.service.js";
 import {
@@ -29,7 +30,12 @@ const NOW = new Date("2026-10-03T12:00:00Z");
 const id = (n) => n.toString(16).padStart(24, "0");
 const USER_ID = id(1);
 const copy = (value) => structuredClone(value);
-const chain = (value) => ({ select() { return this; }, lean: async () => copy(value) });
+const chain = (value) => ({
+  select() { return this; },
+  session() { return this; },
+  lean: async () => copy(value),
+  then: (resolve, reject) => Promise.resolve(copy(value)).then(resolve, reject),
+});
 const prefs = (extra = {}) => normalizePreference({ interestedIn: "woman", ageRange: [20, 30],
   goal: { primary: "long_term" }, relationshipType: "monogamy", distance: 10, ...extra });
 const seeker = () => ({ _id: USER_ID, username: "seeker", gender: "man", dob: new Date("2000-01-01"),
@@ -51,6 +57,34 @@ test("Explore prioritizes proximity and goals; missing data supplies no evidence
   assert.equal(empty.components.goals, 0);
   assert.equal(empty.components.thisOrThat, 0);
   assert.equal(empty.score, 0);
+});
+
+test("Explore scoring uses five equal 20-point categories", () => {
+  const user = { ...seeker(), religion: "hindu", diet: "vegan" };
+  const match = { ...candidate(2), religion: "hindu", diet: "vegan" };
+  const preferences = prefs({ religionPreference: ["hindu"], dietPreference: ["vegan"] });
+  const answers = new Map(Array.from({ length: 20 }, (_, index) => [`q${index}`, "a"]));
+  const result = scoreExploreCandidate({
+    seeker: user,
+    candidate: match,
+    distanceKm: 0,
+    context: {
+      seekerPrefs: preferences,
+      candidatePrefs: preferences,
+      seekerAnswers: answers,
+      candidateAnswers: answers,
+    },
+  });
+
+  assert.deepEqual(result.components, {
+    distance: 20,
+    goals: 20,
+    preferences: 20,
+    interests: 10,
+    languages: 10,
+    thisOrThat: 20,
+  });
+  assert.equal(result.score, 100);
 });
 
 test("gender/age filters honor inclusive birthdays without online, distance, or credit gates", () => {
@@ -81,7 +115,10 @@ test("preview and explanation facts omit private and unlocked fields and all con
   assert.equal(facts.distanceKm, null);
   assert.deepEqual(facts.common.goals, []);
   assert.deepEqual(facts.common.interests, []);
-  assert.ok(!fallbackExploreNote(facts).includes("Hidden"));
+  const note = fallbackExploreNote(facts);
+  assert.ok(!note.includes("Hidden"));
+  assert.match(note, /^Meet this person\./);
+  assert.ok(!note.includes("age and gender preferences"));
 });
 
 // Model doubles enforce the same conditional filters to exercise retry/crash interleavings.
@@ -104,21 +141,32 @@ const matches = (doc, query) => Object.entries(query).every(([key, expected]) =>
 });
 
 const harness = (t, candidates = [candidate(2)]) => {
-  // Never contact the provider during local tests, even if the shell has a real API key.
-  t.mock.method(axios, "post", async () => { throw new Error("Test provider unavailable"); });
   const state = { user: seeker(), candidates, daily: null, ledger: new Map(), debits: 0, generations: 0,
     prefs: candidates.map((user) => ({ user: user._id, goal: { primary: "long_term" }, relationshipType: "monogamy" })),
-    reports: [], rejections: [], rooms: [], failLedger: false };
+    reports: [], rejections: [], rooms: [], failLedger: false,
+    fetchProvider: async () => { throw new Error("Test provider unavailable"); } };
+  // Never contact the provider during local tests, even if the shell has a real API key.
+  t.mock.method(globalThis, "fetch", (...args) => state.fetchProvider(...args));
   t.mock.method(ExploreDaily, "init", async () => {});
   t.mock.method(CreditLedger, "init", async () => {});
   t.mock.method(User, "findById", () => chain(state.user));
-  t.mock.method(User, "aggregate", async (pipeline) => {
+  t.mock.method(User, "aggregate", (pipeline) => {
     state.generations += 1;
-    return copy(state.candidates.filter((user) => matches(user, pipeline[0].$match)).slice(0, pipeline[1].$sample.size));
+    assert.deepEqual(pipeline[1], { $sort: { lastActive: -1, _id: -1 } });
+    assert.equal(pipeline[2].$limit, 100);
+    const limit = pipeline[2].$limit;
+    return Promise.resolve(copy(state.candidates
+      .filter((user) => matches(user, pipeline[0].$match))
+      .sort((a, b) => (b.lastActive?.getTime() ?? 0) - (a.lastActive?.getTime() ?? 0) || String(b._id).localeCompare(String(a._id)))
+      .slice(0, limit)));
   });
   t.mock.method(User, "find", (query) => chain(state.candidates.filter((user) => matches(user, query))));
   t.mock.method(User, "findOneAndUpdate", (query, update) => {
     if (!matches(state.user, query)) return chain(null);
+    if (!Array.isArray(update)) {
+      state.user.credits += update.$inc.credits;
+      return chain(state.user);
+    }
     const payment = update[0].$set.explorePayment;
     state.user.credits -= 1;
     state.user.explorePayment = { ...payment, balanceAfter: state.user.credits };
@@ -130,7 +178,9 @@ const harness = (t, candidates = [candidate(2)]) => {
     state.user.explorePayment.settled = true;
     return { matchedCount: 1 };
   });
-  t.mock.method(UserPreference, "findOne", () => chain({ interestedIn: "woman", ageRange: [20, 30], goal: { primary: "long_term" }, distance: 10 }));
+  t.mock.method(UserPreference, "findOne", (query) => chain(String(query.user) === USER_ID
+    ? { interestedIn: "woman", ageRange: [20, 30], goal: { primary: "long_term" }, distance: 10 }
+    : state.prefs.find((doc) => String(doc.user) === String(query.user)) || null));
   t.mock.method(UserPreference, "find", () => chain(state.prefs));
   t.mock.method(MatchRoom, "find", () => chain(state.rooms));
   t.mock.method(Report, "find", () => chain(state.reports));
@@ -183,6 +233,19 @@ test("unlock scores 100 eligible offline profiles, returns the top 10, and cache
   assert.equal(state.ledger.size, 1);
 });
 
+test("Explore retrieves the 100 most recently active eligible profiles", async (t) => {
+  const candidates = Array.from({ length: 120 }, (_, i) => candidate(i + 2));
+  candidates[119].lastActive = new Date("2026-10-03T11:59:00Z");
+  candidates[119].location.coordinates = [77, 12.0001];
+  const state = harness(t, candidates);
+
+  const result = await unlockDailyExplore({ userId: USER_ID, now: NOW });
+
+  assert.equal(result.candidateCount, 100);
+  assert.equal(result.profiles.length, 10);
+  assert.equal(result.profiles[0]._id, id(121));
+});
+
 test("concurrent unlocks and debit retries charge once", async (t) => {
   const state = harness(t);
   const results = await Promise.all(Array.from({ length: 8 }, () => unlockDailyExplore({ userId: USER_ID, now: NOW })));
@@ -218,7 +281,7 @@ test("empty pool is free; insufficient funds do not generate or debit", async (t
   assert.equal(state.generations, 1);
 });
 
-test("gender/age exclusions, existing chats and bilateral reports/rejections are applied before sampling", async (t) => {
+test("gender/age exclusions, existing chats and bilateral reports/rejections are applied before selection", async (t) => {
   const state = harness(t, [candidate(2), candidate(3), candidate(4), candidate(5),
     candidate(6, { gender: "man" }), candidate(7, { dob: new Date("2010-01-01") }), candidate(8, { isArchived: true })]);
   state.rooms = [{ participants: [USER_ID, id(3)] }];
@@ -325,11 +388,43 @@ const mockConversationRooms = (t, state) => {
   });
   t.mock.method(MatchRoom, "findOneAndUpdate", async (query, update) => {
     let room = state.rooms.find((item) => item.directExplorePairKey === query.directExplorePairKey);
+    const updatedExisting = Boolean(room);
     if (!room) {
       room = { _id: id(500), ...copy(update.$setOnInsert), ...query };
       state.rooms.push(room);
     }
-    return room;
+    return { value: room, lastErrorObject: { updatedExisting } };
+  });
+};
+
+const mockConversationBilling = (t, state) => {
+  t.mock.method(mongoose, "startSession", async () => ({
+    startTransaction() {},
+    inTransaction: () => true,
+    commitTransaction: async () => {},
+    abortTransaction: async () => {},
+    endSession: async () => {},
+  }));
+  let ledgerSequence = 700;
+  t.mock.method(CreditLedger, "findOne", (query) => chain(
+    [...state.ledger.values()].find((entry) => matches(entry, query)) || null,
+  ));
+  t.mock.method(CreditLedger, "create", async (entries) => {
+    const ledgers = (Array.isArray(entries) ? entries : [entries]).map((entry) => {
+      const ledger = { _id: id(ledgerSequence++), ...copy(entry) };
+      state.ledger.set(ledger._id, ledger);
+      return ledger;
+    });
+    return Array.isArray(entries) ? ledgers : ledgers[0];
+  });
+  t.mock.method(CreditLedger, "findOneAndDelete", async (query) => {
+    const ledger = [...state.ledger.values()].find((entry) => matches(entry, query));
+    if (ledger) state.ledger.delete(String(ledger._id));
+    return ledger || null;
+  });
+  t.mock.method(User, "findByIdAndUpdate", async (_userId, update) => {
+    state.user.credits += update.$inc.credits;
+    return copy(state.user);
   });
 };
 
@@ -342,21 +437,49 @@ test("chosen-profile conversations require a paid daily selection and reject arb
   assert.equal(state.rooms.length, 0);
 });
 
-test("concurrent Say hello requests reuse one room and do not spend additional credits", async (t) => {
+test("concurrent Say hello requests reuse one room and retain only one conversation charge", async (t) => {
   const state = harness(t);
   mockConversationRooms(t, state);
   await unlockDailyExplore({ userId: USER_ID, now: NOW });
+  mockConversationBilling(t, state);
   const results = await Promise.all([1, 2].map(() => startExploreConversation({ userId: USER_ID, profileId: id(2), now: NOW })));
   assert.equal(results[0].roomId, results[1].roomId);
-  assert.equal(results[0].created, true);
-  assert.equal(results[1].created, true);
+  assert.deepEqual(results.map((result) => result.created).sort(), [false, true]);
   assert.equal(state.rooms.length, 1);
   assert.equal(state.rooms[0].source, "explore");
   assert.equal(state.debits, 1);
-  assert.equal(state.user.credits, 9);
+  assert.equal(state.user.credits, 8);
+  assert.equal(state.ledger.size, 2);
   const retry = await startExploreConversation({ userId: USER_ID, profileId: id(2), now: NOW });
   assert.equal(retry.roomId, results[0].roomId);
   assert.equal(retry.created, false);
+  assert.equal(state.user.credits, 8);
+});
+
+test("cached notes discard profile details when a previously public field becomes private", async (t) => {
+  const state = harness(t, [candidate(2, { bio: "Distinctive private detail", work: "designer" })]);
+  await unlockDailyExplore({ userId: USER_ID, now: NOW });
+  state.daily.profiles[0].matchNote = "Meet Person 2, a designer. Distinctive private detail.";
+  state.daily.profiles[0].noteStatus = "generated";
+  state.candidates[0].fieldVisibility = { bio: "private", work: "private" };
+
+  const result = await getDailyExplore({ userId: USER_ID, now: NOW });
+  assert.equal(result.profiles[0].noteStatus, "fallback");
+  assert.doesNotMatch(result.profiles[0].matchNote, /designer|Distinctive private detail/);
+  assert.equal(state.generations, 1);
+});
+
+test("changed candidate preferences exclude cached cards, compatibility checks and new conversations", async (t) => {
+  const state = harness(t);
+  mockConversationRooms(t, state);
+  await unlockDailyExplore({ userId: USER_ID, now: NOW });
+  state.prefs[0].ageRange = [40, 50];
+
+  assert.equal((await getDailyExplore({ userId: USER_ID, now: NOW })).profiles.length, 0);
+  await assert.rejects(getProfileCompatibility({ userId: USER_ID, profileId: id(2), now: NOW }), { code: "PROFILE_UNAVAILABLE" });
+  await assert.rejects(startExploreConversation({ userId: USER_ID, profileId: id(2), now: NOW }), { code: "PROFILE_UNAVAILABLE" });
+  assert.equal(state.rooms.length, 0);
+  assert.equal(state.debits, 1);
 });
 
 test("Say hello rechecks reports, archive state and daily expiry", async (t) => {
@@ -380,11 +503,16 @@ test("AI receives only approved public facts for the top ten, with a bounded tim
   state.candidates[0].email = "hidden-email@example.test";
   state.candidates[0].fieldVisibility = { interests: "private", nickname: "private", location: "private", goal: "private", languages: "private" };
   const calls = [];
-  t.mock.method(axios, "post", async (url, payload, options) => {
-    calls.push({ url, payload, options });
+  state.fetchProvider = async (input, init) => {
+    const request = new Request(input, init);
+    const payload = await request.json();
+    calls.push({ url: request.url, payload, signal: request.signal });
     const name = payload.messages[1].content.match(/Suggested person name: ([^\n]+)/)[1];
-    return { data: { choices: [{ message: { content: `You should talk to ${name} because exploring a connection could be interesting.` } }] } };
-  });
+    return new Response(JSON.stringify({ choices: [{ message: { content: `Meet ${name}, someone whose profile could be an interesting place to start. The information we have gives you a little common ground to explore, and you may find a good conversation waiting there, so take a look and see what stands out to you.` } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
   const result = await unlockDailyExplore({ userId: USER_ID, now: NOW });
   assert.equal(calls.length, 10);
   assert.ok(result.profiles.every((profile) => profile.noteStatus === "generated"));
@@ -397,10 +525,11 @@ test("AI receives only approved public facts for the top ten, with a bounded tim
   assert.ok(privateCall);
   const content = privateCall.payload.messages[1].content;
   assert.ok(!content.includes("Person 2"));
-  assert.ok(!content.includes("hiking"));
-  assert.ok(!content.includes("long_term"));
+  const payload = JSON.parse(content.split("Match data JSON: ")[1]);
+  assert.equal(payload.suggestedPerson.profile.interests, undefined);
+  assert.deepEqual(payload.suggestedPerson.preferences.goals, []);
   assert.ok(content.includes('"distanceKm":null'));
-  assert.ok(calls.every((call) => call.options.timeout === 5000));
+  assert.ok(calls.every((call) => call.signal instanceof AbortSignal));
   assert.ok(calls.every((call) => call.url === "https://integrate.api.nvidia.com/v1/chat/completions"));
   await getDailyExplore({ userId: USER_ID, now: NOW });
   await unlockDailyExplore({ userId: USER_ID, now: NOW });
@@ -414,7 +543,8 @@ test("provider failures still deliver a paid list with factual fallback notes", 
   t.after(() => { if (previousKey === undefined) delete process.env.NVIDIA_API_KEY; else process.env.NVIDIA_API_KEY = previousKey; });
   const result = await unlockDailyExplore({ userId: USER_ID, now: NOW });
   assert.equal(result.profiles[0].noteStatus, "fallback");
-  assert.match(result.profiles[0].matchNote, /live nearby/);
+  assert.match(result.profiles[0].matchNote, /^Meet Person \d+\./);
+  assert.match(result.profiles[0].matchNote, /nearby/);
   assert.equal(state.debits, 1);
 });
 

@@ -6,8 +6,10 @@ import { normalizeUniqueStringList } from "../utils/strings.js";
 import { EXPLORE_NOTE_STATUS } from "../utils/exploreDaily.js";
 import { isProfileFieldVisible } from "../utils/profileVisibility.js";
 import { generateMatchNote } from "./matchNote.service.js";
-import { getAnswersByUser } from "./matchingAnswers.service.js";
+import { getMatchNoteProfileContext } from "./matchNoteContent.service.js";
+import { getAnswersByUser, getReadableAnswersByUser } from "./matchingAnswers.service.js";
 import {
+  getHardEligibilityResult,
   getIntersection,
   normalizePreference,
 } from "./matchingPolicy.service.js";
@@ -50,20 +52,41 @@ export const distanceBetween = (seeker, candidate) => {
 
 export const exploreNoteFacts = ({ seeker, seekerPrefs, candidate, candidatePrefs }) => ({
   name: visible(candidate, "nickname") ? candidate.nickname || "this person" : "this person",
-  distanceKm: visible(candidate, "location") ? distanceBetween(seeker, candidate) : null,
+  distanceKm: visible(seeker, "location") && visible(candidate, "location") ? distanceBetween(seeker, candidate) : null,
   common: {
-    goals: visible(candidate, "goal") ? intersection(goals(seekerPrefs), goals(candidatePrefs)) : [],
-    interests: visible(candidate, "interests") ? intersection(seeker.interests, candidate.interests) : [],
-    languages: visible(candidate, "languages") ? intersection(seeker.languages, candidate.languages) : [],
+    goals: visible(seeker, "goal") && visible(candidate, "goal") ? intersection(goals(seekerPrefs), goals(candidatePrefs)) : [],
+    interests: visible(seeker, "interests") && visible(candidate, "interests") ? intersection(seeker.interests, candidate.interests) : [],
+    languages: visible(seeker, "languages") && visible(candidate, "languages") ? intersection(seeker.languages, candidate.languages) : [],
+  },
+  // Cached notes can mention any public profile detail, not only shared traits.
+  profiles: {
+    viewer: getMatchNoteProfileContext(seeker, seekerPrefs),
+    suggestedPerson: getMatchNoteProfileContext(candidate, candidatePrefs),
   },
 });
 export const fingerprint = (facts) => createHash("sha256").update(JSON.stringify(facts)).digest("hex");
 export const fallbackExploreNote = (facts) => {
-  const reasons = [];
-  if (Number.isFinite(facts.distanceKm) && facts.distanceKm <= 25) reasons.push("you live nearby");
-  if (facts.common.goals.length) reasons.push(`you both want ${facts.common.goals[0].replace(/[-_]/g, " ")}`);
-  if (facts.common.interests.length) reasons.push(`you share an interest in ${facts.common.interests[0]}`);
-  return reasons.length ? `Worth exploring: ${reasons.join(" and ")}.` : "A profile selected from your age and gender preferences; explore whether you connect.";
+  const sharedReasons = [];
+  const nearby = Number.isFinite(facts.distanceKm) && facts.distanceKm <= 25;
+  const name = facts.name || "this person";
+  if (facts.common.goals.length) {
+    sharedReasons.push(`you both want ${facts.common.goals[0].replace(/[-_]/g, " ")}`);
+  }
+  if (facts.common.interests.length) {
+    sharedReasons.push(`you both enjoy ${facts.common.interests.slice(0, 2).join(" and ")}`);
+  }
+  if (facts.common.languages.length) {
+    sharedReasons.push(`you can connect in ${facts.common.languages[0]}`);
+  }
+
+  const connection = sharedReasons.length > 1
+    ? `${sharedReasons.slice(0, -1).join(", ")}, and ${sharedReasons.at(-1)}`
+    : sharedReasons[0];
+  const nudge = "That gives you an easy place to start; take a look and see what you think.";
+  if (connection && nearby) return `Meet ${name}. ${connection}, and you live nearby too. ${nudge}`;
+  if (connection) return `Meet ${name}. ${connection}. ${nudge}`;
+  if (nearby) return `Meet ${name}. You're nearby, so saying hello could be an easy place to start. See what you think.`;
+  return `Meet ${name}. Take a look and see whether there's an easy conversation starter between you.`;
 };
 
 export const generateProfiles = async ({ seeker, prefs, now, additionalExcludedIds = [] }) => {
@@ -73,33 +96,53 @@ export const generateProfiles = async ({ seeker, prefs, now, additionalExcludedI
       ...additionalExcludedIds.map((id) => String(id)),
     ]),
   ];
-  // ponytail: sample a bounded pool; use indexed stratification if discovery quality needs it.
   const candidates = await User.aggregate([
     { $match: buildExploreCandidateQuery({ userId: seeker._id, prefs, excludedIds, now }) },
-    { $sample: { size: CANDIDATE_LIMIT } },
+    { $sort: { lastActive: -1, _id: -1 } },
+    { $limit: CANDIDATE_LIMIT },
     { $project: Object.fromEntries(SELECT.split(" ").map((field) => [field, 1])) },
   ]);
-  const ids = [seeker._id, ...candidates.map((user) => user._id)];
+  let candidateCount = 0;
+  let selected = [];
+  const candidateIds = candidates.map((candidate) => candidate._id);
   const [prefDocs, answers] = await Promise.all([
-    getPreferencesByUserIds(candidates.map((user) => user._id)),
-    getAnswersByUser(ids),
+    getPreferencesByUserIds(candidateIds),
+    getAnswersByUser([seeker._id, ...candidateIds]),
   ]);
-  const ranked = candidates.map((candidate) => {
-    const candidatePrefs = normalizePreference(prefDocs.get(String(candidate._id)), { userGender: candidate.gender });
-    return {
-      candidate, candidatePrefs,
-      ...scoreExploreCandidate({
-        seeker, candidate, distanceKm: distanceBetween(seeker, candidate),
-        context: {
-          seekerPrefs: prefs, candidatePrefs,
-          seekerAnswers: answers.get(String(seeker._id)) || new Map(),
-          candidateAnswers: answers.get(String(candidate._id)) || new Map(),
-        },
-      }),
-    };
-  }).sort((a, b) => b.score - a.score || String(a.candidate._id).localeCompare(String(b.candidate._id)));
+  const seekerAnswers = answers.get(String(seeker._id)) || new Map();
 
-  const selected = ranked.slice(0, RESULT_LIMIT);
+  for (const candidate of candidates) {
+    const candidatePrefs = normalizePreference(prefDocs.get(String(candidate._id)), {
+      userGender: candidate.gender,
+    });
+    if (!getHardEligibilityResult({ seeker, seekerPrefs: prefs, candidate, candidatePrefs, now }).ok) continue;
+
+    candidateCount += 1;
+    const candidateAnswers = answers.get(String(candidate._id)) || new Map();
+    selected.push({
+      candidate,
+      candidatePrefs,
+      candidateAnswers,
+      ...scoreExploreCandidate({
+        seeker,
+        candidate,
+        distanceKm: distanceBetween(seeker, candidate),
+        context: { seekerPrefs: prefs, candidatePrefs, seekerAnswers, candidateAnswers },
+      }),
+    });
+  }
+  selected.sort((a, b) => b.score - a.score || String(a.candidate._id).localeCompare(String(b.candidate._id)));
+  selected = selected.slice(0, RESULT_LIMIT);
+
+  const noteUserIds = [seeker._id, ...selected.map((item) => item.candidate._id)];
+  const answersByUser = new Map([[String(seeker._id), seekerAnswers]]);
+  for (const item of selected) {
+    answersByUser.set(String(item.candidate._id), item.candidateAnswers);
+  }
+  const readableAnswers = await getReadableAnswersByUser({
+    userIds: noteUserIds,
+    answersByUser,
+  });
   const profiles = [];
   // Only the selected profiles incur provider calls, bounded to five at a time.
   for (let offset = 0; offset < selected.length; offset += 5) {
@@ -109,8 +152,19 @@ export const generateProfiles = async ({ seeker, prefs, now, additionalExcludedI
       let noteStatus = EXPLORE_NOTE_STATUS.FALLBACK;
       try {
         const result = await generateMatchNote({
-          viewer: { nickname: "you" }, otherUser: { nickname: facts.name }, timeoutMs: 5000,
-          matchingNote: { common: facts.common, distanceKm: facts.distanceKm, totalScore: item.score },
+          viewer: { ...seeker, nickname: "you" },
+          otherUser: { ...item.candidate, nickname: facts.name, username: null },
+          viewerPreferences: prefs, suggestedPersonPreferences: item.candidatePrefs,
+          viewerAnswers: readableAnswers.get(String(seeker._id)) || [],
+          suggestedPersonAnswers: readableAnswers.get(String(item.candidate._id)) || [],
+          timeoutMs: 5000,
+          matchingNote: {
+            common: facts.common,
+            thisOrThat: item.thisOrThat,
+            components: item.components,
+            distanceKm: facts.distanceKm,
+            totalScore: item.score,
+          },
         });
         if (!result.meta.usedFallback && result.sentence) {
           matchNote = result.sentence;
@@ -123,7 +177,7 @@ export const generateProfiles = async ({ seeker, prefs, now, additionalExcludedI
         matchNote, noteStatus, noteFingerprint: fingerprint(facts) };
     })));
   }
-  return { profiles, candidateCount: candidates.length };
+  return { profiles, candidateCount };
 };
 
 export const projectExploreProfile = (user, now) => {

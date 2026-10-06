@@ -5,14 +5,20 @@ Explore uses HTTP for daily discovery and user-initiated conversation creation. 
 ## Rules
 
 - A daily list costs **1 credit**, once per user per UTC day.
-- Select up to **100** non-archived profiles using the seeker's gender and age preferences; score every selected profile and retain up to **10**.
+- MongoDB filters non-archived profiles by the seeker's gender and age preferences, sorts by `lastActive` newest first (then `_id` descending to break ties), and returns at most **100**. Check each candidate's age and gender preferences too, score the reciprocal candidates, and retain up to **10**.
 - Candidates can be offline and need not have credits or be actively matchmaking.
-- Ranking weights: distance 40%, goals 40%, interests 10%, This-or-That agreement 10%. Missing data contributes no matching evidence. Goals use `UserPreference.goal` and relationship type.
-- Sampling occurs once per daily generation. Results are the best within that sample, not the entire database.
+- Ranking uses five equal 20-point categories: distance; goal and relationship-type alignment; reciprocal religion and other preference fit; profile similarity (10 points each for interests and languages); and This-or-That agreement. Missing data contributes no points; scores are not rescaled to compensate for missing evidence.
+- The pool is bounded to 100 per daily generation to limit application-side scoring and profile-preference reads. Results are the best among the 100 most recently active eligible profiles, not a global compatibility ranking. `candidateCount` is the number of retrieved profiles that also pass the candidate's reciprocal age/gender preferences. A compound gender/activity index supports the filter and sort.
 - Existing active/archived conversations and bilateral report/rejection records exclude a pair.
 - Partial lists cost 1 credit. Empty lists cost nothing and remain empty until the next UTC day.
 - Reads preserve the paid ranking, omit newly unavailable profiles, and honor current public field visibility. Removed suggestions are not replaced that day.
 - Scores indicate relative compatibility, not a probability of relationship success.
+
+Distance uses the geometric mean of each person's distance affinity: `1 / (1 + distanceKm / preferredDistanceKm)`. Goal alignment contributes up to 16 points using the strongest shared goal, with primary/secondary/tertiary priorities of 1/0.5/0.25 and the geometric mean of the two priorities. An exact relationship-type match adds 4 points. Goal and relationship mismatches affect ranking rather than excluding a pair.
+
+Preference fit covers religion, diet, zodiac, personality, drinking, smoking, pets, and constrained height ranges. Each person's active preferences are averaged separately; their directional averages are combined with a geometric mean so one person's many matching preferences cannot conceal poor fit for the other. If only one person has active preferences, their average is used. Empty or `any`/`all`/`everyone` selections and the unrestricted fallback height range contribute no evidence. A configured preference with missing profile data scores zero. Stored height ranges narrower than the fallback are applied, including model defaults; the stored data does not distinguish defaults from deliberate choices.
+
+Interests use Jaccard overlap. Languages earn 10 points when the profiles share at least one language, so knowing additional languages does not reduce communication fit. This-or-That points are `20 * matchRate^2 * min(sharedAnswers / 20, 1)`, with match rate expressed as a fraction. This retains the existing evidence limit while reducing points when shared answers disagree. These formulas are ranking heuristics, not calibrated predictions. Saved daily lists keep their scores until the next generation or a paid refresh; the compatibility endpoint recalculates using current data.
 
 ## Endpoints
 
@@ -45,7 +51,7 @@ No body is required. Generate and unlock today's list, or return the existing re
         "age": 25,
         "distanceKm": 4.7,
         "score": 83.5,
-        "matchNote": "Worth exploring: you live nearby and you both want a long term relationship.",
+        "matchNote": "Meet Sam. You both want a long term relationship, and you live nearby too. That gives you an easy place to start; take a look and see what you think.",
         "noteStatus": "fallback"
       }
     ]
@@ -91,14 +97,14 @@ Removes an unlocked suggestion and excludes the pair from future matching while 
 
 The credit decrement and `User.explorePayment` receipt are a single atomic update, supporting standalone MongoDB. Refreshes first persist the replacement list in `ExploreDaily.pendingRefresh`; the credit decrement and `User.exploreRefreshPayment` receipt are also a single atomic update. Ledger insertion is an idempotent upsert with a unique Explore reference index. Recovery writes the ledger, installs the pending list, and settles the receipt. A crash or transient failure resumes from the receipt; the same request cannot be charged twice. Keep these records available for recovery; they currently have no TTL.
 
-MongoDB model initialization waits for configured index creation before serving Explore. Production deployments that disable automatic index creation must provision the new unique indexes before enabling these routes. Account deletion removes owned daily records and removes that user from other lists.
+MongoDB model initialization waits for configured index creation before serving Explore. Production deployments that disable automatic index creation must provision the unique payment/room indexes and the `User` index `{ gender: 1, lastActive: -1, _id: -1 }` before enabling these routes. Account deletion removes owned daily records and removes that user from other lists.
 
 ## Match Notes
 
-Notes use the existing NVIDIA chat-completion provider when `NVIDIA_API_KEY` is configured. `NVIDIA_MATCH_NOTE_MODEL` optionally overrides the existing service's model. Only the top ten trigger provider calls, at most five concurrently, with a five-second timeout per call.
+Notes use NVIDIA's OpenAI-compatible chat-completion API through the OpenAI SDK with the fixed model `nvidia/nemotron-3.5-lightning-30b-a3b` when `NVIDIA_API_KEY` is configured. Thinking is enabled by default and can be disabled with `NVIDIA_MATCH_NOTE_ENABLE_THINKING=false`. Only the top ten trigger provider calls, at most five concurrently, with a five-second timeout per call.
 
-The approved provider payload includes the suggested profile's public nickname, shared goals/interests/languages, approximate distance, and score. Hidden facts, user IDs, contact details, and coordinates are excluded. Explore uses a generic viewer name. Missing credentials, provider failure, or invalid output produce factual local fallback notes with `noteStatus: "fallback"`; successful AI notes use `"generated"`. Results are cached for the day, with no extra provider calls on reads.
+The provider payload includes both people's visible profile details, relevant preferences and This-or-That answers, plus match context. Hidden facts, user IDs, contact details, and coordinates are excluded. Missing credentials, provider failure, or invalid output produce local fallback notes with `noteStatus: "fallback"`; successful AI notes use `"generated"`. Results are cached for the day, with no extra provider calls on reads.
 
 ## Validation
 
-The existing model-double tests cover ranking, filters, visibility, caching, concurrent unlocks, interrupted-payment recovery, date boundaries, route authentication, selected-profile conversation authorization, and room reuse. They do not exercise the shared conversation credit ledger or refund path. A disposable MongoDB integration check should verify transaction and fallback billing behavior before deployment.
+The model-double tests cover ranking, filters, visibility, cached profile-detail invalidation, reciprocal preference changes, concurrent unlocks, interrupted-payment recovery, date boundaries, route authentication, selected-profile conversation authorization, room reuse, and conversation charge/refund interleavings. They stub MongoDB sessions and do not verify real transaction isolation, index use, or standalone fallback billing; those require a disposable MongoDB integration check.

@@ -23,8 +23,8 @@ import {
 } from "./matchNoteContent.service.js";
 
 const MATCH_NOTE_LOG_PREFIX = "[matchnote]";
-const getAxiosErrorReason = (error) => {
-  const status = Number(error?.response?.status);
+const getProviderErrorReason = (error) => {
+  const status = Number(error?.status ?? error?.response?.status);
   if (Number.isInteger(status) && status >= 100 && status <= 599) {
     return `http_${status}`;
   }
@@ -39,11 +39,11 @@ const requestNvidia = async ({ messages, timeoutMs, operation }) => {
   if (!apiKey) return { errorReason: "missing_nvidia_api_key" };
 
   try {
-    const response = await requestNvidiaChatCompletion(apiKey, messages, timeoutMs);
-    return { data: response.data };
+    const data = await requestNvidiaChatCompletion(apiKey, messages, timeoutMs);
+    return { data };
   } catch (error) {
     logError(`${MATCH_NOTE_LOG_PREFIX} ${operation}_failed`, error);
-    return { errorReason: getAxiosErrorReason(error) };
+    return { errorReason: getProviderErrorReason(error) };
   }
 };
 
@@ -52,6 +52,12 @@ const callNvidiaMatchNote = async ({
   suggestedPersonName,
   matchingNote,
   noteSummary,
+  viewer,
+  suggestedPerson,
+  viewerPreferences,
+  suggestedPersonPreferences,
+  viewerAnswers,
+  suggestedPersonAnswers,
   fallbackSentence,
   timeoutMs,
 }) => {
@@ -61,6 +67,12 @@ const callNvidiaMatchNote = async ({
       suggestedPersonName,
       matchingNote,
       noteSummary,
+      viewer,
+      suggestedPerson,
+      viewerPreferences,
+      suggestedPersonPreferences,
+      viewerAnswers,
+      suggestedPersonAnswers,
     }),
     timeoutMs,
     operation: "nvidia_generation",
@@ -118,14 +130,25 @@ const generateSentenceForPair = ({
   viewer,
   otherUser,
   matchingNote,
-  noteSummary = summarizeMatchingNote(matchingNote),
+  noteSummary,
+  viewerPreferences,
+  suggestedPersonPreferences,
+  viewerAnswers,
+  suggestedPersonAnswers,
   timeoutMs,
 }) => {
+  noteSummary ||= summarizeMatchingNote(matchingNote, {
+    viewer,
+    suggestedPerson: otherUser,
+  });
   const viewerName = getDisplayName(viewer, "User");
   const suggestedPersonName = getDisplayName(otherUser);
   const fallbackSentence = buildFallbackSentence({
     suggestedPersonName,
     noteSummary,
+    suggestedPerson: otherUser,
+    viewerAnswers,
+    suggestedPersonAnswers,
   });
 
   return callNvidiaMatchNote({
@@ -133,12 +156,24 @@ const generateSentenceForPair = ({
     suggestedPersonName,
     matchingNote,
     noteSummary,
+    viewer,
+    suggestedPerson: otherUser,
+    viewerPreferences,
+    suggestedPersonPreferences,
+    viewerAnswers,
+    suggestedPersonAnswers,
     fallbackSentence,
     timeoutMs,
   });
 };
 
-const buildFallbackNotesByUser = ({ seeker, candidate, noteSummary }) => {
+const buildFallbackNotesByUser = ({
+  seeker,
+  candidate,
+  noteSummary,
+  seekerAnswers,
+  candidateAnswers,
+}) => {
   const seekerId = getId(seeker);
   const candidateId = getId(candidate);
   const seekerName = getDisplayName(seeker);
@@ -146,10 +181,16 @@ const buildFallbackNotesByUser = ({ seeker, candidate, noteSummary }) => {
   const seekerSentence = buildFallbackSentence({
     suggestedPersonName: candidateName,
     noteSummary,
+    suggestedPerson: candidate,
+    viewerAnswers: seekerAnswers,
+    suggestedPersonAnswers: candidateAnswers,
   });
   const candidateSentence = buildFallbackSentence({
     suggestedPersonName: seekerName,
     noteSummary,
+    suggestedPerson: seeker,
+    viewerAnswers: candidateAnswers,
+    suggestedPersonAnswers: seekerAnswers,
   });
   const notesByUser = {};
 
@@ -177,6 +218,12 @@ const callNvidiaMatchNotesPair = async ({
   matchingNote,
   noteSummary,
   fallbackNotes,
+  seeker,
+  candidate,
+  seekerPreferences,
+  candidatePreferences,
+  seekerAnswers,
+  candidateAnswers,
 }) => {
   const { data, errorReason } = await requestNvidia({
     messages: buildNvidiaPairMessages({
@@ -184,6 +231,12 @@ const callNvidiaMatchNotesPair = async ({
       candidateName,
       matchingNote,
       noteSummary,
+      seeker,
+      candidate,
+      seekerPreferences,
+      candidatePreferences,
+      seekerAnswers,
+      candidateAnswers,
     }),
     operation: "nvidia_pair_generation",
   });
@@ -201,7 +254,14 @@ const callNvidiaMatchNotesPair = async ({
   }
 
   const parsed = parseJsonObject(extractResponseText(data));
-  if (!parsed || typeof parsed !== "object") {
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    Object.keys(parsed).length !== 2 ||
+    !Object.hasOwn(parsed, "seekerNote") ||
+    !Object.hasOwn(parsed, "candidateNote")
+  ) {
     return {
       seekerSentence: fallbackNotes.seekerSentence,
       candidateSentence: fallbackNotes.candidateSentence,
@@ -250,12 +310,20 @@ export const generateMatchNote = async ({
   viewer,
   otherUser,
   matchingNote,
+  viewerPreferences,
+  suggestedPersonPreferences,
+  viewerAnswers,
+  suggestedPersonAnswers,
   timeoutMs,
 }) => {
   const result = await generateSentenceForPair({
     viewer,
     otherUser,
     matchingNote,
+    viewerPreferences,
+    suggestedPersonPreferences,
+    viewerAnswers,
+    suggestedPersonAnswers,
     timeoutMs,
   });
 
@@ -273,8 +341,15 @@ export const generateMatchNotesByUser = async ({
   seeker,
   candidate,
   matchingNote,
+  seekerPreferences,
+  candidatePreferences,
+  seekerAnswers,
+  candidateAnswers,
 }) => {
-  const noteSummary = summarizeMatchingNote(matchingNote);
+  const noteSummary = summarizeMatchingNote(matchingNote, {
+    viewer: seeker,
+    suggestedPerson: candidate,
+  });
   const seekerId = getId(seeker);
   const candidateId = getId(candidate);
 
@@ -282,6 +357,8 @@ export const generateMatchNotesByUser = async ({
     seeker,
     candidate,
     noteSummary,
+    seekerAnswers,
+    candidateAnswers,
   });
   const pairResult = await callNvidiaMatchNotesPair({
     seekerName: fallbackNotes.seekerName,
@@ -289,6 +366,12 @@ export const generateMatchNotesByUser = async ({
     matchingNote,
     noteSummary,
     fallbackNotes,
+    seeker,
+    candidate,
+    seekerPreferences,
+    candidatePreferences,
+    seekerAnswers,
+    candidateAnswers,
   });
 
   const notesByUser = fallbackNotes.notesByUser;
@@ -331,30 +414,37 @@ export const buildMatchNote = async ({
   seekerId,
   candidateId,
   matchingNote,
+  profileContext = {},
   loadUsers,
 }) => {
   if (!matchingNote || typeof matchingNote !== "object") {
     return matchingNote;
   }
 
-  let seeker = null;
-  let candidate = null;
-  try {
-    const users = (await loadUsers({ seekerId, candidateId })) || [];
-    for (const user of users) {
-      const uid = getId(user);
-      if (!uid) continue;
-      if (uid === getId(seekerId)) seeker = user;
-      if (uid === getId(candidateId)) candidate = user;
+  let seeker = profileContext.seeker || null;
+  let candidate = profileContext.candidate || null;
+  if ((!seeker || !candidate) && loadUsers) {
+    try {
+      const users = (await loadUsers({ seekerId, candidateId })) || [];
+      for (const user of users) {
+        const uid = getId(user);
+        if (!uid) continue;
+        if (uid === getId(seekerId)) seeker ||= user;
+        if (uid === getId(candidateId)) candidate ||= user;
+      }
+    } catch (error) {
+      logError(`${MATCH_NOTE_LOG_PREFIX} user_load_failed`, error);
     }
-  } catch (error) {
-    logError(`${MATCH_NOTE_LOG_PREFIX} user_load_failed`, error);
   }
 
   const matchNoteResult = await generateMatchNotesByUser({
     seeker,
     candidate,
     matchingNote,
+    seekerPreferences: profileContext.seekerPreferences,
+    candidatePreferences: profileContext.candidatePreferences,
+    seekerAnswers: profileContext.seekerAnswers,
+    candidateAnswers: profileContext.candidateAnswers,
   });
 
   return {

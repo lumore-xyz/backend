@@ -5,7 +5,7 @@ import { idsEqual, isValidObjectId } from "../utils/objectId.js";
 import { getUtcDateKey } from "../utils/utcDate.js";
 import { EXPLORE_DAILY_STATUS } from "../utils/exploreDaily.js";
 import { getAnswersByUser } from "./matchingAnswers.service.js";
-import { normalizePreference } from "./matchingPolicy.service.js";
+import { getHardEligibilityResult, normalizePreference } from "./matchingPolicy.service.js";
 import { scoreExploreCandidate } from "./exploreMatchingPolicy.service.js";
 import { distanceBetween } from "./exploreProfile.service.js";
 import { loadDiscoverableCandidate, loadExploreContext, fail } from "./exploreContext.service.js";
@@ -41,6 +41,9 @@ export const getProfileCompatibility = async ({ userId, profileId, now = new Dat
     getAnswersByUser([userId, profileId]),
   ]);
   const candidatePrefs = normalizePreference(candidatePrefsDoc, { userGender: candidate.gender });
+  if (!getHardEligibilityResult({ seeker, seekerPrefs, candidate, candidatePrefs, now }).ok) {
+    throw fail("This profile is unavailable", 404, "PROFILE_UNAVAILABLE");
+  }
   const result = scoreExploreCandidate({
     seeker,
     candidate,

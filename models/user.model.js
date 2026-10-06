@@ -273,6 +273,7 @@ userSchema.index({ telegramId: 1 }, { sparse: true, unique: true });
 userSchema.index({ passwordResetToken: 1 }, { sparse: true });
 userSchema.index({ lastActive: -1 });
 userSchema.index({ gender: 1 });
+userSchema.index({ gender: 1, lastActive: -1, _id: -1 });
 userSchema.index({ dob: 1 });
 userSchema.index({ height: 1 });
 userSchema.index({ religion: 1 });

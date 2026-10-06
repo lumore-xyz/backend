@@ -19,7 +19,7 @@ import {
   fallbackExploreNote,
   fingerprint,
 } from "./exploreProfile.service.js";
-import { normalizePreference } from "./matchingPolicy.service.js";
+import { getHardEligibilityResult, normalizePreference } from "./matchingPolicy.service.js";
 import {
   fail,
   loadDiscoverableCandidate,
@@ -55,6 +55,9 @@ export const startExploreConversation = async ({ userId, profileId, now = new Da
     { userGender: candidate.gender },
   );
   const facts = exploreNoteFacts({ seeker, seekerPrefs: prefs, candidate, candidatePrefs });
+  if (!getHardEligibilityResult({ seeker, seekerPrefs: prefs, candidate, candidatePrefs, now }).ok) {
+    throw fail("This profile is no longer available", 409, "PROFILE_UNAVAILABLE");
+  }
   const note = selected.noteFingerprint === fingerprint(facts)
     ? selected.matchNote
     : fallbackExploreNote(facts);

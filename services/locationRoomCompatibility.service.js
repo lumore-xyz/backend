@@ -2,7 +2,7 @@ import {
   calculateDistanceMeters,
   getGeoPointFromLocation,
 } from "../utils/location.js";
-import { getAnswersByUser, getThisOrThatStats } from "./matchingAnswers.service.js";
+import { getAnswersByUser, getReadableAnswersByUser, getThisOrThatStats } from "./matchingAnswers.service.js";
 import { CREDIT_RULES } from "./creditRules.js";
 import { getPairKey } from "../utils/matchIds.js";
 import { getMatchedPairSet } from "./matching.service.js";
@@ -96,6 +96,7 @@ export const buildCompatibilityEdges = async ({
     getAnswersByUser(userIds),
     getMatchedPairSet({ userIds }),
   ]);
+  const readableAnswersByUser = await getReadableAnswersByUser({ userIds, answersByUser });
   const edges = [];
 
   for (let leftIndex = 0; leftIndex < users.length; leftIndex += 1) {
@@ -189,6 +190,14 @@ export const buildCompatibilityEdges = async ({
             ? distanceMeters / 1000
             : null,
         }),
+        profileContext: {
+          seeker: starter,
+          candidate: recipient,
+          seekerPreferences: starterPrefs,
+          candidatePreferences: recipientPrefs,
+          seekerAnswers: readableAnswersByUser.get(starter._id.toString()) || [],
+          candidateAnswers: readableAnswersByUser.get(recipient._id.toString()) || [],
+        },
       });
     }
   }
@@ -198,4 +207,3 @@ export const buildCompatibilityEdges = async ({
     blockedPairKeys: existingMatchedPairSet,
   };
 };
-
