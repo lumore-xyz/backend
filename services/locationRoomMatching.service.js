@@ -16,7 +16,7 @@ import { getPreferencesByUserIds } from "./profilePreference.service.js";
 import { logError } from "../utils/logError.js";
 
 const ROOM_MATCH_SELECT =
-  "_id username nickname profilePicture gender dob interests languages religion diet lifestyle personalityType location credits isArchived";
+  "_id username nickname profilePicture gender dob bio interests languages religion diet lifestyle personalityType work institution fieldVisibility location credits isArchived";
 
 const getFailureReason = (user) => {
   if (!user) return "user_not_found";

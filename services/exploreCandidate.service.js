@@ -4,7 +4,7 @@ import { getDateOfBirthRange } from "../utils/age.js";
 import { idsEqual, toObjectId } from "../utils/objectId.js";
 import { getMatchedUserIdSet } from "./matching.service.js";
 
-export const SELECT = "_id nickname profilePicture gender dob bio interests languages isVerified fieldVisibility location isArchived";
+export const SELECT = "_id nickname profilePicture gender dob height zodiacSign bio interests languages work institution personalityType lifestyle diet religion hometown isVerified fieldVisibility location isArchived";
 
 export const buildExploreCandidateQuery = ({ userId, prefs, excludedIds, now }) => ({
   _id: { $nin: [userId, ...excludedIds].map(toObjectId) },

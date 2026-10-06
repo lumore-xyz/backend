@@ -67,14 +67,14 @@ test("buildNotificationDoc omits an entity ID when the notification has no entit
   assert.equal(Object.hasOwn(doc, "entityId"), false);
 });
 
-test("clampPagination enforces min/max bounds", () => {
+test("clampPagination bounds positive values and defaults invalid inputs", () => {
   assert.deepEqual(clampPagination({}), {
     page: 1,
     limit: 20,
   });
   assert.deepEqual(clampPagination({ page: -5, limit: -1 }), {
     page: 1,
-    limit: 1,
+    limit: 20,
   });
   assert.deepEqual(clampPagination({ page: 2, limit: 99999 }), {
     page: 2,

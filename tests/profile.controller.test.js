@@ -63,8 +63,8 @@ test("updateFieldVisibility saves visibility and activity together", async () =>
   let saves = 0;
   const user = {
     fieldVisibility: { bio: "public" },
-    updateLastActive: async function () {
-      this.lastActive = new Date();
+    save: async function () {
+      assert.ok(this.lastActive instanceof Date);
       saves += 1;
     },
   };

@@ -10,7 +10,7 @@ import {
   settleExplorePayment,
   settleExploreRefreshPayment,
 } from "./exploreCredits.service.js";
-import { normalizePreference } from "./matchingPolicy.service.js";
+import { getHardEligibilityResult, normalizePreference } from "./matchingPolicy.service.js";
 import { CREDIT_LEDGER_TYPE } from "../utils/creditLedger.js";
 import {
   EXPLORE_DAILY_STATUS,
@@ -66,6 +66,7 @@ const responseFor = async ({ userId, now, seeker, prefs, daily }) => {
     const candidate = byId.get(String(stored.user));
     if (!candidate) return [];
     const candidatePrefs = normalizePreference(prefDocs.get(String(candidate._id)), { userGender: candidate.gender });
+    if (!getHardEligibilityResult({ seeker, seekerPrefs: prefs, candidate, candidatePrefs, now }).ok) return [];
     const facts = exploreNoteFacts({ seeker, seekerPrefs: prefs, candidate, candidatePrefs });
     const unchanged = stored.noteFingerprint === fingerprint(facts);
     return [{ ...projectExploreProfile(candidate, now), score: stored.score, distanceKm: facts.distanceKm,
@@ -256,4 +257,3 @@ export const forceRefreshDailyExplore = async ({
   await settleExploreRefreshPayment(userId);
   return getDailyExplore({ userId, now });
 };
-
