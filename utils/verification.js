@@ -1,6 +1,7 @@
 export const VERIFICATION_STATUS = Object.freeze({
   NOT_STARTED: "not_started",
   PENDING: "pending",
+  PROCESSING: "processing",
   APPROVED: "approved",
   REJECTED: "rejected",
   FAILED: "failed",

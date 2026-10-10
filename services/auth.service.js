@@ -6,6 +6,7 @@ import {
 } from "./authToken.service.js";
 import { grantSignupBonusIfMissing } from "./signupCredits.service.js";
 import { generateUniqueUsername } from "./username.service.js";
+import { getAge } from "../utils/age.js";
 
 const createNewAccountUser = async (userData) => {
   const user = await User.create(userData);
@@ -30,6 +31,7 @@ export const authenticateLocalUser = async ({ identifier, password }) => {
   });
   if (
     user?.isArchived ||
+    (user?.dob && getAge(user.dob) < 18) ||
     !user?.password ||
     !(await user.comparePassword(password))
   ) {
@@ -72,6 +74,7 @@ export const authenticateGoogleUser = async (payload) => {
   }
 
   if (user.isArchived) return { accountArchived: true };
+  if (user.dob && getAge(user.dob) < 18) return { underage: true };
   if (!isNewUser) await user.updateLastActive();
   return { isNewUser, user, ...generateAuthTokens(user._id) };
 };
@@ -98,6 +101,7 @@ export const authenticateAdminGoogleUser = async (payload) => {
 export const authenticateTelegramUser = async (telegramUser) => {
   let user = await User.findOne({ telegramId: telegramUser?.id });
   if (user?.isArchived) return { accountArchived: true };
+  if (user?.dob && getAge(user.dob) < 18) return { underage: true };
   let isNewUser = false;
   if (!user) {
     user = await createNewAccountUser({
@@ -133,5 +137,7 @@ export const getRefreshedAccessToken = async (refreshToken) => {
   if (!user) {
     throw Object.assign(new Error("User not found"), { statusCode: 404 });
   }
-  return !user.isArchived ? generateAccessToken(user._id) : null;
+  return !user.isArchived && (!user.dob || getAge(user.dob) >= 18)
+    ? generateAccessToken(user._id)
+    : null;
 };

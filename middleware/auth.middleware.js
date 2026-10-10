@@ -9,6 +9,7 @@ import {
   recordUserActivity,
 } from "../services/userActivity.service.js";
 import { logError } from "../utils/logError.js";
+import { getAge } from "../utils/age.js";
 
 export const protect = async (req, res, next) => {
   const token = req.headers.authorization?.match(/^Bearer\s+(\S+)\s*$/i)?.[1];
@@ -27,7 +28,7 @@ export const protect = async (req, res, next) => {
   }
 
   const user = await User.findById(decoded.id).select(
-    "_id isArchived isAdmin location isVerified verificationStatus lastActive lastDailyCreditAt",
+    "_id isArchived isAdmin location dob isVerified verificationStatus lastActive lastDailyCreditAt",
   );
 
   if (!user) {
@@ -35,6 +36,11 @@ export const protect = async (req, res, next) => {
   }
   if (user.isArchived) {
     return res.status(403).json({ message: "Account is archived" });
+  }
+  const isSettingProfileAge = ["POST", "PATCH"].includes(req.method) &&
+    /^\/[^/]+\/?$/.test(req.path);
+  if (!user.isAdmin && !isSettingProfileAge && (!user.dob || getAge(user.dob) < 18)) {
+    return res.status(403).json({ message: "You must be 18 or older to use Lumore" });
   }
 
   req.user = user;

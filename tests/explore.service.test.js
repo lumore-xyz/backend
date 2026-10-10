@@ -149,7 +149,9 @@ const harness = (t, candidates = [candidate(2)]) => {
   t.mock.method(globalThis, "fetch", (...args) => state.fetchProvider(...args));
   t.mock.method(ExploreDaily, "init", async () => {});
   t.mock.method(CreditLedger, "init", async () => {});
-  t.mock.method(User, "findById", () => chain(state.user));
+  t.mock.method(User, "findById", (userId) => chain(String(userId) === USER_ID
+    ? state.user
+    : state.candidates.find((user) => String(user._id) === String(userId)) || null));
   t.mock.method(User, "aggregate", (pipeline) => {
     state.generations += 1;
     assert.deepEqual(pipeline[1], { $sort: { lastActive: -1, _id: -1 } });
@@ -435,6 +437,22 @@ test("chosen-profile conversations require a paid daily selection and reject arb
   await unlockDailyExplore({ userId: USER_ID, now: NOW });
   await assert.rejects(startExploreConversation({ userId: USER_ID, profileId: id(3), now: NOW }), { code: "PROFILE_NOT_UNLOCKED" });
   assert.equal(state.rooms.length, 0);
+});
+
+test("compatibility can be calculated for an eligible profile before unlocking Explore", async (t) => {
+  const state = harness(t);
+  const result = await getProfileCompatibility({ userId: USER_ID, profileId: id(2), now: NOW });
+  assert.equal(typeof result.score, "number");
+  assert.equal(result.score, Object.values(result.components).reduce((sum, value) => sum + value, 0));
+  assert.equal(state.debits, 0);
+  assert.equal(state.daily, null);
+});
+
+test("compatibility calculates for a profile outside Explore eligibility", async (t) => {
+  const state = harness(t, [candidate(2, { gender: "man" })]);
+  const result = await getProfileCompatibility({ userId: USER_ID, profileId: id(2), now: NOW });
+  assert.equal(typeof result.score, "number");
+  assert.equal(state.debits, 0);
 });
 
 test("concurrent Say hello requests reuse one room and retain only one conversation charge", async (t) => {
