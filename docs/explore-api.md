@@ -28,6 +28,10 @@ All endpoints require `Authorization: Bearer <accessToken>`. User identity alway
 
 Read today's unlock state and, when unlocked, the saved profiles. This endpoint does not generate a list or deduct credits. It can repair an interrupted unlock using an existing payment receipt. The shared authentication middleware independently attempts the daily activity bonus.
 
+### `GET /api/explore/profiles/:profileId/compatibility`
+
+Calculate a fresh score for any non-archived profile; it does not require today's paid suggestion list, mutual age/gender eligibility, or charge credits. The score can therefore be low when either person would not meet the other's Explore preferences. Returns `{ score, components }`.
+
 ### `POST /api/explore/unlock`
 
 No body is required. Generate and unlock today's list, or return the existing result without another charge. Rate limited to 30 requests per authenticated user per 15 minutes.

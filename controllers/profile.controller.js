@@ -68,6 +68,9 @@ export const createUpdateProfile = async (req, res) => {
     }
     res.status(200).json(updatedUser);
   } catch (error) {
+    if (error?.code === "UNDERAGE_ACCOUNT") {
+      return res.status(403).json({ message: error.message });
+    }
     if (error?.name === "ValidationError" || error?.name === "CastError") {
       return res.status(400).json({ message: "Invalid profile values" });
     }

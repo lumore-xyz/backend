@@ -63,7 +63,9 @@ const formatRoomResult = async (room, userId) => {
 export const createLocationRoomRecord = async ({
   title,
   description,
+  tags = [],
   visibility,
+  type,
   location,
   userId,
   imageBuffer,
@@ -77,8 +79,10 @@ export const createLocationRoomRecord = async ({
     room = await LocationRoom.create({
       title,
       description,
+      tags,
       creator: userId,
       visibility,
+      type,
       imageUrl: uploadedImage?.secure_url || "",
       imagePublicId: uploadedImage?.public_id || "",
       location,
@@ -119,6 +123,7 @@ export const updateLocationRoomRecord = async ({
   room,
   title,
   description,
+  tags,
   userId,
   imageBuffer,
 }) => {
@@ -136,9 +141,11 @@ export const updateLocationRoomRecord = async ({
 
   let updatedRoom;
   try {
+    const updates = { title, description, imageUrl, imagePublicId };
+    if (tags !== undefined) updates.tags = tags;
     updatedRoom = await LocationRoom.findByIdAndUpdate(
       room._id,
-      { $set: { title, description, imageUrl, imagePublicId } },
+      { $set: updates },
       { new: true },
     );
   } catch (error) {

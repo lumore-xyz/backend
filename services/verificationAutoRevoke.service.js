@@ -1,6 +1,6 @@
 /**
  * Auto-revoke verification when a user changes identity-shape fields
- * (profile picture / DOB / gender / religion).
+ * (profile picture / real name / DOB / gender / religion).
  *
  * Rationale: identity verification (HaloKYC) is bound to the user's
  * submitted selfie + ID at a point in time. If any identity-shape field
@@ -24,6 +24,7 @@ import { notifyVerificationStatusChange } from "./notificationPublisher.service.
 
 export const IDENTITY_REVOKE_FIELDS = Object.freeze([
   "profilePicture",
+  "realName",
   "dob",
   "gender",
   "religion",

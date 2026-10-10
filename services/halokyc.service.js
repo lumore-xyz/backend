@@ -13,15 +13,15 @@ const VERIFICATION_STATUS_PATCHES = {
   },
   awaiting_credits: {
     isVerified: false,
-    verificationStatus: VERIFICATION_STATUS.PENDING,
+    verificationStatus: VERIFICATION_STATUS.PROCESSING,
   },
   processing: {
     isVerified: false,
-    verificationStatus: VERIFICATION_STATUS.PENDING,
+    verificationStatus: VERIFICATION_STATUS.PROCESSING,
   },
   manual_review: {
     isVerified: false,
-    verificationStatus: VERIFICATION_STATUS.PENDING,
+    verificationStatus: VERIFICATION_STATUS.PROCESSING,
   },
   approved: {
     isVerified: true,
@@ -43,11 +43,40 @@ const normalizeDateOfBirth = (dateOfBirth) => {
 
 export const createVerificationSession = async (userId) => {
   const user = await User.findById(userId).select(
-    "realName dob gender isVerified verificationStatus",
+    "realName dob gender isVerified verificationStatus verificationMethod verificationSessionId",
   );
   if (!user) return null;
   if (isVerifiedUser(user)) {
     return { alreadyVerified: true };
+  }
+
+  if (user.verificationMethod === "halokyc" && user.verificationSessionId) {
+    const { data } = await axios.get(
+      `${process.env.HALOKYC_API_URL}/api/v1/verifications/${user.verificationSessionId}/config`,
+    );
+    const statusPatch = VERIFICATION_STATUS_PATCHES[data?.status];
+    if (statusPatch) {
+      await User.findByIdAndUpdate(userId, {
+        verificationMethod: "halokyc",
+        verificationStatus: statusPatch.verificationStatus,
+        isVerified: statusPatch.isVerified,
+      });
+      if (data.status === "pending_upload") {
+        const verificationUrl = new URL("/verify", process.env.HALOKYC_APP_URL);
+        verificationUrl.searchParams.set("verification_id", user.verificationSessionId);
+        return {
+          verificationUrl: verificationUrl.toString(),
+          sessionId: user.verificationSessionId,
+        };
+      }
+      if (
+        statusPatch.verificationStatus === VERIFICATION_STATUS.PROCESSING ||
+        data.status === "approved" ||
+        data.status === "rejected"
+      ) {
+        return { verificationStatus: statusPatch.verificationStatus };
+      }
+    }
   }
 
   const gender = typeof user.gender === "string"

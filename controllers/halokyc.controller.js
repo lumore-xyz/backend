@@ -19,6 +19,13 @@ export const createHaloKycVerification = async (req, res) => {
         verificationStatus: VERIFICATION_STATUS.APPROVED,
       });
     }
+    if (result.verificationStatus) {
+      return res.json({
+        message: "Verification status updated",
+        isVerified: result.verificationStatus === VERIFICATION_STATUS.APPROVED,
+        verificationStatus: result.verificationStatus,
+      });
+    }
     return res.json(result);
   } catch (error) {
     logError("HaloKYC create session failed", error);

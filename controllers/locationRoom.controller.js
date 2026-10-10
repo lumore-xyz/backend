@@ -7,6 +7,10 @@ import { isVerifiedUser } from "../utils/verification.js";
 import {
   LOCATION_ROOM_VISIBILITY,
   LOCATION_ROOM_VISIBILITY_VALUES,
+  LOCATION_ROOM_TYPE,
+  LOCATION_ROOM_TYPE_VALUES,
+  LOCATION_ROOM_TAG_LIMIT,
+  normalizeLocationRoomTags,
 } from "../utils/locationRoom.js";
 import { getManageableActiveLocationRoom } from "../services/locationRoomAccess.service.js";
 import { processDueLocationRoomCycle } from "../services/locationRoomScheduler.service.js";
@@ -54,7 +58,9 @@ export const createLocationRoom = async (req, res) => {
 
   const title = String(req.body?.title || "").trim();
   const description = String(req.body?.description || "").trim();
+  const tags = normalizeLocationRoomTags(req.body?.tags);
   const visibility = getRequestedVisibility(req.body);
+  const type = String(req.body?.type || LOCATION_ROOM_TYPE.LOCAL).trim().toLowerCase();
   if (title.length < 3 || title.length > 80) {
     return res.status(400).json({ message: "title must be 3-80 characters" });
   }
@@ -66,28 +72,38 @@ export const createLocationRoom = async (req, res) => {
       message: `visibility must be ${LOCATION_ROOM_VISIBILITY_VALUES.join(" or ")}`,
     });
   }
+  if (tags === null) {
+    return res.status(400).json({ message: `tags must be an array of up to ${LOCATION_ROOM_TAG_LIMIT} tags, each 24 characters or less` });
+  }
+  if (!LOCATION_ROOM_TYPE_VALUES.includes(type)) {
+    return res.status(400).json({ message: `type must be ${LOCATION_ROOM_TYPE_VALUES.join(" or ")}` });
+  }
 
-  const point = getRequestPoint(req);
-  if (!point) {
+  const point = type === LOCATION_ROOM_TYPE.LOCAL ? getRequestPoint(req) : null;
+  if (type === LOCATION_ROOM_TYPE.LOCAL && !point) {
     return res.status(400).json({ message: "latitude and longitude are required" });
   }
 
-  let location;
-  try {
-    location = buildCanonicalLocation({
-      latitude: point.latitude,
-      longitude: point.longitude,
-      formattedAddress: req.body?.formattedAddress || "",
-    });
-  } catch (error) {
-    return res.status(400).json({ message: error.message });
+  let location = undefined;
+  if (point) {
+    try {
+      location = buildCanonicalLocation({
+        latitude: point.latitude,
+        longitude: point.longitude,
+        formattedAddress: req.body?.formattedAddress || "",
+      });
+    } catch (error) {
+      return res.status(400).json({ message: error.message });
+    }
   }
 
   try {
     const result = await createLocationRoomRecord({
       title,
       description,
+      tags,
       visibility,
+      type,
       location,
       userId: req.user._id,
       imageBuffer: req.file?.buffer,
@@ -117,14 +133,16 @@ export const updateLocationRoom = async (req, res) => {
 
   const hasTitle = Object.hasOwn(req.body || {}, "title");
   const hasDescription = Object.hasOwn(req.body || {}, "description");
-  if (!hasTitle && !hasDescription) {
-    return res.status(400).json({ message: "title or description is required" });
+  const hasTags = Object.hasOwn(req.body || {}, "tags");
+  if (!hasTitle && !hasDescription && !hasTags) {
+    return res.status(400).json({ message: "title, description, or tags is required" });
   }
 
   const title = hasTitle ? String(req.body?.title || "").trim() : room.title;
   const description = hasDescription
     ? String(req.body?.description || "").trim()
     : String(room.description || "");
+  const tags = hasTags ? normalizeLocationRoomTags(req.body?.tags) : room.tags || [];
 
   if (title.length < 3 || title.length > 80) {
     return res.status(400).json({ message: "title must be 3-80 characters" });
@@ -132,12 +150,16 @@ export const updateLocationRoom = async (req, res) => {
   if (description.length > 500) {
     return res.status(400).json({ message: "description must be 500 characters or less" });
   }
+  if (tags === null) {
+    return res.status(400).json({ message: `tags must be an array of up to ${LOCATION_ROOM_TAG_LIMIT} tags, each 24 characters or less` });
+  }
 
   try {
     const result = await updateLocationRoomRecord({
       room,
       title,
       description,
+      tags,
       userId: req.user._id,
       imageBuffer: req.file?.buffer,
     });
@@ -152,25 +174,43 @@ export const updateLocationRoom = async (req, res) => {
 
 export const getNearbyLocationRooms = async (req, res) => {
   const point = getRequestPoint(req);
-  if (!point) {
-    return res.status(400).json({ message: "latitude and longitude are required" });
+  const sort = String(req.query?.sort || "pool_high");
+  const type = String(req.query?.type || "all");
+  const nearbyOnly = req.query?.nearby === "true";
+  const joinedOnly = req.query?.joinedOnly === "true";
+  const inPoolOnly = req.query?.inPoolOnly === "true";
+  const search = String(req.query?.search || "").trim().slice(0, 100);
+  const page = Math.max(0, Math.min(10000, Number.parseInt(req.query?.page, 10) || 0));
+  const limit = Math.max(1, Math.min(30, Number.parseInt(req.query?.limit, 10) || 20));
+  if (!["pool_high", "pool_low", "newest", "nearest"].includes(sort)) {
+    return res.status(400).json({ message: "Invalid community sort" });
   }
-
-  let location;
+  if (!["all", "local", "topic"].includes(type)) {
+    return res.status(400).json({ message: "Invalid community type filter" });
+  }
+  if ((nearbyOnly || sort === "nearest") && !point) {
+    return res.status(400).json({ message: "Location is required for nearby communities" });
+  }
+  let location = null;
   try {
-    location = buildCanonicalLocation({
-      latitude: point.latitude,
-      longitude: point.longitude,
-    });
+    if (point) location = buildCanonicalLocation({ latitude: point.latitude, longitude: point.longitude });
   } catch (error) {
     return res.status(400).json({ message: error.message });
   }
 
   return res.status(200).json({
-    rooms: await loadNearbyLocationRooms({
+    ...await loadNearbyLocationRooms({
       location,
       userId: req.user._id,
       radiusKm: parseRadiusKm(req.query?.radiusKm),
+      page,
+      limit,
+      search,
+      sort,
+      type,
+      nearbyOnly,
+      joinedOnly,
+      inPoolOnly,
     }),
   });
 };

@@ -24,6 +24,7 @@ import { logError } from "../utils/logError.js";
 import { deleteFile, extractPublicIdFromUrl } from "./file.service.js";
 import { deleteMessageMedia } from "./messageMediaCleanup.service.js";
 import { disconnectUser } from "./socket.service.js";
+import { getAge } from "../utils/age.js";
 
 export const archiveUserAccount = async ({ userId, now = new Date() }) => {
   const scheduledDeletionAt = new Date(now);
@@ -107,7 +108,7 @@ const deleteAccountMedia = async ({ messages, assets }) => {
   }
 };
 
-const deleteUserAndActivity = async ({ userId }) => {
+export const deleteUserAndActivity = async ({ userId }) => {
   const user = await User.findById(userId).select("_id profilePicture").lean();
   if (!user) {
     return { success: false, reason: "USER_NOT_FOUND" };
@@ -256,4 +257,26 @@ export const deleteScheduledAccounts = async ({ now = new Date() } = {}) => {
   }
 
   return results;
+};
+
+export const deleteUnderageAccounts = async ({ now = new Date(), execute = false } = {}) => {
+  const users = await User.find({ dob: { $type: "date" } }).select("_id dob isAdmin").lean();
+  const underage = users.filter(({ dob, isAdmin }) => !isAdmin && getAge(dob, now) < 18);
+  if (!execute) return { matched: underage.length, deleted: 0, dryRun: true };
+
+  const results = [];
+  for (const { _id: userId } of underage) {
+    try {
+      results.push({ userId, ...(await deleteUserAndActivity({ userId })) });
+    } catch (error) {
+      logError("Underage account deletion failed", error);
+      results.push({ userId, success: false, reason: "DELETE_FAILED" });
+    }
+  }
+  return {
+    matched: underage.length,
+    deleted: results.filter(({ success }) => success).length,
+    failed: results.filter(({ success }) => !success),
+    dryRun: false,
+  };
 };

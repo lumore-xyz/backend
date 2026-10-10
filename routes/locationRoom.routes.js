@@ -16,6 +16,11 @@ import {
 import { protect } from "../middleware/auth.middleware.js";
 import { upload } from "../middleware/upload.middleware.js";
 import { validateObjectIdParam } from "../middleware/validate.middleware.js";
+import {
+  getLocationSearchDetails,
+  reverseGeocode,
+  searchLocations,
+} from "../controllers/locationSearch.controller.js";
 
 const router = express.Router();
 
@@ -23,6 +28,9 @@ router.use(protect);
 router.param("roomId", validateObjectIdParam("roomId"));
 
 router.post("/", upload.single("image"), createLocationRoom);
+router.post("/location-search", searchLocations);
+router.post("/location-details", getLocationSearchDetails);
+router.post("/location-reverse-geocode", reverseGeocode);
 router.get("/nearby", getNearbyLocationRooms);
 router.get("/:roomId", getLocationRoomDetail);
 router.patch(
