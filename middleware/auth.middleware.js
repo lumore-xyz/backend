@@ -37,9 +37,7 @@ export const protect = async (req, res, next) => {
   if (user.isArchived) {
     return res.status(403).json({ message: "Account is archived" });
   }
-  const isSettingProfileAge = ["POST", "PATCH"].includes(req.method) &&
-    /^\/[^/]+\/?$/.test(req.path);
-  if (!user.isAdmin && !isSettingProfileAge && (!user.dob || getAge(user.dob) < 18)) {
+  if (!user.isAdmin && user.dob && getAge(user.dob) < 18) {
     return res.status(403).json({ message: "You must be 18 or older to use Lumore" });
   }
 
