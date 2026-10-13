@@ -86,7 +86,10 @@ const respondToGoogleLogin = async (payload, res) => {
     return res.status(403).json({ message: "Account is archived" });
   }
   if (result.underage) {
-    return res.status(403).json({ message: "You must be 18 or older to use Lumore" });
+    return res.status(403).json({
+      code: "UNDERAGE_ACCOUNT",
+      message: "You must be 18 or older to use Lumore",
+    });
   }
   return res.status(200).json(result);
 };
@@ -140,7 +143,10 @@ export const tma_login = async (req, res) => {
       return res.status(403).json({ message: "Account is archived" });
     }
     if (result.underage) {
-      return res.status(403).json({ message: "You must be 18 or older to use Lumore" });
+      return res.status(403).json({
+        code: "UNDERAGE_ACCOUNT",
+        message: "You must be 18 or older to use Lumore",
+      });
     }
     res.status(200).json(result);
   } catch (error) {
