@@ -58,6 +58,7 @@ export const authenticateGoogleUser = async (payload) => {
     user = await User.findOne({ email });
     if (user?.isArchived) return { accountArchived: true };
     if (user) {
+      if (user.dob && getAge(user.dob) < 18) return { underage: true };
       user.googleId = googleId;
       user.emailVerified = emailVerified;
       await user.save();
